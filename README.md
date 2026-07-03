@@ -19,6 +19,15 @@ Windows 版 [Vibe Usage](https://github.com/vibe-cafe/vibe-usage-app) —— 自
 
 从 [Releases](https://github.com/haoruilee/vibe-usage-app-windows/releases/latest) 下载 `VibeUsage-x.y.z-Windows-Setup.exe` 并运行（per-user 安装，无需管理员权限；缺少 WebView2 时安装器会自动下载）。
 
+### SmartScreen / Windows 安全中心提示
+
+安装包目前**未做 Authenticode 代码签名**，首次运行可能出现：
+
+- **SmartScreen「Windows 已保护你的电脑」**：点「更多信息」→「仍要运行」；或右键 exe → 属性 → 勾选「解除锁定」后运行。
+- **Defender 误报拦截**：打开 Windows 安全中心 → 病毒和威胁防护 → 保护历史记录，找到该项选择「允许」。
+
+正式分发前会接入代码签名（EV 证书或 Azure Trusted Signing）彻底消除提示。
+
 ## 配置
 
 1. 点击托盘图标打开面板，点「登录并链接数据」

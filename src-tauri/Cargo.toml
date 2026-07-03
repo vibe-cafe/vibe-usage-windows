@@ -35,11 +35,13 @@ log = "0.4"
 env_logger = "0.11"
 
 [target.'cfg(windows)'.dependencies]
+# NOTE: keep this feature list free of input-hook APIs
+# (Win32_UI_Input_KeyboardAndMouse etc.) — GetAsyncKeyState imports trip
+# Windows Defender's keylogger heuristics on unsigned binaries.
 windows-sys = { version = "0.59", features = [
     "Win32_System_Threading",
     "Win32_Foundation",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
-    "Win32_UI_Input_KeyboardAndMouse",
 ] }
 winreg = "0.52"
