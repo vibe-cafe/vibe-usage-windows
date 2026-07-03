@@ -40,6 +40,11 @@ jobs:
       - name: Frontend build
         run: pnpm build
 
+      # tauri.windows.conf.json declares resources/node/node.exe as a bundle
+      # resource — tauri-build validates its existence even for cargo check.
+      - name: Bundle Node runtime
+        run: node scripts/fetch-node.mjs
+
       - name: Rust tests
         run: cargo test --workspace
 

@@ -37,16 +37,18 @@ jobs:
       - name: Version consistency
         run: node scripts/check-version.mjs
 
-      - name: Tests
-        run: |
-          pnpm test
-          cargo test --workspace
-
+      # Resources must exist before any cargo invocation — tauri-build
+      # validates bundle resources in the build script.
       - name: Vendor CLI (with Windows patches)
         run: node scripts/vendor-cli.mjs
 
       - name: Bundle Node runtime
         run: node scripts/fetch-node.mjs
+
+      - name: Tests
+        run: |
+          pnpm test
+          cargo test --workspace
 
       - name: Build NSIS installer
         run: pnpm tauri build --bundles nsis
