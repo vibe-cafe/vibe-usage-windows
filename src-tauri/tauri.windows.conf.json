@@ -1,0 +1,9 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "resources": {
+      "resources/cli": "cli",
+      "resources/node/node.exe": "node/node.exe"
+    }
+  }
+}

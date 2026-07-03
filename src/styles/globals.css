@@ -1,0 +1,101 @@
+@import "@fontsource/jetbrains-mono/400.css";
+@import "@fontsource/jetbrains-mono/500.css";
+@import "@fontsource/jetbrains-mono/700.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  user-select: none;
+  cursor: default;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Hide scrollbars like SwiftUI's showsIndicators: false */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  scrollbar-width: none;
+}
+
+/* Skeleton breathing (redacted placeholder) */
+@keyframes skeleton-pulse {
+  0%,
+  100% {
+    opacity: 0.78;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+.skeleton {
+  animation: skeleton-pulse 1.6s ease-in-out infinite;
+}
+
+/* Panel open/close — mirrors MenuBarController animation constants:
+   open 220ms cubic-bezier(0.22,1,0.36,1), scale 0.9→1, y +4, fade 70%
+   close 140ms cubic-bezier(0.5,0,0.9,0.4), scale →0.94 */
+@keyframes panel-open {
+  from {
+    transform: scale(0.9) translateY(-4px);
+  }
+  to {
+    transform: scale(1) translateY(0);
+  }
+}
+@keyframes panel-fade-in {
+  from {
+    opacity: 0;
+  }
+  70%,
+  to {
+    opacity: 1;
+  }
+}
+.panel-opening {
+  transform-origin: var(--panel-origin, top right);
+  animation:
+    panel-open 0.22s cubic-bezier(0.22, 1, 0.36, 1),
+    panel-fade-in 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+}
+@keyframes panel-close {
+  from {
+    transform: scale(1) translateY(0);
+    opacity: 1;
+  }
+  to {
+    transform: scale(0.94) translateY(-2.4px);
+    opacity: 0;
+  }
+}
+.panel-closing {
+  transform-origin: var(--panel-origin, top right);
+  animation: panel-close 0.14s cubic-bezier(0.5, 0, 0.9, 0.4) forwards;
+}
+
+/* Numeric value transitions (SummaryCards contentTransition(.numericText())) */
+.value-transition {
+  transition: opacity 0.28s ease-in-out;
+}
+
+/* Spinner (ProgressView equivalent) */
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.spinner {
+  border: 1.5px solid rgba(255, 255, 255, 0.25);
+  border-top-color: rgba(255, 255, 255, 0.85);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+.spinner-dark {
+  border-color: rgba(0, 0, 0, 0.2);
+  border-top-color: rgba(0, 0, 0, 0.75);
+}

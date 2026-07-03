@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.88.0
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - name: Install frontend deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Version consistency
+        run: node scripts/check-version.mjs
+
+      - name: Frontend tests
+        run: pnpm test
+
+      - name: Frontend build
+        run: pnpm build
+
+      - name: Rust tests
+        run: cargo test --workspace
+
+      - name: Rust check (app)
+        run: cargo check -p vibe-usage-app

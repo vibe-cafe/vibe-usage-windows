@@ -1,0 +1,38 @@
+{
+  "name": "@vibe-cafe/vibe-usage",
+  "version": "0.9.8",
+  "description": "Track your AI coding tool token usage and sync to vibecafe.ai",
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  },
+  "bin": {
+    "vibe-usage": "bin/vibe-usage.js"
+  },
+  "files": [
+    "bin/",
+    "src/"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "ai",
+    "coding",
+    "usage",
+    "tokens",
+    "claude",
+    "codex",
+    "gemini"
+  ],
+  "dependencies": {},
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vibe-cafe/vibe-usage.git"
+  },
+  "homepage": "https://github.com/vibe-cafe/vibe-usage#readme",
+  "bugs": {
+    "url": "https://github.com/vibe-cafe/vibe-usage/issues"
+  },
+  "license": "MIT"
+}
