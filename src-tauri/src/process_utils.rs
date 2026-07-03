@@ -30,6 +30,80 @@ pub fn hide_tokio_command_window(cmd: &mut tokio::process::Command) {
     }
 }
 
+/// Open a URL or file with the system default handler.
+/// Windows: ShellExecuteW directly — the most reliable path (the `open`
+/// crate's cmd-based fallbacks can fail silently for GUI apps).
+pub fn shell_open(target: &str) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::UI::Shell::ShellExecuteW;
+
+        fn wide(s: &str) -> Vec<u16> {
+            s.encode_utf16().chain(std::iter::once(0)).collect()
+        }
+        let verb = wide("open");
+        let file = wide(target);
+        // SW_SHOWNORMAL = 1; return value > 32 means success.
+        let result = unsafe {
+            ShellExecuteW(
+                std::ptr::null_mut(),
+                verb.as_ptr(),
+                file.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                1,
+            )
+        };
+        if result as isize > 32 {
+            Ok(())
+        } else {
+            Err(format!("ShellExecuteW failed (code {})", result as isize))
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        open::that_detached(target).map_err(|e| e.to_string())
+    }
+}
+
+/// Windows system proxy from the registry (Internet Settings), as an
+/// `http://host:port` URL. None when disabled/unset or on other platforms.
+pub fn system_proxy_url() -> Option<String> {
+    #[cfg(windows)]
+    {
+        use winreg::enums::HKEY_CURRENT_USER;
+        use winreg::RegKey;
+
+        let key = RegKey::predef(HKEY_CURRENT_USER)
+            .open_subkey("Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings")
+            .ok()?;
+        let enabled: u32 = key.get_value("ProxyEnable").ok()?;
+        if enabled == 0 {
+            return None;
+        }
+        let server: String = key.get_value("ProxyServer").ok()?;
+        let server = server.trim();
+        if server.is_empty() {
+            return None;
+        }
+        // Either "host:port" (all protocols) or "http=h:p;https=h:p;...".
+        let hostport = if server.contains('=') {
+            server
+                .split(';')
+                .filter_map(|part| part.trim().split_once('='))
+                .find(|(scheme, _)| *scheme == "https" || *scheme == "http")
+                .map(|(_, hp)| hp.to_string())?
+        } else {
+            server.to_string()
+        };
+        Some(format!("http://{hostport}"))
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
+}
+
 /// Kill a child and its whole descendant tree.
 /// Windows `Child::kill` only terminates the direct child (e.g. node.exe would
 /// survive a killed cmd.exe) — use `taskkill /T /F` instead.

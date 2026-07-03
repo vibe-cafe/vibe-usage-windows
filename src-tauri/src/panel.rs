@@ -96,6 +96,72 @@ pub fn show(app: &AppHandle, tray_rect: Option<Rect>) {
     let _ = app.emit("panel-shown", json!({ "origin": origin }));
     let _ = window.show();
     let _ = window.set_focus();
+    start_dismiss_watch(app);
+}
+
+/// Blur-based dismissal is unreliable on Windows: foreground-activation rules
+/// can deny `set_focus` for a tray popup, and a window that never had focus
+/// never fires Focused(false) — leaving an always-on-top panel stuck over
+/// everything (the classic tray-popover bug). While the panel is visible,
+/// poll for a mouse press OUTSIDE the panel rect and hide on it. This works
+/// regardless of who owns keyboard focus. The Focused(false) handler stays as
+/// the fast path for the normal case.
+fn start_dismiss_watch(app: &AppHandle) {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::POINT;
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
+        use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
+
+        const VK_LBUTTON: i32 = 0x01;
+        const VK_RBUTTON: i32 = 0x02;
+        const VK_MBUTTON: i32 = 0x04;
+
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            // Treat the opening click as already-down so it can't self-dismiss.
+            let mut was_down = true;
+            loop {
+                tokio::time::sleep(Duration::from_millis(60)).await;
+                let Some(window) = app.get_webview_window(PANEL_LABEL) else {
+                    return;
+                };
+                if !window.is_visible().unwrap_or(false) {
+                    return;
+                }
+
+                let down = unsafe {
+                    (GetAsyncKeyState(VK_LBUTTON) as u16 & 0x8000) != 0
+                        || (GetAsyncKeyState(VK_RBUTTON) as u16 & 0x8000) != 0
+                        || (GetAsyncKeyState(VK_MBUTTON) as u16 & 0x8000) != 0
+                };
+                if down && !was_down {
+                    let mut point = POINT { x: 0, y: 0 };
+                    let got = unsafe { GetCursorPos(&mut point) } != 0;
+                    if got && !cursor_inside(&window, point.x, point.y) {
+                        begin_hide(&app);
+                        return;
+                    }
+                }
+                was_down = down;
+            }
+        });
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = app;
+    }
+}
+
+#[cfg(windows)]
+fn cursor_inside(window: &tauri::WebviewWindow, x: i32, y: i32) -> bool {
+    let (Ok(pos), Ok(size)) = (window.outer_position(), window.outer_size()) else {
+        return true; // fail safe: don't dismiss when geometry is unknown
+    };
+    x >= pos.x
+        && x < pos.x + size.width as i32
+        && y >= pos.y
+        && y < pos.y + size.height as i32
 }
 
 /// Ask the frontend to play the close animation, then force-hide as a

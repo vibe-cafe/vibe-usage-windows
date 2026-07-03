@@ -142,6 +142,18 @@ async fn run_cli_sync(app: &AppHandle) -> Result<String, String> {
     if crate::state::IS_DEV {
         cmd.env("VIBE_USAGE_DEV", "1");
     }
+    // Node's fetch() ignores the Windows system proxy (macOS URLSession honors
+    // it implicitly — this is why the macOS app never hit the issue). Bridge
+    // the registry proxy into env vars; NODE_USE_ENV_PROXY makes Node ≥22.15
+    // route global fetch through them.
+    if std::env::var("HTTPS_PROXY").is_err() && std::env::var("https_proxy").is_err() {
+        if let Some(proxy) = process_utils::system_proxy_url() {
+            log::info!("bridging system proxy to CLI: {proxy}");
+            cmd.env("HTTPS_PROXY", &proxy);
+            cmd.env("HTTP_PROXY", &proxy);
+        }
+    }
+    cmd.env("NODE_USE_ENV_PROXY", "1");
     process_utils::hide_tokio_command_window(&mut cmd);
 
     let mut child = cmd.spawn().map_err(|e| format!("同步失败: {e}"))?;
@@ -178,7 +190,7 @@ async fn run_cli_sync(app: &AppHandle) -> Result<String, String> {
     let status = status.map_err(|e| format!("同步失败: {e}"))?;
     let stdout = stdout.trim().to_string();
     let stderr = stderr.trim().to_string();
-    log::debug!("sync exit={status:?} stdout={} stderr={}", &stdout, &stderr);
+    write_sync_log(app, &status, &stdout, &stderr);
 
     if status.success() {
         // "Synced …" / "No new usage data" both count as success.
@@ -188,24 +200,81 @@ async fn run_cli_sync(app: &AppHandle) -> Result<String, String> {
         if all.contains("Invalid API key") || all.contains("UNAUTHORIZED") {
             Err("API Key 无效，请重新配置".into())
         } else {
-            // stderr carries non-fatal parser warnings line by line; the CLI
-            // prints the fatal error LAST — surface that one, not a warning.
-            let msg = if stderr.is_empty() { stdout } else { stderr };
-            let last_line = msg
-                .lines()
-                .rev()
-                .find(|l| !l.trim().is_empty())
-                .unwrap_or("")
-                .trim()
-                .to_string();
+            let msg = if stderr.is_empty() { &stdout } else { &stderr };
+            let line = extract_error_line(msg);
             Err(format!(
                 "同步失败: {}",
-                if last_line.is_empty() {
+                if line.is_empty() {
                     format!("Exit code {}", status.code().unwrap_or(-1))
                 } else {
-                    last_line
+                    line
                 }
             ))
         }
     }
+}
+
+/// Pick the most informative line from CLI output. stderr carries non-fatal
+/// parser warnings first and the fatal error near the end — but a Node crash
+/// appends stack frames plus a "Node.js v22.x" footer AFTER the message, so
+/// "last line" alone surfaces the useless footer. Scan from the bottom,
+/// skipping crash-dump noise, and prefer an actual error line.
+fn extract_error_line(msg: &str) -> String {
+    let is_noise = |l: &str| {
+        l.is_empty()
+            || l.starts_with("Node.js v")
+            || l.starts_with("at ") // stack frames
+            || l.starts_with("code:")
+            || l.starts_with('}')
+            || l.starts_with('[')
+            || l.starts_with("cause:")
+            || l.starts_with("errno")
+            || l.starts_with("syscall")
+    };
+    let lines: Vec<&str> = msg.lines().map(str::trim).collect();
+    // 1) Bottom-up: a line that clearly states an error.
+    if let Some(l) = lines.iter().rev().find(|l| {
+        !is_noise(l)
+            && (l.contains("Error") || l.contains("error") || l.contains('✗') || l.contains("失败"))
+    }) {
+        let mut s = l.to_string();
+        s.truncate(s.char_indices().map(|(i, _)| i).nth(120).unwrap_or(s.len()));
+        return s;
+    }
+    // 2) Bottom-up: last non-noise line.
+    let mut s = lines
+        .iter()
+        .rev()
+        .find(|l| !is_noise(l))
+        .copied()
+        .unwrap_or("")
+        .to_string();
+    s.truncate(s.char_indices().map(|(i, _)| i).nth(120).unwrap_or(s.len()));
+    s
+}
+
+/// Full CLI output → %APPDATA%/<identifier>/logs/sync.log (simple 512 KB cap)
+/// so failures in the field are diagnosable.
+fn write_sync_log(app: &AppHandle, status: &std::process::ExitStatus, stdout: &str, stderr: &str) {
+    let Ok(dir) = app.path().app_log_dir() else {
+        return;
+    };
+    let _ = std::fs::create_dir_all(&dir);
+    let file = dir.join("sync.log");
+    if std::fs::metadata(&file).map(|m| m.len() > 512 * 1024).unwrap_or(false) {
+        let _ = std::fs::rename(&file, dir.join("sync.log.1"));
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let entry = format!(
+        "==== {now} exit={:?} ====\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}\n\n",
+        status.code()
+    );
+    use std::io::Write;
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&file) {
+        let _ = f.write_all(entry.as_bytes());
+    }
+    log::debug!("sync exit={status:?}; log → {}", file.display());
 }

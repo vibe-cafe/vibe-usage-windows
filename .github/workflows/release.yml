@@ -72,11 +72,18 @@ jobs:
             ${{ steps.artifacts.outputs.installer }}
             latest.json
 
-      - name: Upload workflow artifacts
+      # Installer and updater manifest are separate artifacts so testers
+      # download a zip containing exactly one obvious .exe.
+      - name: Upload installer artifact
         if: "!startsWith(github.ref, 'refs/tags/')"
         uses: actions/upload-artifact@v4
         with:
           name: windows-installer
-          path: |
-            ${{ steps.artifacts.outputs.installer }}
-            latest.json
+          path: ${{ steps.artifacts.outputs.installer }}
+
+      - name: Upload updater manifest artifact
+        if: "!startsWith(github.ref, 'refs/tags/')"
+        uses: actions/upload-artifact@v4
+        with:
+          name: updater-manifest
+          path: latest.json

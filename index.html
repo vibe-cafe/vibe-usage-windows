@@ -5,9 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Vibe Usage</title>
     <!--
-      The popover window is transparent + frameless; paint the rounded dark
-      card at the earliest possible moment so the first frame never flashes
-      white (WebView2 quirk — same mitigation ATM uses).
+      The popover window is transparent + frameless; keep the document
+      transparent so only the rounded card painted by PopoverApp shows.
+      The settings window overrides body background from main.tsx.
     -->
     <style>
       html,
@@ -15,13 +15,6 @@
         margin: 0;
         padding: 0;
         background: transparent;
-        overflow: hidden;
-      }
-      #root {
-        width: 520px;
-        height: 620px;
-        border-radius: 12px;
-        background: #0a0a0a;
         overflow: hidden;
       }
     </style>

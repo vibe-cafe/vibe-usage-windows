@@ -106,6 +106,9 @@ impl AppCtx {
             config: ConfigManager::new(IS_DEV),
             http: reqwest::Client::builder()
                 .user_agent(format!("VibeUsageWindows/{}", env!("CARGO_PKG_VERSION")))
+                // system-proxy feature honors the Windows proxy; a hung
+                // connect must fail fast instead of pinning spinners.
+                .connect_timeout(std::time::Duration::from_secs(10))
                 .build()
                 .expect("http client"),
             settings_path,

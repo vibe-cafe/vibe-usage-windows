@@ -12,6 +12,15 @@ use tauri::{AppHandle, Manager};
 
 pub const TRAY_ID: &str = "main";
 
+/// White glyph on transparent — high contrast on the (usually dark) Windows
+/// taskbar. The bundle app icon (light-gray rounded card) is invisible at
+/// 16px tray size.
+const TRAY_ICON_PNG: &[u8] = include_bytes!("../icons/tray-icon.png");
+
+pub fn tray_logo() -> Option<tauri::image::Image<'static>> {
+    tauri::image::Image::from_bytes(TRAY_ICON_PNG).ok()
+}
+
 pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "open", "打开面板", true, None::<&str>)?;
     let sync = MenuItem::with_id(app, "sync", "立即同步", true, None::<&str>)?;
@@ -47,7 +56,9 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
             }
         });
 
-    if let Some(icon) = app.default_window_icon() {
+    if let Some(icon) = tray_logo() {
+        builder = builder.icon(icon);
+    } else if let Some(icon) = app.default_window_icon() {
         builder = builder.icon(icon.clone());
     }
     builder.build(app)?;
@@ -55,7 +66,14 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
 }
 
 /// Refresh icon (logo vs rendered numbers) + tooltip from current state.
+/// Tray mutations are proxied to the main thread — callers may be on the
+/// async runtime (sync scheduler), and Windows tray icons are thread-affine.
 pub fn update_tray(app: &AppHandle) {
+    let app2 = app.clone();
+    let _ = app.run_on_main_thread(move || update_tray_inner(&app2));
+}
+
+fn update_tray_inner(app: &AppHandle) {
     let Some(tray) = app.tray_by_id(TRAY_ID) else {
         return;
     };
@@ -85,7 +103,9 @@ pub fn update_tray(app: &AppHandle) {
             let _ = tray.set_icon(Some(tauri::image::Image::new_owned(rgba, 32, 32)));
         }
         None => {
-            if let Some(icon) = app.default_window_icon() {
+            if let Some(icon) = tray_logo() {
+                let _ = tray.set_icon(Some(icon));
+            } else if let Some(icon) = app.default_window_icon() {
                 let _ = tray.set_icon(Some(icon.clone()));
             }
         }

@@ -113,6 +113,23 @@ function applyWindowsPatches() {
     ],
   ]);
 
+  // 1b. fetchSettings runs OUTSIDE sync.js's try/catch — a network failure
+  // (offline, proxy required) crashes Node with an uncaught exception instead
+  // of a clean "同步失败" message. Wrap it; on failure default to NOT
+  // uploading project names (the privacy-safe direction).
+  patchFile("src/sync.js", [
+    [
+      "  const settings = await fetchSettings(apiUrl, config.apiKey);",
+      `  let settings = null;
+  try {
+    settings = await fetchSettings(apiUrl, config.apiKey);
+  } catch (err) {
+    process.stderr.write(\`\${dim(\`  settings: \${err.message}（默认隐藏项目名）\`)}\\n\`);
+  }`,
+      "sync fetchSettings crash guard",
+    ],
+  ]);
+
   // 2. Windows cwd uses backslashes — project extraction must split on both.
   patchFile("src/parsers/codex.js", [
     [

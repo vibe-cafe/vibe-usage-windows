@@ -29,9 +29,11 @@ pub async fn start(app: AppHandle) -> Result<String, String> {
         .await
         .map_err(|e| e.to_string())?;
 
-    // System default browser (ShellExecute on Windows — NOT the CLI's broken
+    // System default browser (ShellExecuteW on Windows — NOT the CLI's broken
     // `start` path).
-    let _ = open::that_detached(&device.verification_uri_complete);
+    if let Err(e) = crate::process_utils::shell_open(&device.verification_uri_complete) {
+        log::error!("open browser failed: {e}");
+    }
 
     let user_code = device.user_code.clone();
     let app2 = app.clone();

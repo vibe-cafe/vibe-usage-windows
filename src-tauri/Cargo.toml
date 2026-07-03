@@ -21,7 +21,9 @@ serde_json = "1"
 tokio = { version = "1", features = ["full"] }
 # native-tls → SChannel on Windows (pure Rust bindings, no C toolchain needed
 # for cross-checks; rustls would pull in `ring`'s C build).
-reqwest = { version = "0.12", default-features = false, features = ["json", "native-tls", "gzip"] }
+# system-proxy: honor the Windows system proxy — critical for users behind
+# proxies (macOS URLSession does this implicitly; reqwest needs the feature).
+reqwest = { version = "0.12", default-features = false, features = ["json", "native-tls", "gzip", "system-proxy"] }
 auto-launch = "0.5"
 open = "5"
 dirs = "5"
@@ -33,4 +35,11 @@ log = "0.4"
 env_logger = "0.11"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_System_Threading"] }
+windows-sys = { version = "0.59", features = [
+    "Win32_System_Threading",
+    "Win32_Foundation",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Input_KeyboardAndMouse",
+] }
+winreg = "0.52"

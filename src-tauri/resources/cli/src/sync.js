@@ -78,7 +78,12 @@ export async function runSync({ throws = false, quiet = false } = {}) {
 
   // Privacy: check if user allows project name upload
   const apiUrl = config.apiUrl || 'https://vibecafe.ai';
-  const settings = await fetchSettings(apiUrl, config.apiKey);
+  let settings = null;
+  try {
+    settings = await fetchSettings(apiUrl, config.apiKey);
+  } catch (err) {
+    process.stderr.write(`${dim(`  settings: ${err.message}（默认隐藏项目名）`)}\n`);
+  }
   const uploadProject = settings?.uploadProject === true;
 
   if (!quiet) {

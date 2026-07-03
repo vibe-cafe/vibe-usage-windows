@@ -1,8 +1,8 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
-import { resolve } from "node:path";
 
-// Tauri expects a fixed dev port; multi-page build: popover (index.html) + settings.
+// Tauri expects a fixed dev port. Single entry (index.html) — windows are
+// routed by label in src/main.tsx.
 export default defineConfig({
   plugins: [react()],
   clearScreen: false,
@@ -12,11 +12,5 @@ export default defineConfig({
   },
   build: {
     target: "chrome105",
-    rollupOptions: {
-      input: {
-        popover: resolve(__dirname, "index.html"),
-        settings: resolve(__dirname, "settings.html"),
-      },
-    },
   },
 });

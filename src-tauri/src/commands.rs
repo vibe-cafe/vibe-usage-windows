@@ -182,7 +182,7 @@ pub fn open_external(url: String) -> Result<(), String> {
     if !(url.starts_with("https://") || url.starts_with("http://")) {
         return Err("仅允许打开 http(s) 链接".into());
     }
-    open::that_detached(&url).map_err(|e| e.to_string())
+    crate::process_utils::shell_open(&url)
 }
 
 pub fn open_settings_impl(app: &AppHandle) {
@@ -191,9 +191,11 @@ pub fn open_settings_impl(app: &AppHandle) {
         let _ = existing.set_focus();
         return;
     }
-    let result = WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("settings.html".into()))
+    // Single frontend entry: main.tsx routes by window label (multi-page HTML
+    // entries proved unreliable in packaged builds — blank settings window).
+    let result = WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("index.html".into()))
         .title("Vibe Usage 设置")
-        .inner_size(460.0, 480.0)
+        .inner_size(460.0, 520.0)
         .resizable(false)
         .maximizable(false)
         .center()
