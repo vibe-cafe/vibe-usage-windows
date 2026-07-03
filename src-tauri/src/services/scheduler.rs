@@ -30,7 +30,8 @@ pub fn start(app: AppHandle) {
 
 pub fn stop(app: &AppHandle) {
     let ctx = app.state::<AppCtx>();
-    if let Some(old) = ctx.scheduler_task.lock().unwrap().take() {
+    let old = ctx.scheduler_task.lock().unwrap().take();
+    if let Some(old) = old {
         old.abort();
     }
 }

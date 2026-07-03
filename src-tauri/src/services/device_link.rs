@@ -46,7 +46,8 @@ pub async fn start(app: AppHandle) -> Result<String, String> {
 
 pub fn cancel(app: &AppHandle) {
     let ctx = app.state::<AppCtx>();
-    if let Some(handle) = ctx.device_link_task.lock().unwrap().take() {
+    let handle = ctx.device_link_task.lock().unwrap().take();
+    if let Some(handle) = handle {
         handle.abort();
     }
 }

@@ -5,7 +5,7 @@ use serde_json::Value;
 use std::time::Duration;
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum UsageQuery {
     Days { days: u32 },
     From { from_iso: String },

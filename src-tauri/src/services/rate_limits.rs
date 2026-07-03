@@ -17,7 +17,8 @@ pub fn statusline_hook(app: &AppHandle) -> StatuslineHook {
 pub async fn get_rate_limits(app: &AppHandle, force: bool) -> Vec<ProviderRateLimit> {
     let claude_enabled = {
         let ctx = app.state::<AppCtx>();
-        ctx.settings.lock().unwrap().claude_rate_limit_enabled
+        let enabled = ctx.settings.lock().unwrap().claude_rate_limit_enabled;
+        enabled
     };
 
     let needs_codex = {

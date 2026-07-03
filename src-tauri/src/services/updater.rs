@@ -60,7 +60,8 @@ pub async fn check(app: &AppHandle) -> Result<Option<UpdateInfo>, String> {
 pub async fn install(app: &AppHandle) -> Result<(), String> {
     let info = {
         let ctx = app.state::<AppCtx>();
-        ctx.update_info.lock().unwrap().clone()
+        let info = ctx.update_info.lock().unwrap().clone();
+        info
     }
     .ok_or("没有可安装的更新")?;
 
