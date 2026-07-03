@@ -81,8 +81,11 @@ impl ConfigManager {
         self.config_dir.join(self.config_file_name())
     }
 
+    /// Mirrors the CLI's state.js dev split (state.dev.json under
+    /// VIBE_USAGE_DEV) — reset in a dev build must never touch prod state.
     pub fn state_path(&self) -> PathBuf {
-        self.config_dir.join("state.json")
+        self.config_dir
+            .join(if self.is_dev { "state.dev.json" } else { "state.json" })
     }
 
     pub fn default_api_url(&self) -> &'static str {
@@ -99,9 +102,30 @@ impl ConfigManager {
         Some(VibeUsageConfig::from_json(&value))
     }
 
+    /// Merge-save: only fields that are `Some` are written; every other key
+    /// in the existing file (including ones this app doesn't know about —
+    /// the file is shared with the CLI, which may add fields) is preserved.
+    /// The macOS app rewrites the file with its known-field whitelist and
+    /// silently drops `hostname` — we deliberately do NOT replicate that bug.
     pub fn save(&self, config: &VibeUsageConfig) -> std::io::Result<()> {
         fs::create_dir_all(&self.config_dir)?;
-        let data = serde_json::to_string_pretty(&config.to_json())?;
+
+        let mut root = fs::read_to_string(self.config_path())
+            .ok()
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+            .and_then(|v| match v {
+                serde_json::Value::Object(map) => Some(map),
+                _ => None,
+            })
+            .unwrap_or_default();
+
+        if let serde_json::Value::Object(ours) = config.to_json() {
+            for (k, v) in ours {
+                root.insert(k, v);
+            }
+        }
+
+        let data = serde_json::to_string_pretty(&serde_json::Value::Object(root))?;
         atomic_write(&self.config_path(), data.as_bytes())
     }
 
@@ -181,6 +205,42 @@ mod tests {
         let cfg = mgr.load().unwrap();
         assert_eq!(cfg.api_key.as_deref(), Some("vbu_abc"));
         assert_eq!(cfg.hostname.as_deref(), Some("host-1"));
+    }
+
+    #[test]
+    fn save_preserves_unknown_fields() {
+        let dir = tempdir().unwrap();
+        let mgr = ConfigManager::with_dir(dir.path().to_path_buf(), false);
+        std::fs::create_dir_all(dir.path()).unwrap();
+        // CLI wrote hostname + a hypothetical future field.
+        std::fs::write(
+            mgr.config_path(),
+            r#"{"apiKey":"vbu_old","hostname":"cli-host","futureField":{"x":1}}"#,
+        )
+        .unwrap();
+
+        // App relinks: updates apiKey/apiUrl only.
+        mgr.save(&VibeUsageConfig {
+            api_key: Some("vbu_new".into()),
+            api_url: Some("https://vibecafe.ai".into()),
+            ..Default::default()
+        })
+        .unwrap();
+
+        let raw: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(mgr.config_path()).unwrap()).unwrap();
+        assert_eq!(raw["apiKey"], "vbu_new");
+        assert_eq!(raw["hostname"], "cli-host", "CLI-owned field must survive");
+        assert_eq!(raw["futureField"]["x"], 1, "unknown fields must survive");
+    }
+
+    #[test]
+    fn dev_state_path_is_split() {
+        let dir = tempdir().unwrap();
+        let prod = ConfigManager::with_dir(dir.path().to_path_buf(), false);
+        let dev = ConfigManager::with_dir(dir.path().to_path_buf(), true);
+        assert!(prod.state_path().ends_with("state.json"));
+        assert!(dev.state_path().ends_with("state.dev.json"));
     }
 
     #[test]

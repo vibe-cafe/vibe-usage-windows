@@ -188,13 +188,22 @@ async fn run_cli_sync(app: &AppHandle) -> Result<String, String> {
         if all.contains("Invalid API key") || all.contains("UNAUTHORIZED") {
             Err("API Key 无效，请重新配置".into())
         } else {
+            // stderr carries non-fatal parser warnings line by line; the CLI
+            // prints the fatal error LAST — surface that one, not a warning.
             let msg = if stderr.is_empty() { stdout } else { stderr };
+            let last_line = msg
+                .lines()
+                .rev()
+                .find(|l| !l.trim().is_empty())
+                .unwrap_or("")
+                .trim()
+                .to_string();
             Err(format!(
                 "同步失败: {}",
-                if msg.is_empty() {
+                if last_line.is_empty() {
                     format!("Exit code {}", status.code().unwrap_or(-1))
                 } else {
-                    msg.lines().next().unwrap_or(&msg).to_string()
+                    last_line
                 }
             ))
         }
