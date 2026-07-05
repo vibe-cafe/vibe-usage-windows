@@ -192,7 +192,9 @@ pub fn open_settings_impl(app: &AppHandle) {
         let _ = existing.set_focus();
         return;
     }
-    // Single frontend entry: main.tsx routes by the Tauri window label.
+    // The packaged app declares a hidden settings window in tauri.conf.json so
+    // WebView has loaded before the tray menu asks to show it. Keep this as a
+    // recovery path in case the window was closed by the platform.
     // Keep the app URL query-free here: packaged asset loading treats the
     // whole string as an app resource path on some WebView/Tauri versions.
     let result = WebviewWindowBuilder::new(

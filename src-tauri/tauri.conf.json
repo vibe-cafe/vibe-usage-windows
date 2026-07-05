@@ -27,6 +27,18 @@
         "skipTaskbar": true,
         "visible": false,
         "focus": false
+      },
+      {
+        "label": "settings",
+        "title": "Vibe Usage 设置",
+        "url": "index.html",
+        "width": 460,
+        "height": 520,
+        "resizable": false,
+        "maximizable": false,
+        "minimizable": false,
+        "visible": false,
+        "focus": false
       }
     ],
     "security": {
