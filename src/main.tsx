@@ -6,8 +6,8 @@ import { PopoverApp } from "./PopoverApp";
 import { SettingsApp } from "./SettingsApp";
 import { AppStateProvider } from "./state/AppStateContext";
 
-// Single HTML entry. Dynamically-created windows pass an explicit route query;
-// the Tauri window label is the fallback for packaged app windows.
+// Single HTML entry. Packaged Tauri windows route by label; the query param is
+// kept as a lightweight browser/dev fallback.
 function getWindowRoute() {
   const route = new URLSearchParams(window.location.search).get("window");
   if (route) return route;

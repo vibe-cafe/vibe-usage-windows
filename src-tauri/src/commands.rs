@@ -192,12 +192,13 @@ pub fn open_settings_impl(app: &AppHandle) {
         let _ = existing.set_focus();
         return;
     }
-    // Single frontend entry: main.tsx routes by window label (multi-page HTML
-    // entries proved unreliable in packaged builds — blank settings window).
+    // Single frontend entry: main.tsx routes by the Tauri window label.
+    // Keep the app URL query-free here: packaged asset loading treats the
+    // whole string as an app resource path on some WebView/Tauri versions.
     let result = WebviewWindowBuilder::new(
         app,
         "settings",
-        WebviewUrl::App("index.html?window=settings".into()),
+        WebviewUrl::App("index.html".into()),
     )
         .title("Vibe Usage 设置")
         .inner_size(460.0, 520.0)
