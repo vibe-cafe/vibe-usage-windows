@@ -37,7 +37,7 @@
 | `SummaryCardsView` | `components/SummaryCards.tsx` |
 | `BarChartView` | `components/TrendChart.tsx`（自绘 div 堆叠条） |
 | `DistributionChartsView` | `components/DistributionGrid.tsx`（自绘 SVG donut） |
-| `SettingsView` (NSWindow 460×480) | `SettingsApp`（独立 WebView 窗口 460×480） |
+| `SettingsView` (NSWindow 460×480) | `SettingsApp`（独立 WebView 窗口 460×620；Windows 保持首屏展示「关于」区域） |
 | `AppState` | `state/AppStateContext.tsx` + Rust `AppCtx` |
 | `APIClient` | `services/api_client.rs` |
 | `SyncEngine`（npx/bun x，120s） | `services/sync_engine.rs`（内置 CLI + node，120s，CREATE_NO_WINDOW） |
@@ -52,7 +52,7 @@
 
 ## 平台差异（有意为之）
 
-1. **托盘文本**：macOS 菜单栏支持图标旁文字；Windows 托盘不支持。开启「显示费用/Token」时数字用内嵌 5×7 像素字体渲染进 32×32 图标（两项全开则双行堆叠，同 macOS 布局），完整精度数值放在托盘悬停提示中。100% DPI 下小字有限可读，150%+ DPI 清晰。
+1. **托盘文本**：macOS 菜单栏支持图标旁文字；Windows 托盘不支持。Windows 始终使用高对比 32×32 图标，开启「显示费用/Token」时完整数值显示在托盘悬停提示中，避免小尺寸任务栏图标变得不可读。
 2. **「在 Dock 中显示」**：Windows 无 Dock，省略此设置项。托盘右键菜单提供「打开面板/立即同步/设置/退出」（Windows 惯例，macOS 无右键菜单，属增强）。
 3. **运行时**：macOS 版要求用户自装 Node/Bun 并用 `npx --yes` 每次联网解析；Windows 版捆绑打过补丁的 CLI 与 Node 22 运行时，离线可同步、版本可控（检测顺序：捆绑 node → 系统 node ≥22.5 → 系统 node ≥20 → bun）。
 4. **statusline 包装器**：bash → Node 脚本（行为逐行对齐：rate_limits 摘取、原子写、原命令同 stdin 转发、备份/自愈/还原）。

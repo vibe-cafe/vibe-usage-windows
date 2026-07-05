@@ -1,5 +1,5 @@
-// Settings window — port of Views/SettingsView.swift (grouped Form, 420×420
-// content in a 460×480 window). macOS's "在 Dock 中显示" has no Windows
+// Settings window — port of Views/SettingsView.swift (grouped Form, 420px
+// content in a 460×620 window). macOS's "在 Dock 中显示" has no Windows
 // equivalent (no Dock) and is intentionally omitted.
 
 import { useCallback, useEffect, useState } from "react";
@@ -216,7 +216,7 @@ export function SettingsApp() {
         </Section>
 
         {/* 托盘 (macOS: 菜单栏) */}
-        <Section title="托盘" footer="在托盘图标上显示费用和 Token 用量">
+        <Section title="托盘" footer="完整费用和 Token 用量显示在托盘悬停提示中">
           <Row label="托盘显示费用">
             <Toggle
               checked={settings?.showCostInTray ?? true}

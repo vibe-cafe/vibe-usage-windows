@@ -2,7 +2,7 @@
 //!
 //! Left click toggles the popover panel; right click opens a native menu
 //! (Windows convention). Windows shrinks tray icons aggressively, so the icon
-//! stays as the high-contrast V logo and optional usage values live in the
+//! stays as the high-contrast U logo and optional usage values live in the
 //! tooltip.
 
 use crate::state::{AppCtx, SyncStatus};
@@ -56,7 +56,7 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
-/// Refresh icon (logo vs rendered numbers) + tooltip from current state.
+/// Refresh logo icon + tooltip from current state.
 /// Tray mutations are proxied to the main thread — callers may be on the
 /// async runtime (sync scheduler), and Windows tray icons are thread-affine.
 pub fn update_tray(app: &AppHandle) {

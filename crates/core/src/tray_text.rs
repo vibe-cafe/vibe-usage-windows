@@ -12,7 +12,8 @@ use std::sync::OnceLock;
 pub const GLYPH_W: usize = 5;
 pub const GLYPH_H: usize = 7;
 
-/// Render the default tray logo: a high-contrast outlined card with a large V.
+/// Render the default tray logo: a high-contrast outlined card with the same
+/// angular "U" usage mark as the macOS menu-bar icon.
 /// It is generated in code so the tray cannot silently regress to a damaged
 /// bitmap asset.
 pub fn render_logo_icon(size: usize) -> Vec<u8> {
@@ -29,8 +30,8 @@ pub fn render_logo_icon(size: usize) -> Vec<u8> {
     draw_thick_line(
         &mut rgba,
         size,
-        (sx(11), sx(13)),
-        (sx(16), sx(23)),
+        (sx(12), sx(13)),
+        (sx(12), sx(20)),
         stroke + 1,
         shadow,
         1,
@@ -38,8 +39,26 @@ pub fn render_logo_icon(size: usize) -> Vec<u8> {
     draw_thick_line(
         &mut rgba,
         size,
-        (sx(21), sx(13)),
-        (sx(16), sx(23)),
+        (sx(20), sx(13)),
+        (sx(20), sx(20)),
+        stroke + 1,
+        shadow,
+        1,
+    );
+    draw_thick_line(
+        &mut rgba,
+        size,
+        (sx(12), sx(20)),
+        (sx(16), sx(24)),
+        stroke + 1,
+        shadow,
+        1,
+    );
+    draw_thick_line(
+        &mut rgba,
+        size,
+        (sx(20), sx(20)),
+        (sx(16), sx(24)),
         stroke + 1,
         shadow,
         1,
@@ -49,8 +68,8 @@ pub fn render_logo_icon(size: usize) -> Vec<u8> {
     draw_thick_line(
         &mut rgba,
         size,
-        (sx(11), sx(13)),
-        (sx(16), sx(23)),
+        (sx(12), sx(13)),
+        (sx(12), sx(20)),
         stroke + 1,
         white,
         0,
@@ -58,8 +77,26 @@ pub fn render_logo_icon(size: usize) -> Vec<u8> {
     draw_thick_line(
         &mut rgba,
         size,
-        (sx(21), sx(13)),
-        (sx(16), sx(23)),
+        (sx(20), sx(13)),
+        (sx(20), sx(20)),
+        stroke + 1,
+        white,
+        0,
+    );
+    draw_thick_line(
+        &mut rgba,
+        size,
+        (sx(12), sx(20)),
+        (sx(16), sx(24)),
+        stroke + 1,
+        white,
+        0,
+    );
+    draw_thick_line(
+        &mut rgba,
+        size,
+        (sx(20), sx(20)),
+        (sx(16), sx(24)),
         stroke + 1,
         white,
         0,
@@ -367,22 +404,22 @@ mod tests {
     }
 
     #[test]
-    fn logo_contains_frame_and_v() {
+    fn logo_contains_frame_and_usage_mark() {
         let img = render_logo_icon(32);
         assert_eq!(img.len(), 32 * 32 * 4);
         let white_pixels = img.chunks(4).filter(|p| p[3] == 255).count();
         assert!(white_pixels > 180, "expected a visible logo, got {white_pixels}");
 
-        let mut v_pixels = 0;
+        let mut mark_pixels = 0;
         for y in 13..24 {
-            for x in 10..22 {
+            for x in 11..21 {
                 let idx = (y * 32 + x) * 4;
                 if img[idx + 3] == 255 {
-                    v_pixels += 1;
+                    mark_pixels += 1;
                 }
             }
         }
-        assert!(v_pixels > 35, "expected center V pixels, got {v_pixels}");
+        assert!(mark_pixels > 45, "expected center usage-mark pixels, got {mark_pixels}");
     }
 
     #[test]
