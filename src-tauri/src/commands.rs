@@ -203,7 +203,7 @@ pub fn open_settings_impl(app: &AppHandle) {
         WebviewUrl::App("index.html".into()),
     )
         .title("Vibe Usage 设置")
-        .inner_size(460.0, 520.0)
+        .inner_size(460.0, 620.0)
         .resizable(false)
         .maximizable(false)
         .center()

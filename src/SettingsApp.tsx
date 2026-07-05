@@ -139,10 +139,10 @@ export function SettingsApp() {
 
   return (
     <div
-      className="min-h-screen p-4 font-sans text-[13px]"
+      className="h-screen overflow-hidden font-sans text-[13px]"
       style={{ background: "#1C1C1E", color: "#E8E8E8" }}
     >
-      <div className="mx-auto flex max-w-[430px] flex-col gap-4">
+      <div className="no-scrollbar mx-auto flex h-full max-w-[430px] flex-col gap-4 overflow-y-auto px-4 py-4">
         {/* 同步 */}
         <Section title="同步">
           <Row label="API Key">
