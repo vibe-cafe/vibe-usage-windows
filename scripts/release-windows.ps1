@@ -26,8 +26,8 @@ if ($LASTEXITCODE -ne 0) { exit 1 }
 node scripts/fetch-node.mjs
 if ($LASTEXITCODE -ne 0) { exit 1 }
 
-pnpm tauri build --bundles nsis
-if ($LASTEXITCODE -ne 0) { exit 1 }
+& (Join-Path $PSScriptRoot "build-tauri-windows.ps1")
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 $version = (Get-Content package.json | ConvertFrom-Json).version
 $installer = Get-ChildItem "target/release/bundle/nsis/*-setup.exe" | Select-Object -First 1

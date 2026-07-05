@@ -25,8 +25,9 @@ Windows 版 [Vibe Usage](https://github.com/vibe-cafe/vibe-usage-app) —— 自
 
 - **SmartScreen「Windows 已保护你的电脑」**：点「更多信息」→「仍要运行」；或右键 exe → 属性 → 勾选「解除锁定」后运行。
 - **Defender 误报拦截**：打开 Windows 安全中心 → 病毒和威胁防护 → 保护历史记录，找到该项选择「允许」。
+- **Smart App Control / Code Integrity 硬拦截**：部分 Windows 11 环境会直接阻止未签名 exe，且没有「仍要运行」入口；这种情况必须使用可信代码签名后的安装包。
 
-正式分发前会接入代码签名（EV 证书或 Azure Trusted Signing）彻底消除提示。
+正式分发前会接入代码签名（OV/EV 证书或 Azure Trusted Signing）彻底消除提示。
 
 ## 配置
 
@@ -50,6 +51,12 @@ pwsh -File scripts/setup-windows-build-env.ps1
 pnpm install
 pnpm run release:windows       # 产出 VibeUsage-<version>-Windows-Setup.exe + latest.json
 ```
+
+代码签名构建可通过环境变量提供证书：
+
+- `WINDOWS_CODESIGN_PFX_BASE64` + `WINDOWS_CODESIGN_PFX_PASSWORD`：Base64 编码的 PFX 证书及密码
+- `WINDOWS_CODESIGN_CERT_THUMBPRINT`：已安装到证书库的代码签名证书 thumbprint
+- `WINDOWS_CODESIGN_TIMESTAMP_URL`：可选，默认 `http://timestamp.digicert.com`
 
 开发调试：
 
