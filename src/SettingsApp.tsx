@@ -1,5 +1,5 @@
-// Settings window — port of Views/SettingsView.swift (grouped Form, 420×420
-// content in a 460×480 window). macOS's "在 Dock 中显示" has no Windows
+// Settings window — port of Views/SettingsView.swift (grouped Form, 420px
+// content in a 460×620 window). macOS's "在 Dock 中显示" has no Windows
 // equivalent (no Dock) and is intentionally omitted.
 
 import { useCallback, useEffect, useState } from "react";
@@ -17,17 +17,27 @@ export function SettingsApp() {
   const [isRelinking, setIsRelinking] = useState(false);
   const [relinkUserCode, setRelinkUserCode] = useState<string | null>(null);
   const [relinkError, setRelinkError] = useState<string | null>(null);
+  const [quotaError, setQuotaError] = useState<string | null>(null);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [updateMessage, setUpdateMessage] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
-    setStatus(await api.getAppStatus());
-    setSettings(await api.getSettings());
-    setSyncState(await api.getSyncState());
-    setAutoStart(await api.getLaunchAtLogin());
+    const [nextStatus, nextSettings, nextSyncState, nextAutoStart] = await Promise.allSettled([
+      api.getAppStatus(),
+      api.getSettings(),
+      api.getSyncState(),
+      api.getLaunchAtLogin(),
+    ]);
+
+    if (nextStatus.status === "fulfilled") setStatus(nextStatus.value);
+    if (nextSettings.status === "fulfilled") setSettings(nextSettings.value);
+    if (nextSyncState.status === "fulfilled") setSyncState(nextSyncState.value);
+    if (nextAutoStart.status === "fulfilled") setAutoStart(nextAutoStart.value);
   }, []);
 
   useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+
     void reload();
     const subs = [
       onSyncState(setSyncState),
@@ -83,6 +93,29 @@ export function SettingsApp() {
     void api.setSettings(next);
   };
 
+  const toggleCodexQuota = (enabled: boolean) => {
+    setQuotaError(null);
+    patchSettings({ codexRateLimitEnabled: enabled });
+  };
+
+  const toggleClaudeQuota = async (enabled: boolean) => {
+    if (!settings) return;
+    setQuotaError(null);
+    if (!enabled) {
+      patchSettings({ claudeRateLimitEnabled: false });
+      return;
+    }
+
+    setSettings({ ...settings, claudeRateLimitEnabled: true });
+    try {
+      await api.enableClaudeRateLimit();
+      await reload();
+    } catch (err) {
+      setSettings({ ...settings, claudeRateLimitEnabled: false });
+      setQuotaError(String(err));
+    }
+  };
+
   const toggleAutoStart = (enabled: boolean) => {
     setAutoStart(enabled);
     void api.setLaunchAtLogin(enabled);
@@ -106,10 +139,10 @@ export function SettingsApp() {
 
   return (
     <div
-      className="min-h-screen p-4 font-sans text-[13px]"
+      className="h-screen overflow-hidden font-sans text-[13px]"
       style={{ background: "#1C1C1E", color: "#E8E8E8" }}
     >
-      <div className="mx-auto flex max-w-[430px] flex-col gap-4">
+      <div className="no-scrollbar mx-auto flex h-full max-w-[430px] flex-col gap-4 overflow-y-auto px-4 py-4">
         {/* 同步 */}
         <Section title="同步">
           <Row label="API Key">
@@ -161,8 +194,29 @@ export function SettingsApp() {
           )}
         </Section>
 
+        {/* 订阅配额 */}
+        <Section title="订阅配额">
+          <Row label="显示 Codex 订阅配额">
+            <Toggle
+              checked={settings?.codexRateLimitEnabled ?? true}
+              onChange={toggleCodexQuota}
+            />
+          </Row>
+          <Row label="显示 Claude Code 订阅配额">
+            <Toggle
+              checked={settings?.claudeRateLimitEnabled ?? false}
+              onChange={(v) => void toggleClaudeQuota(v)}
+            />
+          </Row>
+          {quotaError && (
+            <div className="px-3 py-2 text-xs text-red-400" style={{ borderColor: "#3A3A3C" }}>
+              {quotaError}
+            </div>
+          )}
+        </Section>
+
         {/* 托盘 (macOS: 菜单栏) */}
-        <Section title="托盘" footer="在托盘图标上显示费用和 Token 用量">
+        <Section title="托盘" footer="完整费用和 Token 用量显示在托盘悬停提示中">
           <Row label="托盘显示费用">
             <Toggle
               checked={settings?.showCostInTray ?? true}

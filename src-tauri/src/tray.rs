@@ -1,9 +1,9 @@
 //! System tray — counterpart of Services/MenuBarController.swift.
 //!
 //! Left click toggles the popover panel; right click opens a native menu
-//! (Windows convention). When 显示费用/Token is enabled, the numbers are
-//! rendered INTO the icon bitmap (Windows trays have no adjacent text) and
-//! full-precision values live in the tooltip.
+//! (Windows convention). Windows shrinks tray icons aggressively, so the icon
+//! stays as the high-contrast U logo and optional usage values live in the
+//! tooltip.
 
 use crate::state::{AppCtx, SyncStatus};
 use tauri::menu::{Menu, MenuItem};
@@ -12,13 +12,8 @@ use tauri::{AppHandle, Manager};
 
 pub const TRAY_ID: &str = "main";
 
-/// White glyph on transparent — high contrast on the (usually dark) Windows
-/// taskbar. The bundle app icon (light-gray rounded card) is invisible at
-/// 16px tray size.
-const TRAY_ICON_PNG: &[u8] = include_bytes!("../icons/tray-icon.png");
-
-pub fn tray_logo() -> Option<tauri::image::Image<'static>> {
-    tauri::image::Image::from_bytes(TRAY_ICON_PNG).ok()
+pub fn tray_logo() -> tauri::image::Image<'static> {
+    tauri::image::Image::new_owned(vibe_core::tray_text::render_logo_icon(32), 32, 32)
 }
 
 pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
@@ -56,16 +51,12 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
             }
         });
 
-    if let Some(icon) = tray_logo() {
-        builder = builder.icon(icon);
-    } else if let Some(icon) = app.default_window_icon() {
-        builder = builder.icon(icon.clone());
-    }
+    builder = builder.icon(tray_logo());
     builder.build(app)?;
     Ok(())
 }
 
-/// Refresh icon (logo vs rendered numbers) + tooltip from current state.
+/// Refresh logo icon + tooltip from current state.
 /// Tray mutations are proxied to the main thread — callers may be on the
 /// async runtime (sync scheduler), and Windows tray icons are thread-affine.
 pub fn update_tray(app: &AppHandle) {
@@ -86,36 +77,17 @@ fn update_tray_inner(app: &AppHandle) {
     let stats = *ctx.tray_stats.lock().unwrap();
     let sync = ctx.sync_state.lock().unwrap().clone();
 
-    // Icon: numbers when enabled AND data exists (mirrors menuBarLines()
-    // returning [] until buckets arrive).
-    let mut lines: Vec<String> = Vec::new();
-    if let Some((cost, tokens)) = stats {
-        if show_cost {
-            lines.push(vibe_core::tray_text::compact_cost(cost));
-        }
-        if show_tokens {
-            lines.push(vibe_core::tray_text::compact_tokens(tokens));
-        }
-    }
-
-    match vibe_core::tray_text::render_tray_text(&lines, 32) {
-        Some(rgba) => {
-            let _ = tray.set_icon(Some(tauri::image::Image::new_owned(rgba, 32, 32)));
-        }
-        None => {
-            if let Some(icon) = tray_logo() {
-                let _ = tray.set_icon(Some(icon));
-            } else if let Some(icon) = app.default_window_icon() {
-                let _ = tray.set_icon(Some(icon.clone()));
-            }
-        }
-    }
+    let _ = tray.set_icon(Some(tray_logo()));
 
     // Tooltip carries the full-precision values.
     let mut tooltip = String::from("Vibe Usage");
     if let Some((cost, tokens)) = stats {
-        tooltip.push_str(&format!(" · {}", format_cost(cost)));
-        tooltip.push_str(&format!(" · {} tokens", format_number(tokens)));
+        if show_cost {
+            tooltip.push_str(&format!(" · {}", format_cost(cost)));
+        }
+        if show_tokens {
+            tooltip.push_str(&format!(" · {} tokens", format_number(tokens)));
+        }
     }
     match sync.status {
         SyncStatus::Syncing => tooltip.push_str(" · 同步中..."),

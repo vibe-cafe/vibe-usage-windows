@@ -5,7 +5,7 @@ use crate::services::{auto_launch, device_link, rate_limits, scheduler, sync_eng
 use crate::state::{AppCtx, AppSettings, SyncState, UpdateInfo};
 use serde::Serialize;
 use serde_json::Value;
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use vibe_core::ProviderRateLimit;
 
 #[derive(Serialize)]
@@ -152,6 +152,7 @@ pub fn set_settings(app: AppHandle, settings: AppSettings) {
     if claude_was_enabled && !settings.claude_rate_limit_enabled {
         let _ = rate_limits::statusline_hook(&app).uninstall();
     }
+    let _ = app.emit("settings-updated", &settings);
     crate::tray::update_tray(&app);
 }
 
@@ -191,11 +192,18 @@ pub fn open_settings_impl(app: &AppHandle) {
         let _ = existing.set_focus();
         return;
     }
-    // Single frontend entry: main.tsx routes by window label (multi-page HTML
-    // entries proved unreliable in packaged builds — blank settings window).
-    let result = WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("index.html".into()))
+    // The packaged app declares a hidden settings window in tauri.conf.json so
+    // WebView has loaded before the tray menu asks to show it. Keep this as a
+    // recovery path in case the window was closed by the platform.
+    // Keep the app URL query-free here: packaged asset loading treats the
+    // whole string as an app resource path on some WebView/Tauri versions.
+    let result = WebviewWindowBuilder::new(
+        app,
+        "settings",
+        WebviewUrl::App("index.html".into()),
+    )
         .title("Vibe Usage 设置")
-        .inner_size(460.0, 520.0)
+        .inner_size(460.0, 620.0)
         .resizable(false)
         .maximizable(false)
         .center()

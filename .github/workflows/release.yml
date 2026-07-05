@@ -51,7 +51,13 @@ jobs:
           cargo test --workspace
 
       - name: Build NSIS installer
-        run: pnpm tauri build --bundles nsis
+        shell: pwsh
+        env:
+          WINDOWS_CODESIGN_PFX_BASE64: ${{ secrets.WINDOWS_CODESIGN_PFX_BASE64 }}
+          WINDOWS_CODESIGN_PFX_PASSWORD: ${{ secrets.WINDOWS_CODESIGN_PFX_PASSWORD }}
+          WINDOWS_CODESIGN_CERT_THUMBPRINT: ${{ secrets.WINDOWS_CODESIGN_CERT_THUMBPRINT }}
+          WINDOWS_CODESIGN_TIMESTAMP_URL: ${{ vars.WINDOWS_CODESIGN_TIMESTAMP_URL }}
+        run: .\scripts\build-tauri-windows.ps1
 
       - name: Collect artifacts
         id: artifacts

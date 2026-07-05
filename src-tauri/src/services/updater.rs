@@ -32,8 +32,13 @@ pub async fn check(app: &AppHandle) -> Result<Option<UpdateInfo>, String> {
         .send()
         .await
         .map_err(|e| format!("网络错误：{e}"))?;
-    if !res.status().is_success() {
-        return Err(format!("HTTP 错误 {}", res.status().as_u16()));
+    let status = res.status();
+    if status.as_u16() == 404 {
+        log::info!("update manifest not found; treating as no update");
+        return Ok(None);
+    }
+    if !status.is_success() {
+        return Err(format!("HTTP 错误 {}", status.as_u16()));
     }
     let manifest: Manifest = res.json().await.map_err(|e| format!("清单解析失败：{e}"))?;
 

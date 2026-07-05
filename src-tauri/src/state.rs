@@ -10,12 +10,14 @@ use vibe_core::ProviderRateLimit;
 pub const IS_DEV: bool = cfg!(debug_assertions);
 
 /// Persisted app settings — counterpart of the macOS UserDefaults keys
-/// (showCostInMenuBar / showTokensInMenuBar / claudeRateLimitEnabled).
+/// (showCostInMenuBar / showTokensInMenuBar / codexRateLimitEnabled /
+/// claudeRateLimitEnabled).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AppSettings {
     pub show_cost_in_tray: bool,
     pub show_tokens_in_tray: bool,
+    pub codex_rate_limit_enabled: bool,
     pub claude_rate_limit_enabled: bool,
 }
 
@@ -24,6 +26,7 @@ impl Default for AppSettings {
         Self {
             show_cost_in_tray: true,
             show_tokens_in_tray: false,
+            codex_rate_limit_enabled: true,
             claude_rate_limit_enabled: false,
         }
     }
