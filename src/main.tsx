@@ -6,13 +6,24 @@ import { PopoverApp } from "./PopoverApp";
 import { SettingsApp } from "./SettingsApp";
 import { AppStateProvider } from "./state/AppStateContext";
 
-// Single HTML entry — the window label decides what to render (multi-page
-// HTML entries proved unreliable in packaged builds: blank settings window).
-const label = getCurrentWindow().label;
+// Single HTML entry. Dynamically-created windows pass an explicit route query;
+// the Tauri window label is the fallback for packaged app windows.
+function getWindowRoute() {
+  const route = new URLSearchParams(window.location.search).get("window");
+  if (route) return route;
+
+  try {
+    return getCurrentWindow().label;
+  } catch {
+    return "popover";
+  }
+}
+
+const route = getWindowRoute();
 
 const root = ReactDOM.createRoot(document.getElementById("root")!);
 
-if (label === "settings") {
+if (route === "settings") {
   document.body.style.background = "#1C1C1E";
   root.render(
     <React.StrictMode>

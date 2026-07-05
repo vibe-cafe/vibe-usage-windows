@@ -11,8 +11,9 @@ import {
   useRef,
   useState,
 } from "react";
-import { api, onPanelShown, onSyncState, onUpdateAvailable } from "../lib/api";
+import { api, onPanelShown, onSettingsUpdated, onSyncState, onUpdateAvailable } from "../lib/api";
 import {
+  AppSettings,
   AppStatus,
   bucketDate,
   ChartMode,
@@ -34,6 +35,7 @@ import { invoke } from "@tauri-apps/api/core";
 
 interface AppStateValue {
   status: AppStatus | null;
+  settings: AppSettings;
   configured: boolean;
 
   buckets: UsageBucket[];
@@ -72,6 +74,13 @@ interface AppStateValue {
 
 const AppStateContext = createContext<AppStateValue | null>(null);
 
+const DEFAULT_SETTINGS: AppSettings = {
+  showCostInTray: true,
+  showTokensInTray: false,
+  codexRateLimitEnabled: true,
+  claudeRateLimitEnabled: false,
+};
+
 export function useAppState(): AppStateValue {
   const v = useContext(AppStateContext);
   if (!v) throw new Error("useAppState outside provider");
@@ -86,6 +95,7 @@ function startOfToday(): Date {
 
 export function AppStateProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<AppStatus | null>(null);
+  const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [configured, setConfigured] = useState(false);
 
   const [buckets, setBuckets] = useState<UsageBucket[]>([]);
@@ -195,6 +205,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     try {
       setClaudeError(null);
       setRateLimits(await api.enableClaudeRateLimit());
+      setSettings((current) => ({ ...current, claudeRateLimitEnabled: true }));
     } catch (err) {
       setClaudeError(String(err));
     }
@@ -238,8 +249,15 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         setStatus(s);
         setConfigured(s.configured);
         configuredRef.current = s.configured;
-        setSyncState(await api.getSyncState());
-        setRateLimits(await api.getRateLimits(false));
+        const [nextSettings, nextSyncState, nextRateLimits] = await Promise.all([
+          api.getSettings(),
+          api.getSyncState(),
+          api.getRateLimits(false),
+        ]);
+        if (disposed) return;
+        setSettings(nextSettings);
+        setSyncState(nextSyncState);
+        setRateLimits(nextRateLimits);
         if (s.configured) {
           await fetchUsageData();
         }
@@ -265,6 +283,10 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         }
       }),
       onUpdateAvailable((u) => setUpdateInfo(u)),
+      onSettingsUpdated((nextSettings) => {
+        setSettings(nextSettings);
+        void refreshRateLimits(true);
+      }),
       onPanelShown(() => {
         // Config may have changed while hidden (relink / reset from settings).
         void api.getAppStatus().then((s) => {
@@ -272,6 +294,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
           setConfigured(s.configured);
           configuredRef.current = s.configured;
         });
+        void api.getSettings().then(setSettings);
         void fetchUsageDataIfNeeded();
         void refreshRateLimits(false);
       }),
@@ -304,6 +327,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
 
   const value: AppStateValue = {
     status,
+    settings,
     configured,
     buckets,
     sessions,

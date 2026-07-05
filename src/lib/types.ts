@@ -203,6 +203,7 @@ export interface AppStatus {
 export interface AppSettings {
   showCostInTray: boolean;
   showTokensInTray: boolean;
+  codexRateLimitEnabled: boolean;
   claudeRateLimitEnabled: boolean;
 }
 

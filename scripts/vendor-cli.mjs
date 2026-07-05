@@ -76,7 +76,7 @@ function vendorFromNpm() {
 
 function patchFile(rel, replacements) {
   const file = path.join(destDir, rel);
-  let content = fs.readFileSync(file, "utf8");
+  let content = fs.readFileSync(file, "utf8").replace(/\r\n/g, "\n");
   for (const [from, to, name] of replacements) {
     if (!content.includes(from)) {
       throw new Error(`patch anchor missing in ${rel} (${name}) — CLI changed; re-verify patches`);
@@ -174,6 +174,93 @@ const DATA_DIR = resolveOpencodeDataDir();`,
   }
   return join(homedir(), '.local', 'share', 'amp', 'threads');`,
       "amp windows data dir",
+    ],
+  ]);
+
+  // 5. The app invokes the CLI from a bundled runtime. Keep CLI config/state
+  // in the app config dir, and repair accidental directory-at-file-path cases
+  // so sync cannot fail with EISDIR when writing config.json/state.json.
+  patchFile("src/config.js", [
+    [
+      "import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';",
+      "import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, statSync } from 'node:fs';",
+      "config fs helpers",
+    ],
+    [
+      "const CONFIG_DIR = join(homedir(), '.vibe-usage');",
+      "const CONFIG_DIR = process.env.VIBE_USAGE_CONFIG_DIR?.trim() || join(homedir(), '.vibe-usage');",
+      "config app dir override",
+    ],
+    [
+      "export function getConfigPath() {",
+      `function backupPath(path) {
+  return \`\${path}.directory-backup-\${Date.now()}\`;
+}
+
+function moveDirectoryOutOfFilePath(path) {
+  try {
+    if (statSync(path).isDirectory()) {
+      renameSync(path, backupPath(path));
+    }
+  } catch (err) {
+    if (err?.code !== 'ENOENT') throw err;
+  }
+}
+
+export function getConfigPath() {`,
+      "config EISDIR repair helpers",
+    ],
+    [
+      "  try {\n    return JSON.parse(readFileSync(CONFIG_FILE, 'utf-8'));",
+      "  try {\n    if (!statSync(CONFIG_FILE).isFile()) return null;\n    return JSON.parse(readFileSync(CONFIG_FILE, 'utf-8'));",
+      "config ignore non-file",
+    ],
+    [
+      "  mkdirSync(CONFIG_DIR, { recursive: true });\n  writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2) + '\\n', 'utf-8');",
+      "  mkdirSync(CONFIG_DIR, { recursive: true });\n  moveDirectoryOutOfFilePath(CONFIG_FILE);\n  writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2) + '\\n', 'utf-8');",
+      "config save EISDIR repair",
+    ],
+  ]);
+
+  patchFile("src/state.js", [
+    [
+      "import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';",
+      "import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, statSync } from 'node:fs';",
+      "state fs helpers",
+    ],
+    [
+      "const STATE_DIR = join(homedir(), '.vibe-usage');",
+      "const STATE_DIR = process.env.VIBE_USAGE_CONFIG_DIR?.trim() || join(homedir(), '.vibe-usage');",
+      "state app dir override",
+    ],
+    [
+      "export function getStatePath() {",
+      `function backupPath(path) {
+  return \`\${path}.directory-backup-\${Date.now()}\`;
+}
+
+function moveDirectoryOutOfFilePath(path) {
+  try {
+    if (statSync(path).isDirectory()) {
+      renameSync(path, backupPath(path));
+    }
+  } catch (err) {
+    if (err?.code !== 'ENOENT') throw err;
+  }
+}
+
+export function getStatePath() {`,
+      "state EISDIR repair helpers",
+    ],
+    [
+      "  try {\n    const parsed = JSON.parse(readFileSync(STATE_FILE, 'utf-8'));",
+      "  try {\n    if (!statSync(STATE_FILE).isFile()) return { buckets: {}, sessions: {} };\n    const parsed = JSON.parse(readFileSync(STATE_FILE, 'utf-8'));",
+      "state ignore non-file",
+    ],
+    [
+      "  mkdirSync(STATE_DIR, { recursive: true });\n  writeFileSync(STATE_FILE, JSON.stringify(state) + '\\n', 'utf-8');",
+      "  mkdirSync(STATE_DIR, { recursive: true });\n  moveDirectoryOutOfFilePath(STATE_FILE);\n  writeFileSync(STATE_FILE, JSON.stringify(state) + '\\n', 'utf-8');",
+      "state save EISDIR repair",
     ],
   ]);
 }

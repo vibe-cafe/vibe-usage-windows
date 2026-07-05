@@ -70,6 +70,10 @@ export function onUpdateAvailable(handler: (u: UpdateInfo) => void): Promise<Unl
   return listen<UpdateInfo>("update-available", (e) => handler(e.payload));
 }
 
+export function onSettingsUpdated(handler: (settings: AppSettings) => void): Promise<UnlistenFn> {
+  return listen<AppSettings>("settings-updated", (e) => handler(e.payload));
+}
+
 /** Fired by Rust when the panel window is shown (popover-open refresh path). */
 export function onPanelShown(handler: () => void): Promise<UnlistenFn> {
   return listen("panel-shown", () => handler());

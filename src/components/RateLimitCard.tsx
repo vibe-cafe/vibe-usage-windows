@@ -10,16 +10,17 @@ import codexIcon from "../assets/codex-icon.png";
 import claudeIcon from "../assets/claude-icon.png";
 
 export function RateLimitCards() {
-  const { rateLimits } = useAppState();
+  const { rateLimits, settings } = useAppState();
 
   const snapshot = (provider: RateLimitProvider): ProviderRateLimit =>
     rateLimits.find((r) => r.provider === provider) ?? { provider, status: { kind: "noData" } };
 
   const codex = snapshot("codex");
   const claude = snapshot("claudeCode");
-  // Hide a card only when the provider has produced no signal at all (.noData).
-  const showCodex = codex.status.kind !== "noData";
-  const showClaude = claude.status.kind !== "noData";
+  // Match macOS: provider toggles own visibility; enabled Claude keeps an
+  // actionable waiting card until its first statusline capture arrives.
+  const showCodex = settings.codexRateLimitEnabled && codex.status.kind !== "noData";
+  const showClaude = settings.claudeRateLimitEnabled;
 
   if (showCodex && showClaude) {
     return (
@@ -31,7 +32,8 @@ export function RateLimitCards() {
   }
   if (showCodex) return <ProviderCard snapshot={codex} />;
   if (showClaude) return <ProviderCard snapshot={claude} />;
-  return <NoticeBar />;
+  if (settings.codexRateLimitEnabled || settings.claudeRateLimitEnabled) return <NoticeBar />;
+  return null;
 }
 
 /** Single-line whisper when neither provider has any data. */
@@ -53,6 +55,7 @@ type RowItem =
 
 function ProviderCard({ snapshot }: { snapshot: ProviderRateLimit }) {
   const [hoveredLabel, setHoveredLabel] = useState<string | null>(null);
+  const { settings } = useAppState();
 
   const displayName = snapshot.provider === "codex" ? "Codex" : "Claude";
 
@@ -90,7 +93,15 @@ function ProviderCard({ snapshot }: { snapshot: ProviderRateLimit }) {
       {snapshot.status.kind === "ok" && (
         <QuotaRows rows={rows} hoveredLabel={hoveredLabel} setHoveredLabel={setHoveredLabel} />
       )}
-      {snapshot.status.kind === "disabled" && <DisabledContent />}
+      {snapshot.status.kind === "disabled" &&
+        (snapshot.provider === "claudeCode" && settings.claudeRateLimitEnabled ? (
+          <WaitingForClaudeContent />
+        ) : (
+          <DisabledContent />
+        ))}
+      {snapshot.status.kind === "noData" &&
+        snapshot.provider === "claudeCode" &&
+        settings.claudeRateLimitEnabled && <WaitingForClaudeContent />}
       {snapshot.status.kind === "unauthorized" && (
         <MessageContent text="未授权或登录已过期" action="重试" />
       )}
@@ -254,6 +265,24 @@ function DisabledContent() {
         onClick={() => void state.enableClaudeRateLimit()}
       >
         启用
+      </button>
+    </div>
+  );
+}
+
+function WaitingForClaudeContent() {
+  const state = useAppState();
+  return (
+    <div className="flex items-center gap-2">
+      <span className="min-w-0 grow text-[11px] leading-snug" style={{ color: "#808080" }}>
+        已启用，使用 Claude Code 后会自动显示
+      </span>
+      <button
+        className="shrink-0 rounded-full px-2.5 py-[3px] text-[11px]"
+        style={{ background: "rgba(255,255,255,0.16)", color: "#C7C7C7" }}
+        onClick={() => void state.refreshRateLimits(true)}
+      >
+        刷新
       </button>
     </div>
   );

@@ -3,7 +3,7 @@
 
 use crate::state::AppCtx;
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 use vibe_core::rate_limit::{claude, codex};
 use vibe_core::statusline_hook::StatuslineHook;
 use vibe_core::{ProviderRateLimit, RateLimitProvider, RateLimitStatus};
@@ -15,13 +15,16 @@ pub fn statusline_hook(app: &AppHandle) -> StatuslineHook {
 }
 
 pub async fn get_rate_limits(app: &AppHandle, force: bool) -> Vec<ProviderRateLimit> {
-    let claude_enabled = {
+    let (codex_enabled, claude_enabled) = {
         let ctx = app.state::<AppCtx>();
-        let enabled = ctx.settings.lock().unwrap().claude_rate_limit_enabled;
-        enabled
+        let settings = ctx.settings.lock().unwrap();
+        (
+            settings.codex_rate_limit_enabled,
+            settings.claude_rate_limit_enabled,
+        )
     };
 
-    let needs_codex = {
+    let needs_codex = codex_enabled && {
         let ctx = app.state::<AppCtx>();
         let cache = ctx.rate_limits.lock().unwrap();
         force
@@ -41,7 +44,7 @@ pub async fn get_rate_limits(app: &AppHandle, force: bool) -> Vec<ProviderRateLi
         ctx.rate_limits.lock().unwrap().codex = Some((snapshot, Instant::now()));
     }
 
-    let needs_claude = {
+    let needs_claude = claude_enabled && {
         let ctx = app.state::<AppCtx>();
         let cache = ctx.rate_limits.lock().unwrap();
         force
@@ -66,22 +69,29 @@ pub async fn get_rate_limits(app: &AppHandle, force: bool) -> Vec<ProviderRateLi
 
     let ctx = app.state::<AppCtx>();
     let cache = ctx.rate_limits.lock().unwrap();
-    vec![
+    let codex_snapshot = if codex_enabled {
         cache
             .codex
             .as_ref()
             .map(|(s, _)| s.clone())
             .unwrap_or_else(|| {
                 ProviderRateLimit::empty(RateLimitProvider::Codex, RateLimitStatus::NoData)
-            }),
+            })
+    } else {
+        ProviderRateLimit::empty(RateLimitProvider::Codex, RateLimitStatus::NoData)
+    };
+    let claude_snapshot = if claude_enabled {
         cache
             .claude
             .as_ref()
             .map(|(s, _)| s.clone())
             .unwrap_or_else(|| {
                 ProviderRateLimit::empty(RateLimitProvider::ClaudeCode, RateLimitStatus::Disabled)
-            }),
-    ]
+            })
+    } else {
+        ProviderRateLimit::empty(RateLimitProvider::ClaudeCode, RateLimitStatus::NoData)
+    };
+    vec![codex_snapshot, claude_snapshot]
 }
 
 /// Enable Claude quota capture: install the statusline wrapper, persist the
@@ -95,6 +105,8 @@ pub async fn enable_claude(app: &AppHandle) -> Result<Vec<ProviderRateLimit>, St
         let ctx = app.state::<AppCtx>();
         ctx.settings.lock().unwrap().claude_rate_limit_enabled = true;
         ctx.save_settings();
+        let settings = ctx.settings.lock().unwrap().clone();
+        let _ = app.emit("settings-updated", &settings);
     }
 
     let mut limits = get_rate_limits(app, true).await;

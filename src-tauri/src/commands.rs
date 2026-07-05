@@ -5,7 +5,7 @@ use crate::services::{auto_launch, device_link, rate_limits, scheduler, sync_eng
 use crate::state::{AppCtx, AppSettings, SyncState, UpdateInfo};
 use serde::Serialize;
 use serde_json::Value;
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use vibe_core::ProviderRateLimit;
 
 #[derive(Serialize)]
@@ -152,6 +152,7 @@ pub fn set_settings(app: AppHandle, settings: AppSettings) {
     if claude_was_enabled && !settings.claude_rate_limit_enabled {
         let _ = rate_limits::statusline_hook(&app).uninstall();
     }
+    let _ = app.emit("settings-updated", &settings);
     crate::tray::update_tray(&app);
 }
 
@@ -193,7 +194,11 @@ pub fn open_settings_impl(app: &AppHandle) {
     }
     // Single frontend entry: main.tsx routes by window label (multi-page HTML
     // entries proved unreliable in packaged builds — blank settings window).
-    let result = WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("index.html".into()))
+    let result = WebviewWindowBuilder::new(
+        app,
+        "settings",
+        WebviewUrl::App("index.html?window=settings".into()),
+    )
         .title("Vibe Usage 设置")
         .inner_size(460.0, 520.0)
         .resizable(false)

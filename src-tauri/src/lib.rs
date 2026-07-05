@@ -62,6 +62,12 @@ pub fn run() {
                 api.prevent_close();
                 panel::hide_now(window.app_handle());
             }
+            // Settings is owned by the tray app. Hide it on close so the
+            // keep-alive exit guard cannot leave the close action stuck.
+            WindowEvent::CloseRequested { api, .. } if window.label() == "settings" => {
+                api.prevent_close();
+                let _ = window.hide();
+            }
             _ => {}
         })
         .invoke_handler(tauri::generate_handler![

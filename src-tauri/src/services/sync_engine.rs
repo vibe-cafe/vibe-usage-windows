@@ -123,10 +123,17 @@ async fn run_cli_sync(app: &AppHandle) -> Result<String, String> {
     let Some(rt) = detect_runtime(app) else {
         return Err("未检测到可用的 Node.js 运行时，请安装 Node.js 22+".into());
     };
+    let Some(cli_dir) = cli.parent() else {
+        return Err("同步失败: 内置 CLI 路径无效".into());
+    };
+    let Some(cli_file) = cli.file_name() else {
+        return Err("同步失败: 内置 CLI 路径无效".into());
+    };
     log::info!("sync via {:?} {}", rt.kind, rt.path.display());
 
     let mut cmd = tokio::process::Command::new(&rt.path);
-    cmd.arg(&cli)
+    cmd.current_dir(cli_dir)
+        .arg(cli_file)
         .arg("sync")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -139,6 +146,10 @@ async fn run_cli_sync(app: &AppHandle) -> Result<String, String> {
         let path = std::env::var("PATH").unwrap_or_default();
         cmd.env("PATH", format!("{}{sep}{path}", dir.display()));
     }
+    cmd.env(
+        "VIBE_USAGE_CONFIG_DIR",
+        app.state::<AppCtx>().config.config_dir.clone(),
+    );
     if crate::state::IS_DEV {
         cmd.env("VIBE_USAGE_DEV", "1");
     }

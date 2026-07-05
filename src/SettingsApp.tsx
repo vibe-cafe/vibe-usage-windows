@@ -17,17 +17,27 @@ export function SettingsApp() {
   const [isRelinking, setIsRelinking] = useState(false);
   const [relinkUserCode, setRelinkUserCode] = useState<string | null>(null);
   const [relinkError, setRelinkError] = useState<string | null>(null);
+  const [quotaError, setQuotaError] = useState<string | null>(null);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [updateMessage, setUpdateMessage] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
-    setStatus(await api.getAppStatus());
-    setSettings(await api.getSettings());
-    setSyncState(await api.getSyncState());
-    setAutoStart(await api.getLaunchAtLogin());
+    const [nextStatus, nextSettings, nextSyncState, nextAutoStart] = await Promise.allSettled([
+      api.getAppStatus(),
+      api.getSettings(),
+      api.getSyncState(),
+      api.getLaunchAtLogin(),
+    ]);
+
+    if (nextStatus.status === "fulfilled") setStatus(nextStatus.value);
+    if (nextSettings.status === "fulfilled") setSettings(nextSettings.value);
+    if (nextSyncState.status === "fulfilled") setSyncState(nextSyncState.value);
+    if (nextAutoStart.status === "fulfilled") setAutoStart(nextAutoStart.value);
   }, []);
 
   useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+
     void reload();
     const subs = [
       onSyncState(setSyncState),
@@ -81,6 +91,29 @@ export function SettingsApp() {
     const next = { ...settings, ...patch };
     setSettings(next);
     void api.setSettings(next);
+  };
+
+  const toggleCodexQuota = (enabled: boolean) => {
+    setQuotaError(null);
+    patchSettings({ codexRateLimitEnabled: enabled });
+  };
+
+  const toggleClaudeQuota = async (enabled: boolean) => {
+    if (!settings) return;
+    setQuotaError(null);
+    if (!enabled) {
+      patchSettings({ claudeRateLimitEnabled: false });
+      return;
+    }
+
+    setSettings({ ...settings, claudeRateLimitEnabled: true });
+    try {
+      await api.enableClaudeRateLimit();
+      await reload();
+    } catch (err) {
+      setSettings({ ...settings, claudeRateLimitEnabled: false });
+      setQuotaError(String(err));
+    }
   };
 
   const toggleAutoStart = (enabled: boolean) => {
@@ -158,6 +191,27 @@ export function SettingsApp() {
                 {formatRelativeTime(new Date(syncState.lastSyncAt))}
               </span>
             </Row>
+          )}
+        </Section>
+
+        {/* 订阅配额 */}
+        <Section title="订阅配额">
+          <Row label="显示 Codex 订阅配额">
+            <Toggle
+              checked={settings?.codexRateLimitEnabled ?? true}
+              onChange={toggleCodexQuota}
+            />
+          </Row>
+          <Row label="显示 Claude Code 订阅配额">
+            <Toggle
+              checked={settings?.claudeRateLimitEnabled ?? false}
+              onChange={(v) => void toggleClaudeQuota(v)}
+            />
+          </Row>
+          {quotaError && (
+            <div className="px-3 py-2 text-xs text-red-400" style={{ borderColor: "#3A3A3C" }}>
+              {quotaError}
+            </div>
           )}
         </Section>
 
