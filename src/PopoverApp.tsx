@@ -1,8 +1,5 @@
-// Main popover container — port of Views/PopoverView.swift (520×620 panel).
+// Main window container — port of Views/PopoverView.swift content.
 
-import { useEffect, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
-import { api, onPanelWillHide } from "./lib/api";
 import { useAppState } from "./state/AppStateContext";
 import { HeaderBar } from "./components/HeaderBar";
 import { OnboardingView } from "./components/OnboardingView";
@@ -14,58 +11,11 @@ import { DistributionGrid } from "./components/DistributionGrid";
 import { FooterBar } from "./components/FooterBar";
 import { Inbox } from "lucide-react";
 
-type PanelAnim = "opening" | "open" | "closing";
-
 export function PopoverApp() {
   const state = useAppState();
-  const [anim, setAnim] = useState<PanelAnim>("opening");
-
-  // Panel open/close animation driven by Rust show/hide events. The origin
-  // matches the tray position (bottom taskbar → panel scales up from its
-  // bottom-right corner, like the macOS panel falling out of the menu bar).
-  useEffect(() => {
-    const subs = [
-      listen<{ origin?: string }>("panel-shown", (e) => {
-        document.documentElement.style.setProperty(
-          "--panel-origin",
-          e.payload?.origin ?? "top right",
-        );
-        setAnim("opening");
-      }),
-      onPanelWillHide(() => setAnim("closing")),
-    ];
-    return () => {
-      for (const p of subs) void p.then((un) => un());
-    };
-  }, []);
-
-  useEffect(() => {
-    if (anim === "opening") {
-      const t = setTimeout(() => setAnim("open"), 230);
-      return () => clearTimeout(t);
-    }
-    if (anim === "closing") {
-      const t = setTimeout(() => void api.hidePanel(), 150);
-      return () => clearTimeout(t);
-    }
-  }, [anim]);
-
-  // ESC closes the panel (mirrors the local ESC event monitor).
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setAnim("closing");
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
-
-  const animClass =
-    anim === "opening" ? "panel-opening" : anim === "closing" ? "panel-closing" : "";
 
   return (
-    <div
-      className={`flex h-[620px] w-[520px] flex-col overflow-hidden rounded-panel bg-app ${animClass}`}
-    >
+    <div className="flex h-screen w-screen flex-col overflow-hidden bg-app">
       {!state.configured ? <OnboardingView /> : <DashboardView />}
     </div>
   );

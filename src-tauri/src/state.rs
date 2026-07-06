@@ -90,9 +90,6 @@ pub struct AppCtx {
     pub device_link_task: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
     pub scheduler_task: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
     pub rate_limits: Mutex<RateLimitCache>,
-    /// Set when the panel hides due to focus loss — the tray click that caused
-    /// the blur must not immediately reopen the panel (toggle race).
-    pub last_panel_hide: Mutex<Option<Instant>>,
     pub update_info: Mutex<Option<UpdateInfo>>,
     /// (cost, tokens) for the active time range, pushed by the frontend.
     pub tray_stats: Mutex<Option<(f64, i64)>>,
@@ -121,7 +118,6 @@ impl AppCtx {
             device_link_task: Mutex::new(None),
             scheduler_task: Mutex::new(None),
             rate_limits: Mutex::new(RateLimitCache::default()),
-            last_panel_hide: Mutex::new(None),
             update_info: Mutex::new(None),
             tray_stats: Mutex::new(None),
         }

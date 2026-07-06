@@ -30,7 +30,12 @@ if ($LASTEXITCODE -ne 0) { exit 1 }
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 $version = (Get-Content package.json | ConvertFrom-Json).version
-$installer = Get-ChildItem "target/release/bundle/nsis/*-setup.exe" | Select-Object -First 1
+$installer = Get-ChildItem -Path "target/release/bundle/nsis" -Filter "*$version*setup.exe" |
+  Sort-Object LastWriteTime -Descending |
+  Select-Object -First 1
+if (-not $installer) {
+  throw "No NSIS installer found for version $version."
+}
 $dest = "VibeUsage-$version-Windows-Setup.exe"
 Copy-Item $installer.FullName $dest -Force
 node scripts/generate-updater-manifest.mjs $dest

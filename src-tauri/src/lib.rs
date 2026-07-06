@@ -17,8 +17,8 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            // Second launch → surface the panel (mirrors Dock-reopen behavior).
-            panel::show(app, None);
+            // Second launch → surface the main window.
+            panel::show(app);
         }))
         .setup(|app| {
             let config_dir = app
@@ -53,11 +53,7 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| match event {
-            // Click-outside dismiss: hide the panel when it loses focus.
-            WindowEvent::Focused(false) if window.label() == panel::PANEL_LABEL => {
-                panel::begin_hide(window.app_handle());
-            }
-            // Closing the popover must never destroy it — hide instead.
+            // Closing the main window hides it to the tray instead of exiting.
             WindowEvent::CloseRequested { api, .. } if window.label() == panel::PANEL_LABEL => {
                 api.prevent_close();
                 panel::hide_now(window.app_handle());

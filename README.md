@@ -17,7 +17,7 @@ Windows 版 [Vibe Usage](https://github.com/vibe-cafe/vibe-usage-app) —— 自
 
 ## 安装
 
-从 [Releases](https://github.com/kalasoo/vibe-usage-windows/releases/latest) 下载 `VibeUsage-x.y.z-Windows-Setup.exe` 并运行（per-user 安装，无需管理员权限；缺少 WebView2 时安装器会自动下载）。
+从 [Releases](https://github.com/vibe-cafe/vibe-usage-windows/releases/latest) 下载 `VibeUsage-x.y.z-Windows-Setup.exe` 并运行（per-user 安装，无需管理员权限；缺少 WebView2 时安装器会自动下载）。
 
 ### SmartScreen / Windows 安全中心提示
 
@@ -78,7 +78,7 @@ cargo test --workspace   # Rust 单测（config/codex 配额/claude 配额/statu
 前端 (React + Tailwind, WebView2)     ← 视觉 1:1 复刻 macOS SwiftUI 视图
   └─ invoke / events
 Rust (Tauri 2)
-  ├─ tray / panel        托盘 + 无边框弹窗（定位/动画/失焦关闭）
+  ├─ tray / panel        托盘 + 标准主窗口（显示/聚焦/隐藏到托盘）
   ├─ api_client          GET /api/usage、设备链接 code/poll
   ├─ sync_engine         spawn node <内置CLI> sync（120s 超时、CREATE_NO_WINDOW）
   ├─ scheduler           30 分钟定时同步 + 24h 更新检查

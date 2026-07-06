@@ -46,7 +46,7 @@
 | `CodexRateLimitReader` | `crates/core/rate_limit/codex.rs` |
 | `ClaudeRateLimitReader` | `crates/core/rate_limit/claude.rs` |
 | `StatuslineHook`（bash 包装器） | `crates/core/statusline_hook.rs`（**Node 包装器**，Windows 无 bash） |
-| `MenuBarController`（NSStatusItem + NSPanel） | `tray.rs` + `panel.rs`（托盘 + 无边框置顶窗口） |
+| `MenuBarController`（NSStatusItem + NSPanel） | `tray.rs` + `panel.rs`（托盘 + 标准主窗口） |
 | Sparkle | `services/updater.rs`（latest.json + SHA-256 + NSIS） |
 | `SMAppService`（登录项） | `auto-launch` crate（HKCU Run 注册表键） |
 

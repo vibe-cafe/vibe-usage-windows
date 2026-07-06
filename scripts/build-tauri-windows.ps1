@@ -54,7 +54,10 @@ try {
 
   if ($certThumbprint) {
     $artifactsToVerify = @("target\release\vibe-usage-app.exe")
-    $installer = Get-ChildItem "target\release\bundle\nsis\*-setup.exe" | Select-Object -First 1
+    $version = (Get-Content package.json | ConvertFrom-Json).version
+    $installer = Get-ChildItem -Path "target\release\bundle\nsis" -Filter "*$version*setup.exe" |
+      Sort-Object LastWriteTime -Descending |
+      Select-Object -First 1
     if ($installer) {
       $artifactsToVerify += $installer.FullName
     }

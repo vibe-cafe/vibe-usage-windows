@@ -1,6 +1,6 @@
 //! System tray — counterpart of Services/MenuBarController.swift.
 //!
-//! Left click toggles the popover panel; right click opens a native menu
+//! Left click opens the main window; right click opens a native menu
 //! (Windows convention). Windows shrinks tray icons aggressively, so the icon
 //! stays as the high-contrast official logo and optional usage values live in
 //! the tooltip.
@@ -29,7 +29,7 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
-            "open" => crate::panel::show(app, None),
+            "open" => crate::panel::show(app),
             "sync" => {
                 let app2 = app.clone();
                 tauri::async_runtime::spawn(async move {
@@ -44,11 +44,10 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
             if let TrayIconEvent::Click {
                 button: MouseButton::Left,
                 button_state: MouseButtonState::Up,
-                rect,
                 ..
             } = event
             {
-                crate::panel::toggle_from_tray(tray.app_handle(), Some(rect));
+                crate::panel::show(tray.app_handle());
             }
         });
 
