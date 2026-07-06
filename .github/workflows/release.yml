@@ -6,6 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: read
   contents: write
 
 jobs:
@@ -50,17 +51,49 @@ jobs:
           pnpm test
           cargo test --workspace
 
-      - name: Build NSIS installer
+      - name: Build Tauri app without bundle
         shell: pwsh
-        env:
-          WINDOWS_CODESIGN_PFX_BASE64: ${{ secrets.WINDOWS_CODESIGN_PFX_BASE64 }}
-          WINDOWS_CODESIGN_PFX_PASSWORD: ${{ secrets.WINDOWS_CODESIGN_PFX_PASSWORD }}
-          WINDOWS_CODESIGN_CERT_THUMBPRINT: ${{ secrets.WINDOWS_CODESIGN_CERT_THUMBPRINT }}
-          WINDOWS_CODESIGN_TIMESTAMP_URL: ${{ vars.WINDOWS_CODESIGN_TIMESTAMP_URL }}
-        run: .\scripts\build-tauri-windows.ps1
+        run: pnpm tauri build --no-bundle
 
-      - name: Collect artifacts
-        id: artifacts
+      - name: Prepare unsigned app exe for SignPath
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "signpath/app" | Out-Null
+          Copy-Item "target/release/vibe-usage-app.exe" "signpath/app/vibe-usage-app.exe" -Force
+
+      - name: Upload unsigned app exe
+        id: upload-unsigned-app
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-vibe-usage-app-exe
+          path: signpath/app/vibe-usage-app.exe
+          if-no-files-found: error
+
+      - name: Submit app exe signing request to SignPath
+        uses: signpath/github-action-submit-signing-request@v2
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ac47326c-b8ee-4b87-9368-b7af8a8803d7
+          project-slug: vibe_usage
+          signing-policy-slug: Test_Sign
+          github-artifact-id: ${{ steps.upload-unsigned-app.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signpath/signed-app
+
+      - name: Replace app exe with signed app exe
+        shell: pwsh
+        run: |
+          $signed = Get-ChildItem "signpath/signed-app" -Recurse -Filter "vibe-usage-app.exe" | Select-Object -First 1
+          if (-not $signed) {
+            throw "Signed app exe not found."
+          }
+          Copy-Item $signed.FullName "target/release/vibe-usage-app.exe" -Force
+
+      - name: Bundle NSIS installer
+        shell: pwsh
+        run: pnpm tauri bundle --bundles nsis
+
+      - name: Prepare unsigned installer for SignPath
         shell: pwsh
         run: |
           $version = (Get-Content package.json | ConvertFrom-Json).version
@@ -68,10 +101,45 @@ jobs:
             Sort-Object LastWriteTime -Descending |
             Select-Object -First 1
           if (-not $installer) {
-            throw "No NSIS installer found for version $version."
+            throw "NSIS installer not found."
           }
+
+          New-Item -ItemType Directory -Force -Path "signpath/installer" | Out-Null
+          Copy-Item $installer.FullName "signpath/installer/VibeUsage-Windows-Setup.exe" -Force
+
+      - name: Upload unsigned installer
+        id: upload-unsigned-installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-vibe-usage-installer
+          path: signpath/installer/VibeUsage-Windows-Setup.exe
+          if-no-files-found: error
+
+      - name: Submit installer signing request to SignPath
+        uses: signpath/github-action-submit-signing-request@v2
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ac47326c-b8ee-4b87-9368-b7af8a8803d7
+          project-slug: vibe_usage
+          signing-policy-slug: Test_Sign
+          github-artifact-id: ${{ steps.upload-unsigned-installer.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signpath/signed-installer
+
+      - name: Collect signed artifacts
+        id: artifacts
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json | ConvertFrom-Json).version
+          $signedInstaller = Get-ChildItem "signpath/signed-installer" -Recurse -Filter "VibeUsage-Windows-Setup.exe" | Select-Object -First 1
+
+          if (-not $signedInstaller) {
+            throw "Signed installer not found."
+          }
+
           $dest = "VibeUsage-$version-Windows-Setup.exe"
-          Copy-Item $installer.FullName $dest
+          Copy-Item $signedInstaller.FullName $dest -Force
+
           node scripts/generate-updater-manifest.mjs $dest
           "installer=$dest" >> $env:GITHUB_OUTPUT
 
