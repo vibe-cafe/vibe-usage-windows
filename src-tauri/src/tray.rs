@@ -2,8 +2,8 @@
 //!
 //! Left click toggles the popover panel; right click opens a native menu
 //! (Windows convention). Windows shrinks tray icons aggressively, so the icon
-//! stays as the high-contrast U logo and optional usage values live in the
-//! tooltip.
+//! stays as the high-contrast official logo and optional usage values live in
+//! the tooltip.
 
 use crate::state::{AppCtx, SyncStatus};
 use tauri::menu::{Menu, MenuItem};
@@ -13,7 +13,8 @@ use tauri::{AppHandle, Manager};
 pub const TRAY_ID: &str = "main";
 
 pub fn tray_logo() -> tauri::image::Image<'static> {
-    tauri::image::Image::new_owned(vibe_core::tray_text::render_logo_icon(32), 32, 32)
+    tauri::image::Image::from_bytes(include_bytes!("../icons/tray-icon.png"))
+        .expect("embedded tray icon must be a valid PNG")
 }
 
 pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {

@@ -1,7 +1,7 @@
 //! Tray-icon text rendering.
 //!
 //! macOS renders cost/token text beside the menu-bar icon; Windows tray icons
-//! are too small for reliable inline text, so the app keeps a high-contrast
+//! are too small for reliable inline text, so the app keeps an asset-backed
 //! logo in the tray and puts full-precision values in the tooltip. The text
 //! renderer is kept for tests/experiments, but is no longer used for the live
 //! tray icon.
@@ -11,99 +11,6 @@ use std::sync::OnceLock;
 
 pub const GLYPH_W: usize = 5;
 pub const GLYPH_H: usize = 7;
-
-/// Render the default tray logo: a high-contrast outlined card with the same
-/// angular "U" usage mark as the macOS menu-bar icon.
-/// It is generated in code so the tray cannot silently regress to a damaged
-/// bitmap asset.
-pub fn render_logo_icon(size: usize) -> Vec<u8> {
-    let size = size.max(16);
-    let mut rgba = vec![0u8; size * size * 4];
-    let stroke = (size / 12).max(2);
-
-    let sx = |v: usize| (v * size + 16) / 32;
-    let rect = (sx(5), sx(5), sx(27), sx(27));
-    let shadow = [0, 0, 0, 170];
-    let white = [255, 255, 255, 255];
-
-    draw_rect_stroke(&mut rgba, size, rect, stroke, shadow, 1);
-    draw_thick_line(
-        &mut rgba,
-        size,
-        (sx(12), sx(13)),
-        (sx(12), sx(20)),
-        stroke + 1,
-        shadow,
-        1,
-    );
-    draw_thick_line(
-        &mut rgba,
-        size,
-        (sx(20), sx(13)),
-        (sx(20), sx(20)),
-        stroke + 1,
-        shadow,
-        1,
-    );
-    draw_thick_line(
-        &mut rgba,
-        size,
-        (sx(12), sx(20)),
-        (sx(16), sx(24)),
-        stroke + 1,
-        shadow,
-        1,
-    );
-    draw_thick_line(
-        &mut rgba,
-        size,
-        (sx(20), sx(20)),
-        (sx(16), sx(24)),
-        stroke + 1,
-        shadow,
-        1,
-    );
-
-    draw_rect_stroke(&mut rgba, size, rect, stroke, white, 0);
-    draw_thick_line(
-        &mut rgba,
-        size,
-        (sx(12), sx(13)),
-        (sx(12), sx(20)),
-        stroke + 1,
-        white,
-        0,
-    );
-    draw_thick_line(
-        &mut rgba,
-        size,
-        (sx(20), sx(13)),
-        (sx(20), sx(20)),
-        stroke + 1,
-        white,
-        0,
-    );
-    draw_thick_line(
-        &mut rgba,
-        size,
-        (sx(12), sx(20)),
-        (sx(16), sx(24)),
-        stroke + 1,
-        white,
-        0,
-    );
-    draw_thick_line(
-        &mut rgba,
-        size,
-        (sx(20), sx(20)),
-        (sx(16), sx(24)),
-        stroke + 1,
-        white,
-        0,
-    );
-
-    rgba
-}
 
 /// 5×7 bitmap font, one byte per row, low 5 bits used (MSB = leftmost pixel).
 fn glyphs() -> &'static HashMap<char, [u8; 7]> {
@@ -262,108 +169,6 @@ fn fill_px(rgba: &mut [u8], size: usize, x: usize, y: usize, scale: usize, color
     }
 }
 
-fn draw_rect_stroke(
-    rgba: &mut [u8],
-    size: usize,
-    (left, top, right, bottom): (usize, usize, usize, usize),
-    stroke: usize,
-    color: [u8; 4],
-    offset: usize,
-) {
-    let left = left + offset;
-    let top = top + offset;
-    let right = right + offset;
-    let bottom = bottom + offset;
-
-    fill_rect(rgba, size, left, top, right.saturating_sub(left), stroke, color);
-    fill_rect(
-        rgba,
-        size,
-        left,
-        bottom.saturating_sub(stroke),
-        right.saturating_sub(left),
-        stroke,
-        color,
-    );
-    fill_rect(rgba, size, left, top, stroke, bottom.saturating_sub(top), color);
-    fill_rect(
-        rgba,
-        size,
-        right.saturating_sub(stroke),
-        top,
-        stroke,
-        bottom.saturating_sub(top),
-        color,
-    );
-}
-
-fn draw_thick_line(
-    rgba: &mut [u8],
-    size: usize,
-    from: (usize, usize),
-    to: (usize, usize),
-    thickness: usize,
-    color: [u8; 4],
-    offset: usize,
-) {
-    let (x0, y0) = (from.0 as isize + offset as isize, from.1 as isize + offset as isize);
-    let (x1, y1) = (to.0 as isize + offset as isize, to.1 as isize + offset as isize);
-    let dx = (x1 - x0).abs();
-    let dy = (y1 - y0).abs();
-    let steps = dx.max(dy).max(1);
-
-    for i in 0..=steps {
-        let x = x0 + (x1 - x0) * i / steps;
-        let y = y0 + (y1 - y0) * i / steps;
-        fill_centered_square(rgba, size, x, y, thickness, color);
-    }
-}
-
-fn fill_rect(
-    rgba: &mut [u8],
-    size: usize,
-    x: usize,
-    y: usize,
-    width: usize,
-    height: usize,
-    color: [u8; 4],
-) {
-    for py in y..y.saturating_add(height) {
-        for px in x..x.saturating_add(width) {
-            set_px(rgba, size, px as isize, py as isize, color);
-        }
-    }
-}
-
-fn fill_centered_square(
-    rgba: &mut [u8],
-    size: usize,
-    x: isize,
-    y: isize,
-    thickness: usize,
-    color: [u8; 4],
-) {
-    let radius = (thickness as isize) / 2;
-    for py in y - radius..=y + radius {
-        for px in x - radius..=x + radius {
-            set_px(rgba, size, px, py, color);
-        }
-    }
-}
-
-fn set_px(rgba: &mut [u8], size: usize, x: isize, y: isize, color: [u8; 4]) {
-    if x < 0 || y < 0 {
-        return;
-    }
-    let (px, py) = (x as usize, y as usize);
-    if px < size && py < size {
-        let idx = (py * size + px) * 4;
-        if color[3] == 255 || rgba[idx + 3] == 0 {
-            rgba[idx..idx + 4].copy_from_slice(&color);
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -401,25 +206,6 @@ mod tests {
         assert_eq!(img.len(), 32 * 32 * 4);
         let white_pixels = img.chunks(4).filter(|p| p[3] == 255).count();
         assert!(white_pixels > 20, "expected visible glyph pixels, got {white_pixels}");
-    }
-
-    #[test]
-    fn logo_contains_frame_and_usage_mark() {
-        let img = render_logo_icon(32);
-        assert_eq!(img.len(), 32 * 32 * 4);
-        let white_pixels = img.chunks(4).filter(|p| p[3] == 255).count();
-        assert!(white_pixels > 180, "expected a visible logo, got {white_pixels}");
-
-        let mut mark_pixels = 0;
-        for y in 13..24 {
-            for x in 11..21 {
-                let idx = (y * 32 + x) * 4;
-                if img[idx + 3] == 255 {
-                    mark_pixels += 1;
-                }
-            }
-        }
-        assert!(mark_pixels > 45, "expected center usage-mark pixels, got {mark_pixels}");
     }
 
     #[test]

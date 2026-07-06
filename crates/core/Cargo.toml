@@ -3,7 +3,7 @@ name = "vibe-core"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-description = "Platform-agnostic core logic for Vibe Usage for Windows (config IO, rate-limit readers, statusline hook, runtime detection, tray icon rendering)"
+description = "Platform-agnostic core logic for Vibe Usage for Windows (config IO, rate-limit readers, statusline hook, runtime detection, tray text rendering)"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
