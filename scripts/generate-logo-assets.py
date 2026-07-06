@@ -26,8 +26,8 @@ PNG_OUTPUTS = {
     "src-tauri/icons/Square150x150Logo.png": (150, "black"),
     "src-tauri/icons/Square284x284Logo.png": (284, "black"),
     "src-tauri/icons/Square310x310Logo.png": (310, "black"),
-    "src-tauri/icons/tray-icon.png": (32, "white"),
-    "src/assets/menubar-icon.png": (32, "white"),
+    "src-tauri/icons/tray-icon.png": (32, "black"),
+    "src/assets/menubar-icon.png": (32, "black"),
 }
 
 ICO_SIZES = [(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
