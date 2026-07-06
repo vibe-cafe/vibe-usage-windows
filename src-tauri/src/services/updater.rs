@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter, Manager};
 
 pub const UPDATE_MANIFEST_URL: &str =
-    "https://github.com/haoruilee/vibe-usage-app-windows/releases/latest/download/latest.json";
+    "https://github.com/kalasoo/vibe-usage-windows/releases/latest/download/latest.json";
 
 #[derive(Debug, Deserialize)]
 struct Manifest {

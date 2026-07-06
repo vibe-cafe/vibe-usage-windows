@@ -20,7 +20,7 @@ if (!installer || !fs.existsSync(installer)) {
 const notes = process.argv[3] ?? `Vibe Usage for Windows v${version}`;
 
 const sha256 = createHash("sha256").update(fs.readFileSync(installer)).digest("hex");
-const repo = process.env.GITHUB_REPOSITORY ?? "haoruilee/vibe-usage-app-windows";
+const repo = process.env.GITHUB_REPOSITORY ?? "kalasoo/vibe-usage-windows";
 const manifest = {
   version,
   notes,

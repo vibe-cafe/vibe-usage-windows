@@ -17,7 +17,7 @@ Windows 版 [Vibe Usage](https://github.com/vibe-cafe/vibe-usage-app) —— 自
 
 ## 安装
 
-从 [Releases](https://github.com/haoruilee/vibe-usage-app-windows/releases/latest) 下载 `VibeUsage-x.y.z-Windows-Setup.exe` 并运行（per-user 安装，无需管理员权限；缺少 WebView2 时安装器会自动下载）。
+从 [Releases](https://github.com/kalasoo/vibe-usage-windows/releases/latest) 下载 `VibeUsage-x.y.z-Windows-Setup.exe` 并运行（per-user 安装，无需管理员权限；缺少 WebView2 时安装器会自动下载）。
 
 ### SmartScreen / Windows 安全中心提示
 
