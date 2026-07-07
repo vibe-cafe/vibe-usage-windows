@@ -55,35 +55,20 @@ jobs:
         shell: pwsh
         run: pnpm tauri build --no-bundle
 
-      - name: Prepare unsigned app exe for SignPath
+      - name: Sign app exe with SignPath
         shell: pwsh
+        env:
+          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
         run: |
-          New-Item -ItemType Directory -Force -Path "signpath/app" | Out-Null
-          Copy-Item "target/release/vibe-usage-app.exe" "signpath/app/vibe-usage-app.exe" -Force
-
-      - name: Upload unsigned app exe
-        id: upload-unsigned-app
-        uses: actions/upload-artifact@v4
-        with:
-          name: unsigned-vibe-usage-app-exe
-          path: signpath/app/vibe-usage-app.exe
-          if-no-files-found: error
-
-      - name: Submit app exe signing request to SignPath
-        uses: signpath/github-action-submit-signing-request@v2
-        with:
-          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
-          organization-id: ac47326c-b8ee-4b87-9368-b7af8a8803d7
-          project-slug: vibe_usage
-          signing-policy-slug: Release
-          github-artifact-id: ${{ steps.upload-unsigned-app.outputs.artifact-id }}
-          wait-for-completion: true
-          output-artifact-directory: signpath/signed-app
+          & "./scripts/signpath-sign-artifact.ps1" `
+            -InputArtifactPath "target/release/vibe-usage-app.exe" `
+            -OutputArtifactPath "signpath/signed-app/vibe-usage-app.exe" `
+            -Description "Vibe Usage app $env:GITHUB_SHA"
 
       - name: Replace app exe with signed app exe
         shell: pwsh
         run: |
-          $signed = Get-ChildItem "signpath/signed-app" -Recurse -Filter "vibe-usage-app.exe" | Select-Object -First 1
+          $signed = Get-Item "signpath/signed-app/vibe-usage-app.exe"
           if (-not $signed) {
             throw "Signed app exe not found."
           }
@@ -107,24 +92,15 @@ jobs:
           New-Item -ItemType Directory -Force -Path "signpath/installer" | Out-Null
           Copy-Item $installer.FullName "signpath/installer/VibeUsage-Windows-Setup.exe" -Force
 
-      - name: Upload unsigned installer
-        id: upload-unsigned-installer
-        uses: actions/upload-artifact@v4
-        with:
-          name: unsigned-vibe-usage-installer
-          path: signpath/installer/VibeUsage-Windows-Setup.exe
-          if-no-files-found: error
-
-      - name: Submit installer signing request to SignPath
-        uses: signpath/github-action-submit-signing-request@v2
-        with:
-          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
-          organization-id: ac47326c-b8ee-4b87-9368-b7af8a8803d7
-          project-slug: vibe_usage
-          signing-policy-slug: Release
-          github-artifact-id: ${{ steps.upload-unsigned-installer.outputs.artifact-id }}
-          wait-for-completion: true
-          output-artifact-directory: signpath/signed-installer
+      - name: Sign installer with SignPath
+        shell: pwsh
+        env:
+          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+        run: |
+          & "./scripts/signpath-sign-artifact.ps1" `
+            -InputArtifactPath "signpath/installer/VibeUsage-Windows-Setup.exe" `
+            -OutputArtifactPath "signpath/signed-installer/VibeUsage-Windows-Setup.exe" `
+            -Description "Vibe Usage installer $env:GITHUB_SHA"
 
       - name: Collect signed artifacts
         id: artifacts
