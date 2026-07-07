@@ -100,7 +100,7 @@ pub async fn install(app: &AppHandle) -> Result<(), String> {
     let installer = std::env::temp_dir().join(format!("VibeUsage-{}-Setup.exe", info.version));
     std::fs::write(&installer, &bytes).map_err(|e| format!("写入安装包失败：{e}"))?;
 
-    crate::process_utils::shell_open(&installer.to_string_lossy())
+    crate::process_utils::launch_executable(&installer)
         .map_err(|e| format!("启动安装器失败：{e}"))?;
     app.exit(0);
     Ok(())

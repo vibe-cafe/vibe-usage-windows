@@ -1,7 +1,7 @@
 //! Windows process helpers (adapted from ATM's process_utils.rs):
 //! spawn children without console-window flashes; kill whole process trees.
 
-use std::process::Command;
+use std::{path::Path, process::Command};
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -30,7 +30,7 @@ pub fn hide_tokio_command_window(cmd: &mut tokio::process::Command) {
     }
 }
 
-/// Open a URL or file with the system default handler.
+/// Open a URL with the system default handler.
 pub fn shell_open(target: &str) -> Result<(), String> {
     #[cfg(windows)]
     {
@@ -49,6 +49,16 @@ pub fn shell_open(target: &str) -> Result<(), String> {
     {
         open::that_detached(target).map_err(|e| e.to_string())
     }
+}
+
+/// Launch a trusted executable path we created ourselves, such as the verified
+/// updater installer. This avoids shell handlers entirely.
+pub fn launch_executable(path: &Path) -> Result<(), String> {
+    let mut cmd = Command::new(path);
+    hide_command_window(&mut cmd);
+    cmd.spawn()
+        .map(|_| ())
+        .map_err(|e| format!("launch failed: {e}"))
 }
 
 /// Windows system proxy from the registry (Internet Settings), as an
