@@ -2,8 +2,6 @@
 
 Windows 应用，自动追踪 AI 编程工具的 Token 用量和费用。App 常驻系统托盘；数据同步到 [vibecafe.ai/usage](https://vibecafe.ai/usage)。
 
-功能与视觉均与 macOS 版 1:1 对齐（差异清单见 [docs/PARITY.md](docs/PARITY.md)）。
-
 ## 下载
 
 从 [Releases](https://github.com/vibe-cafe/vibe-usage-windows/releases/latest) 下载 `VibeUsage-x.y.z-Windows-Setup.exe` 并运行（per-user 安装，无需管理员权限；缺少 WebView2 时安装器会自动下载）。
