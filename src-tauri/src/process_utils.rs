@@ -31,34 +31,19 @@ pub fn hide_tokio_command_window(cmd: &mut tokio::process::Command) {
 }
 
 /// Open a URL or file with the system default handler.
-/// Windows: ShellExecuteW directly — the most reliable path (the `open`
-/// crate's cmd-based fallbacks can fail silently for GUI apps).
 pub fn shell_open(target: &str) -> Result<(), String> {
     #[cfg(windows)]
     {
-        use windows_sys::Win32::UI::Shell::ShellExecuteW;
-
-        fn wide(s: &str) -> Vec<u16> {
-            s.encode_utf16().chain(std::iter::once(0)).collect()
-        }
-        let verb = wide("open");
-        let file = wide(target);
-        // SW_SHOWNORMAL = 1; return value > 32 means success.
-        let result = unsafe {
-            ShellExecuteW(
-                std::ptr::null_mut(),
-                verb.as_ptr(),
-                file.as_ptr(),
-                std::ptr::null(),
-                std::ptr::null(),
-                1,
-            )
-        };
-        if result as isize > 32 {
-            Ok(())
-        } else {
-            Err(format!("ShellExecuteW failed (code {})", result as isize))
-        }
+        // Keep shell/browser handler code out of the app process. Calling
+        // ShellExecuteW directly can load third-party shell hooks into this
+        // process; if one aborts, the whole tray app disappears even though the
+        // browser launch may still complete.
+        let mut cmd = Command::new("rundll32.exe");
+        cmd.args(["url.dll,FileProtocolHandler", target]);
+        hide_command_window(&mut cmd);
+        cmd.spawn()
+            .map(|_| ())
+            .map_err(|e| format!("open failed: {e}"))
     }
     #[cfg(not(windows))]
     {
