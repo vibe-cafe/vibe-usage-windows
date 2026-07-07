@@ -75,7 +75,7 @@ jobs:
           api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
           organization-id: ac47326c-b8ee-4b87-9368-b7af8a8803d7
           project-slug: vibe_usage
-          signing-policy-slug: Test_Sign
+          signing-policy-slug: Release
           github-artifact-id: ${{ steps.upload-unsigned-app.outputs.artifact-id }}
           wait-for-completion: true
           output-artifact-directory: signpath/signed-app
@@ -121,7 +121,7 @@ jobs:
           api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
           organization-id: ac47326c-b8ee-4b87-9368-b7af8a8803d7
           project-slug: vibe_usage
-          signing-policy-slug: Test_Sign
+          signing-policy-slug: Release
           github-artifact-id: ${{ steps.upload-unsigned-installer.outputs.artifact-id }}
           wait-for-completion: true
           output-artifact-directory: signpath/signed-installer
