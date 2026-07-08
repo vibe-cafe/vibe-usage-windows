@@ -29,8 +29,8 @@ pub async fn start(app: AppHandle) -> Result<String, String> {
         .await
         .map_err(|e| e.to_string())?;
 
-    // System default browser (ShellExecuteW on Windows — NOT the CLI's broken
-    // `start` path).
+    // System default browser. On Windows this goes through an isolated helper
+    // process so shell/browser handler crashes cannot take down the tray app.
     if let Err(e) = crate::process_utils::shell_open(&device.verification_uri_complete) {
         log::error!("open browser failed: {e}");
     }
