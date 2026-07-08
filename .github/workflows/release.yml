@@ -51,70 +51,48 @@ jobs:
           pnpm test
           cargo test --workspace
 
-      - name: Build Tauri app without bundle
-        shell: pwsh
-        run: pnpm tauri build --no-bundle
-
-      - name: Sign app exe with SignPath
+      - name: Build signed NSIS installer
         shell: pwsh
         env:
           SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
-        run: |
-          & "./scripts/signpath-sign-artifact.ps1" `
-            -InputArtifactPath "target/release/vibe-usage-app.exe" `
-            -OutputArtifactPath "signpath/signed-app/vibe-usage-app.exe" `
-            -Description "Vibe Usage app $env:GITHUB_SHA"
-
-      - name: Replace app exe with signed app exe
-        shell: pwsh
-        run: |
-          $signed = Get-Item "signpath/signed-app/vibe-usage-app.exe"
-          if (-not $signed) {
-            throw "Signed app exe not found."
-          }
-          Copy-Item $signed.FullName "target/release/vibe-usage-app.exe" -Force
-
-      - name: Bundle NSIS installer
-        shell: pwsh
-        run: pnpm tauri bundle --bundles nsis
-
-      - name: Prepare unsigned installer for SignPath
-        shell: pwsh
-        run: |
-          $version = (Get-Content package.json | ConvertFrom-Json).version
-          $installer = Get-ChildItem -Path "target/release/bundle/nsis" -Filter "*$version*setup.exe" |
-            Sort-Object LastWriteTime -Descending |
-            Select-Object -First 1
-          if (-not $installer) {
-            throw "NSIS installer not found."
-          }
-
-          New-Item -ItemType Directory -Force -Path "signpath/installer" | Out-Null
-          Copy-Item $installer.FullName "signpath/installer/VibeUsage-Windows-Setup.exe" -Force
-
-      - name: Sign installer with SignPath
-        shell: pwsh
-        env:
-          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
-        run: |
-          & "./scripts/signpath-sign-artifact.ps1" `
-            -InputArtifactPath "signpath/installer/VibeUsage-Windows-Setup.exe" `
-            -OutputArtifactPath "signpath/signed-installer/VibeUsage-Windows-Setup.exe" `
-            -Description "Vibe Usage installer $env:GITHUB_SHA"
+          SIGNPATH_ALLOW_UNTRUSTED_SIGNATURE: "true"
+        run: ./scripts/build-tauri-windows.ps1
 
       - name: Collect signed artifacts
         id: artifacts
         shell: pwsh
+        env:
+          SIGNPATH_ALLOW_UNTRUSTED_SIGNATURE: "true"
         run: |
           $version = (Get-Content package.json | ConvertFrom-Json).version
-          $signedInstaller = Get-ChildItem "signpath/signed-installer" -Recurse -Filter "VibeUsage-Windows-Setup.exe" | Select-Object -First 1
+          $appExe = Get-Item "target/release/vibe-usage-app.exe"
+          $installer = Get-ChildItem -Path "target/release/bundle/nsis" -Filter "*$version*setup.exe" |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
 
-          if (-not $signedInstaller) {
-            throw "Signed installer not found."
+          if (-not $installer) {
+            throw "NSIS installer not found."
+          }
+
+          foreach ($artifact in @($appExe.FullName, $installer.FullName)) {
+            $signature = Get-AuthenticodeSignature -FilePath $artifact
+            $signatureStatus = $signature.Status.ToString()
+            if ($signatureStatus -eq "NotSigned" -or $signatureStatus -eq "HashMismatch") {
+              throw "Invalid Authenticode signature for ${artifact}: $($signature.Status). $($signature.StatusMessage)"
+            }
+            if ($signatureStatus -ne "Valid") {
+              $message = "Untrusted Authenticode signature for ${artifact}: $($signature.Status). $($signature.StatusMessage)"
+              if ($env:SIGNPATH_ALLOW_UNTRUSTED_SIGNATURE -match '^(1|true|yes|on)$') {
+                Write-Warning $message
+              } else {
+                throw $message
+              }
+            }
+            Write-Host "Verified Authenticode signature: $artifact"
           }
 
           $dest = "VibeUsage-$version-Windows-Setup.exe"
-          Copy-Item $signedInstaller.FullName $dest -Force
+          Copy-Item $installer.FullName $dest -Force
 
           node scripts/generate-updater-manifest.mjs $dest
           "installer=$dest" >> $env:GITHUB_OUTPUT

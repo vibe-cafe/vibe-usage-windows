@@ -11,13 +11,27 @@ param(
   [string]$ArtifactConfigurationSlug = "",
   [string]$Description = "",
   [int]$TimeoutSeconds = 900,
-  [int]$PollSeconds = 10
+  [int]$PollSeconds = 10,
+  [switch]$AllowUntrustedSignature
 )
 
 $ErrorActionPreference = "Stop"
 
 if (-not $env:SIGNPATH_API_TOKEN) {
   throw "SIGNPATH_API_TOKEN is required."
+}
+
+if ($env:SIGNPATH_ORGANIZATION_ID) {
+  $OrganizationId = $env:SIGNPATH_ORGANIZATION_ID
+}
+if ($env:SIGNPATH_PROJECT_SLUG) {
+  $ProjectSlug = $env:SIGNPATH_PROJECT_SLUG
+}
+if ($env:SIGNPATH_SIGNING_POLICY_SLUG) {
+  $SigningPolicySlug = $env:SIGNPATH_SIGNING_POLICY_SLUG
+}
+if ($env:SIGNPATH_ARTIFACT_CONFIGURATION_SLUG) {
+  $ArtifactConfigurationSlug = $env:SIGNPATH_ARTIFACT_CONFIGURATION_SLUG
 }
 
 $inputArtifact = Get-Item -LiteralPath $InputArtifactPath
@@ -85,12 +99,27 @@ if (-not $status.signedArtifactLink) {
 
 Invoke-WebRequest -Method Get -Uri $status.signedArtifactLink -Headers $headers -OutFile $outputFullPath
 $signature = Get-AuthenticodeSignature -FilePath $outputFullPath
-if ($signature.Status -eq "NotSigned") {
-  throw "Downloaded SignPath artifact is not Authenticode signed."
-}
-
 if ($signature.SignerCertificate) {
   Write-Host "Signer certificate: $($signature.SignerCertificate.Subject)"
 }
 Write-Host "Authenticode status: $($signature.Status)"
+
+$signatureStatus = $signature.Status.ToString()
+if ($signatureStatus -eq "NotSigned") {
+  throw "Downloaded SignPath artifact is not Authenticode signed."
+}
+
+if ($signatureStatus -eq "HashMismatch") {
+  throw "Invalid Authenticode signature for ${outputFullPath}: $($signature.Status). $($signature.StatusMessage)"
+}
+
+if ($signatureStatus -ne "Valid") {
+  $message = "Invalid Authenticode signature for ${outputFullPath}: $($signature.Status). $($signature.StatusMessage)"
+  if ($AllowUntrustedSignature) {
+    Write-Warning $message
+  } else {
+    throw $message
+  }
+}
+
 Write-Host "== SignPath signed artifact saved to $outputFullPath =="

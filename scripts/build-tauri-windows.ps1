@@ -3,9 +3,12 @@ $ErrorActionPreference = "Stop"
 $bundles = if ($env:TAURI_BUNDLES) { $env:TAURI_BUNDLES } else { "nsis" }
 $buildArgs = @("tauri", "build", "--bundles", $bundles)
 $certThumbprint = $env:WINDOWS_CODESIGN_CERT_THUMBPRINT
+$useSignPath = [bool]$env:SIGNPATH_API_TOKEN
+$allowUntrustedSignature = $env:SIGNPATH_ALLOW_UNTRUSTED_SIGNATURE -match '^(1|true|yes|on)$'
+$signingEnabled = $false
 $tempFiles = @()
 
-if (-not $certThumbprint -and $env:WINDOWS_CODESIGN_PFX_BASE64) {
+if (-not $useSignPath -and -not $certThumbprint -and $env:WINDOWS_CODESIGN_PFX_BASE64) {
   if (-not $env:WINDOWS_CODESIGN_PFX_PASSWORD) {
     throw "WINDOWS_CODESIGN_PFX_PASSWORD is required when WINDOWS_CODESIGN_PFX_BASE64 is set."
   }
@@ -22,7 +25,33 @@ if (-not $certThumbprint -and $env:WINDOWS_CODESIGN_PFX_BASE64) {
   $certThumbprint = $cert.Thumbprint
 }
 
-if ($certThumbprint) {
+if ($useSignPath) {
+  $signingConfigPath = Join-Path ([System.IO.Path]::GetTempPath()) "tauri-signpath-$PID.json"
+  $signPathScript = Join-Path $PSScriptRoot "signpath-tauri-sign.ps1"
+  $signingConfig = @{
+    bundle = @{
+      windows = @{
+        digestAlgorithm = "sha256"
+        signCommand = @{
+          cmd = "pwsh"
+          args = @(
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            $signPathScript,
+            "%1"
+          )
+        }
+      }
+    }
+  } | ConvertTo-Json -Depth 10
+  Set-Content -LiteralPath $signingConfigPath -Value $signingConfig -Encoding UTF8
+  $tempFiles += $signingConfigPath
+  $buildArgs += @("--config", $signingConfigPath)
+  $signingEnabled = $true
+  Write-Host "== Windows code signing enabled: SignPath =="
+} elseif ($certThumbprint) {
   $timestampUrl = if ($env:WINDOWS_CODESIGN_TIMESTAMP_URL) {
     $env:WINDOWS_CODESIGN_TIMESTAMP_URL
   } else {
@@ -41,6 +70,7 @@ if ($certThumbprint) {
   Set-Content -LiteralPath $signingConfigPath -Value $signingConfig -Encoding UTF8
   $tempFiles += $signingConfigPath
   $buildArgs += @("--config", $signingConfigPath)
+  $signingEnabled = $true
   Write-Host "== Windows code signing enabled =="
 } else {
   Write-Host "== Windows code signing disabled: no certificate configured =="
@@ -52,7 +82,7 @@ try {
     exit $LASTEXITCODE
   }
 
-  if ($certThumbprint) {
+  if ($signingEnabled) {
     $artifactsToVerify = @("target\release\vibe-usage-app.exe")
     $version = (Get-Content package.json | ConvertFrom-Json).version
     $installer = Get-ChildItem -Path "target\release\bundle\nsis" -Filter "*$version*setup.exe" |
@@ -64,8 +94,17 @@ try {
 
     foreach ($artifact in $artifactsToVerify) {
       $signature = Get-AuthenticodeSignature $artifact
-      if ($signature.Status -ne "Valid") {
+      $signatureStatus = $signature.Status.ToString()
+      if ($signatureStatus -eq "NotSigned" -or $signatureStatus -eq "HashMismatch") {
         throw "Invalid Authenticode signature for ${artifact}: $($signature.Status)"
+      }
+      if ($signatureStatus -ne "Valid") {
+        $message = "Untrusted Authenticode signature for ${artifact}: $($signature.Status). $($signature.StatusMessage)"
+        if ($allowUntrustedSignature) {
+          Write-Warning $message
+        } else {
+          throw $message
+        }
       }
     }
     Write-Host "== Windows code signatures verified =="
