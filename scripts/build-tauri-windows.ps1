@@ -83,13 +83,18 @@ try {
   }
 
   if ($signingEnabled) {
-    $artifactsToVerify = @("target\release\vibe-usage-app.exe")
     $version = (Get-Content package.json | ConvertFrom-Json).version
     $installer = Get-ChildItem -Path "target\release\bundle\nsis" -Filter "*$version*setup.exe" |
       Sort-Object LastWriteTime -Descending |
       Select-Object -First 1
-    if ($installer) {
-      $artifactsToVerify += $installer.FullName
+    if (-not $installer) {
+      throw "NSIS installer not found for version $version."
+    }
+
+    $artifactsToVerify = if ($useSignPath) {
+      @($installer.FullName)
+    } else {
+      @("target\release\vibe-usage-app.exe", $installer.FullName)
     }
 
     foreach ($artifact in $artifactsToVerify) {

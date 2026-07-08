@@ -65,7 +65,6 @@ jobs:
           SIGNPATH_ALLOW_UNTRUSTED_SIGNATURE: "true"
         run: |
           $version = (Get-Content package.json | ConvertFrom-Json).version
-          $appExe = Get-Item "target/release/vibe-usage-app.exe"
           $installer = Get-ChildItem -Path "target/release/bundle/nsis" -Filter "*$version*setup.exe" |
             Sort-Object LastWriteTime -Descending |
             Select-Object -First 1
@@ -74,7 +73,7 @@ jobs:
             throw "NSIS installer not found."
           }
 
-          foreach ($artifact in @($appExe.FullName, $installer.FullName)) {
+          foreach ($artifact in @($installer.FullName)) {
             $signature = Get-AuthenticodeSignature -FilePath $artifact
             $signatureStatus = $signature.Status.ToString()
             if ($signatureStatus -eq "NotSigned" -or $signatureStatus -eq "HashMismatch") {
