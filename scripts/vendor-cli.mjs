@@ -16,7 +16,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const CLI_VERSION = "0.9.8"; // bump deliberately; releases go through regression tests
+const CLI_VERSION = "0.9.13"; // bump deliberately; releases go through regression tests
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const destDir = path.join(root, "src-tauri", "resources", "cli");
