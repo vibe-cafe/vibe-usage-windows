@@ -15,18 +15,18 @@ use tauri::{Manager, WindowEvent};
 pub fn run() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
+    let context = tauri::generate_context!();
+    let app_config_dir = dirs::config_dir()
+        .map(|dir| dir.join(&context.config().identifier))
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+
     tauri::Builder::default()
+        .manage(AppCtx::new(app_config_dir))
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             // Second launch → surface the main window.
             panel::show(app);
         }))
         .setup(|app| {
-            let config_dir = app
-                .path()
-                .app_config_dir()
-                .unwrap_or_else(|_| std::path::PathBuf::from("."));
-            app.manage(AppCtx::new(config_dir));
-
             tray::create_tray(app.handle())?;
 
             let handle = app.handle().clone();
@@ -89,7 +89,7 @@ pub fn run() {
             commands::check_for_update,
             commands::install_update,
         ])
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while building tauri application")
         .run(|_app, event| {
             // Keep the tray app alive when every window is hidden/destroyed.
