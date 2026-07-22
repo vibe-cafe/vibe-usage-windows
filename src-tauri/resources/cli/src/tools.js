@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+import { findClaudeCodeDataDirs } from './claude-roots.js';
 
 function getCursorStateDbPath() {
   const rel = join('User', 'globalStorage', 'state.vscdb');
@@ -80,20 +81,6 @@ function findOpenclawDataDirs() {
   return dirs;
 }
 
-// Claude Code lives in ~/.claude/projects, but $CLAUDE_CONFIG_DIR relocates its
-// whole tree. Detect either so a user who only set CLAUDE_CONFIG_DIR is still
-// recognized (the parser scans both roots; see parsers/claude-code.js).
-function findClaudeCodeDataDirs() {
-  const dirs = [join(homedir(), '.claude', 'projects')];
-  const cfg = process.env.CLAUDE_CONFIG_DIR?.trim();
-  if (cfg) {
-    let custom = cfg.startsWith('~') ? join(homedir(), cfg.slice(1)) : cfg;
-    custom = custom.replace(/[/\\]+$/, '') || custom;
-    dirs.push(join(custom, 'projects'));
-  }
-  return dirs.filter(existsSync);
-}
-
 // Codex keeps live sessions in ~/.codex/sessions and moves completed ones to
 // ~/.codex/archived_sessions. Detect Codex if either dir exists, so a user
 // whose sessions have all been archived is still recognized.
@@ -113,12 +100,52 @@ function findKimiCodeDataDirs() {
   ].filter(existsSync);
 }
 
+function findAntigravityDataDirs() {
+  return [
+    join(homedir(), '.gemini', 'antigravity'),
+    join(homedir(), '.gemini', 'antigravity-cli'),
+  ].filter(existsSync);
+}
+
+export function findTraeCliDataDirs() {
+  const envDir = process.env.VIBE_USAGE_TRAE_CLI_SESSIONS?.trim();
+  if (envDir) {
+    return [envDir].filter(existsSync);
+  }
+  if (process.platform === 'darwin') {
+    return [join(homedir(), 'Library', 'Caches', 'trae-cli', 'sessions')].filter(existsSync);
+  }
+  if (process.platform === 'win32') {
+    const localAppData = process.env.LOCALAPPDATA?.trim() || join(homedir(), 'AppData', 'Local');
+    return [join(localAppData, 'trae-cli', 'cache', 'sessions')].filter(existsSync);
+  }
+  const xdgCacheHome = process.env.XDG_CACHE_HOME?.trim() || join(homedir(), '.cache');
+  return [join(xdgCacheHome, 'trae-cli', 'sessions')].filter(existsSync);
+}
+
+/** Grok home: GROK_HOME env (same as the Grok CLI) or ~/.grok. */
+export function getGrokHome() {
+  const envHome = process.env.GROK_HOME?.trim();
+  if (envHome) {
+    return envHome.startsWith('~') ? join(homedir(), envHome.slice(1)) : envHome;
+  }
+  return join(homedir(), '.grok');
+}
+
+export function getGrokSessionsDir() {
+  const testDir = process.env.VIBE_USAGE_GROK_SESSIONS?.trim();
+  if (testDir) return testDir;
+  return join(getGrokHome(), 'sessions');
+}
+
+// Detect Grok when sessions/ exists under GROK_HOME (or the test override).
+export function findGrokDataDirs() {
+  const testDir = process.env.VIBE_USAGE_GROK_SESSIONS?.trim();
+  if (testDir) return [testDir].filter(existsSync);
+  return [join(getGrokHome(), 'sessions')].filter(existsSync);
+}
+
 export const TOOLS = [
-  {
-    name: 'Antigravity',
-    id: 'antigravity',
-    dataDir: join(homedir(), '.gemini', 'antigravity'),
-  },
   {
     name: 'Claude Code',
     id: 'claude-code',
@@ -126,16 +153,16 @@ export const TOOLS = [
     detectDataDirs: findClaudeCodeDataDirs,
   },
   {
-    name: 'Cline',
-    id: 'cline',
-    dataDir: join(homedir(), 'Library', 'Application Support', 'Code', 'User', 'globalStorage', 'saoudrizwan.claude-dev'),
-    detectDataDirs: findClineDataDirs,
-  },
-  {
     name: 'Codex CLI',
     id: 'codex',
     dataDir: join(homedir(), '.codex', 'sessions'),
     detectDataDirs: findCodexDataDirs,
+  },
+  {
+    name: 'Grok',
+    id: 'grok',
+    dataDir: join(homedir(), '.grok', 'sessions'),
+    detectDataDirs: findGrokDataDirs,
   },
   {
     name: 'GitHub Copilot CLI',
@@ -192,6 +219,18 @@ export const TOOLS = [
     dataDir: join(homedir(), '.factory', 'sessions'),
   },
   {
+    name: 'Antigravity',
+    id: 'antigravity',
+    dataDir: join(homedir(), '.gemini', 'antigravity'),
+    detectDataDirs: findAntigravityDataDirs,
+  },
+  {
+    name: 'Trae CLI',
+    id: 'trae-cli',
+    dataDir: join(homedir(), 'Library', 'Caches', 'trae-cli', 'sessions'),
+    detectDataDirs: findTraeCliDataDirs,
+  },
+  {
     name: 'Hermes',
     id: 'hermes',
     dataDir: join(homedir(), '.hermes', 'state.db'),
@@ -200,6 +239,12 @@ export const TOOLS = [
     name: 'Kiro',
     id: 'kiro',
     dataDir: getKiroAgentPath(),
+  },
+  {
+    name: 'Cline',
+    id: 'cline',
+    dataDir: join(homedir(), 'Library', 'Application Support', 'Code', 'User', 'globalStorage', 'saoudrizwan.claude-dev'),
+    detectDataDirs: findClineDataDirs,
   },
   {
     name: 'Roo Code',

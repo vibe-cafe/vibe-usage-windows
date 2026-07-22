@@ -25,6 +25,7 @@ Windows 应用，自动追踪 AI 编程工具的 Token 用量和费用。App 常
 - 支持今天 / 24H / 7D / 30D / 90D / 自定义日期，以及终端 / 工具 / 模型 / 项目筛选
 - 可在托盘图标显示今日费用和 Token 数
 - 内置 [@vibe-cafe/vibe-usage](https://github.com/vibe-cafe/vibe-usage) CLI 与 Node 运行时，开箱即用，无需安装 Node.js
+- 发布构建从 npm `latest` 解析 CLI，再把解析出的确定版本内置进安装包；用户机器不会在运行时拉取或执行未随安装包验证的新代码
 - 支持开机自启动、单实例、应用内检查更新
 
 ## 系统要求

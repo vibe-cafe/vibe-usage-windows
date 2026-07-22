@@ -4,7 +4,7 @@
 // stay patched so releases don't depend on upstream merge timing).
 //
 // Usage:
-//   node scripts/vendor-cli.mjs                  # npm pack @vibe-cafe/vibe-usage@<pinned>
+//   node scripts/vendor-cli.mjs                  # npm pack @vibe-cafe/vibe-usage@latest
 //   node scripts/vendor-cli.mjs --from-local ../vibe-usage   # copy a local checkout
 //
 // The CLI has zero npm dependencies, so vendoring bin/ + src/ + package.json
@@ -16,9 +16,12 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const CLI_VERSION = "0.9.13"; // bump deliberately; releases go through regression tests
-
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const appPackage = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+const CLI_CHANNEL = appPackage.vibeUsageCliChannel;
+if (CLI_CHANNEL !== "latest") {
+  throw new Error("package.json vibeUsageCliChannel must be latest");
+}
 const destDir = path.join(root, "src-tauri", "resources", "cli");
 
 function log(msg) {
@@ -50,12 +53,12 @@ function vendorFromLocal(localPath) {
 }
 
 function vendorFromNpm() {
-  log(`npm pack @vibe-cafe/vibe-usage@${CLI_VERSION}`);
+  log(`npm pack @vibe-cafe/vibe-usage@${CLI_CHANNEL}`);
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "vibe-cli-"));
   try {
     const out = execFileSync(
       "npm",
-      ["pack", `@vibe-cafe/vibe-usage@${CLI_VERSION}`, "--pack-destination", tmp],
+      ["pack", `@vibe-cafe/vibe-usage@${CLI_CHANNEL}`, "--pack-destination", tmp],
       { encoding: "utf8", shell: process.platform === "win32" },
     ).trim();
     const tarball = path.join(tmp, out.split("\n").pop().trim());
@@ -113,23 +116,6 @@ function applyWindowsPatches() {
     ],
   ]);
 
-  // 1b. fetchSettings runs OUTSIDE sync.js's try/catch — a network failure
-  // (offline, proxy required) crashes Node with an uncaught exception instead
-  // of a clean "同步失败" message. Wrap it; on failure default to NOT
-  // uploading project names (the privacy-safe direction).
-  patchFile("src/sync.js", [
-    [
-      "  const settings = await fetchSettings(apiUrl, config.apiKey);",
-      `  let settings = null;
-  try {
-    settings = await fetchSettings(apiUrl, config.apiKey);
-  } catch (err) {
-    process.stderr.write(\`\${dim(\`  settings: \${err.message}（默认隐藏项目名）\`)}\\n\`);
-  }`,
-      "sync fetchSettings crash guard",
-    ],
-  ]);
-
   // 2. Windows cwd uses backslashes — project extraction must split on both.
   patchFile("src/parsers/codex.js", [
     [
@@ -182,14 +168,9 @@ const DATA_DIR = resolveOpencodeDataDir();`,
   // so sync cannot fail with EISDIR when writing config.json/state.json.
   patchFile("src/config.js", [
     [
-      "import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';",
-      "import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, statSync } from 'node:fs';",
+      "import { readFileSync, writeFileSync, chmodSync, mkdirSync, existsSync } from 'node:fs';",
+      "import { readFileSync, writeFileSync, chmodSync, mkdirSync, existsSync, renameSync, statSync } from 'node:fs';",
       "config fs helpers",
-    ],
-    [
-      "const CONFIG_DIR = join(homedir(), '.vibe-usage');",
-      "const CONFIG_DIR = process.env.VIBE_USAGE_CONFIG_DIR?.trim() || join(homedir(), '.vibe-usage');",
-      "config app dir override",
     ],
     [
       "export function getConfigPath() {",
@@ -211,26 +192,21 @@ export function getConfigPath() {`,
       "config EISDIR repair helpers",
     ],
     [
-      "  try {\n    return JSON.parse(readFileSync(CONFIG_FILE, 'utf-8'));",
-      "  try {\n    if (!statSync(CONFIG_FILE).isFile()) return null;\n    return JSON.parse(readFileSync(CONFIG_FILE, 'utf-8'));",
-      "config ignore non-file",
-    ],
-    [
-      "  mkdirSync(CONFIG_DIR, { recursive: true });\n  writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2) + '\\n', 'utf-8');",
-      "  mkdirSync(CONFIG_DIR, { recursive: true });\n  moveDirectoryOutOfFilePath(CONFIG_FILE);\n  writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2) + '\\n', 'utf-8');",
+      "  mkdirSync(CONFIG_DIR, { recursive: true });\n  // The file holds the vbu_ API key",
+      "  mkdirSync(CONFIG_DIR, { recursive: true });\n  moveDirectoryOutOfFilePath(CONFIG_FILE);\n  // The file holds the vbu_ API key",
       "config save EISDIR repair",
     ],
   ]);
 
   patchFile("src/state.js", [
     [
-      "import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';",
-      "import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, statSync } from 'node:fs';",
+      "import { readFileSync, writeFileSync, unlinkSync, mkdirSync, existsSync } from 'node:fs';",
+      "import { readFileSync, writeFileSync, unlinkSync, mkdirSync, existsSync, renameSync, statSync } from 'node:fs';",
       "state fs helpers",
     ],
     [
-      "const STATE_DIR = join(homedir(), '.vibe-usage');",
-      "const STATE_DIR = process.env.VIBE_USAGE_CONFIG_DIR?.trim() || join(homedir(), '.vibe-usage');",
+      "const STATE_DIR = process.env.VIBE_USAGE_STATE_DIR?.trim() || join(homedir(), '.vibe-usage');",
+      "const STATE_DIR = process.env.VIBE_USAGE_STATE_DIR?.trim() || process.env.VIBE_USAGE_CONFIG_DIR?.trim() || join(homedir(), '.vibe-usage');",
       "state app dir override",
     ],
     [
@@ -253,11 +229,6 @@ export function getStatePath() {`,
       "state EISDIR repair helpers",
     ],
     [
-      "  try {\n    const parsed = JSON.parse(readFileSync(STATE_FILE, 'utf-8'));",
-      "  try {\n    if (!statSync(STATE_FILE).isFile()) return { buckets: {}, sessions: {} };\n    const parsed = JSON.parse(readFileSync(STATE_FILE, 'utf-8'));",
-      "state ignore non-file",
-    ],
-    [
       "  mkdirSync(STATE_DIR, { recursive: true });\n  writeFileSync(STATE_FILE, JSON.stringify(state) + '\\n', 'utf-8');",
       "  mkdirSync(STATE_DIR, { recursive: true });\n  moveDirectoryOutOfFilePath(STATE_FILE);\n  writeFileSync(STATE_FILE, JSON.stringify(state) + '\\n', 'utf-8');",
       "state save EISDIR repair",
@@ -271,15 +242,15 @@ const localFlag = process.argv.indexOf("--from-local");
 if (localFlag >= 0) {
   vendorFromLocal(process.argv[localFlag + 1] ?? "../vibe-usage");
 } else {
-  try {
-    vendorFromNpm();
-  } catch (err) {
-    log(`npm pack failed (${err.message}); falling back to ../vibe-usage`);
-    vendorFromLocal("../vibe-usage");
-  }
+  // A release must contain the registry's current dist-tag. Never silently
+  // fall back to a sibling checkout; --from-local is an explicit dev-only path.
+  vendorFromNpm();
 }
 
 applyWindowsPatches();
 
 const pkg = JSON.parse(fs.readFileSync(path.join(destDir, "package.json"), "utf8"));
-log(`vendored ${pkg.name}@${pkg.version} → ${path.relative(root, destDir)}`);
+if (pkg.name !== "@vibe-cafe/vibe-usage" || !/^\d+\.\d+\.\d+(?:[-+].+)?$/.test(pkg.version)) {
+  throw new Error(`invalid vendored CLI identity: ${pkg.name}@${pkg.version}`);
+}
+log(`resolved @${CLI_CHANNEL} to ${pkg.name}@${pkg.version} → ${path.relative(root, destDir)}`);
