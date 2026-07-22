@@ -150,6 +150,11 @@ async fn run_cli_sync(app: &AppHandle) -> Result<String, String> {
         "VIBE_USAGE_CONFIG_DIR",
         app.state::<AppCtx>().config.config_dir.clone(),
     );
+    cmd.env("VIBE_USAGE_SURFACE", "windows-app");
+    cmd.env(
+        "VIBE_USAGE_SURFACE_VERSION",
+        app.package_info().version.to_string(),
+    );
     if crate::state::IS_DEV {
         cmd.env("VIBE_USAGE_DEV", "1");
     }

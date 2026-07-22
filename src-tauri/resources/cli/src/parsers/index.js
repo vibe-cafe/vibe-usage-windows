@@ -6,6 +6,7 @@ import { parse as parseCopilotCli } from './copilot-cli.js';
 import { parse as parseCursor } from './cursor.js';
 import { parse as parseRooCode } from './roo-code.js';
 import { parse as parseGeminiCli } from './gemini-cli.js';
+import { parse as parseGrok } from './grok.js';
 import { parse as parseOpencode } from './opencode.js';
 import { parse as parseOpenclaw } from './openclaw.js';
 import { parse as parseQwenCode } from './qwen-code.js';
@@ -17,25 +18,28 @@ import { parse as parseHermes } from './hermes.js';
 import { parse as parseKiro } from './kiro.js';
 import { parse as parsePiCodingAgent } from './pi-coding-agent.js';
 import { parse as parseZcode } from './zcode.js';
+import { parse as parseTraeCli } from './trae-cli.js';
 
 export const parsers = {
   'claude-code': parseClaudeCode,
-  'cline': parseCline,
   'codex': parseCodex,
+  'grok': parseGrok,
   'copilot-cli': parseCopilotCli,
   'cursor': parseCursor,
-  'roo-code': parseRooCode,
   'gemini-cli': parseGeminiCli,
   'opencode': parseOpencode,
   'openclaw': parseOpenclaw,
+  'pi-coding-agent': parsePiCodingAgent,
   'qwen-code': parseQwenCode,
   'kimi-code': parseKimiCode,
   'amp': parseAmp,
   'droid': parseDroid,
   'antigravity': parseAntigravity,
+  'trae-cli': parseTraeCli,
   'hermes': parseHermes,
   'kiro': parseKiro,
-  'pi-coding-agent': parsePiCodingAgent,
+  'cline': parseCline,
+  'roo-code': parseRooCode,
   'zcode': parseZcode,
 };
 

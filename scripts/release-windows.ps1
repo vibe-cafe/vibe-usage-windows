@@ -23,6 +23,9 @@ if ($LASTEXITCODE -ne 0) { exit 1 }
 node scripts/vendor-cli.mjs
 if ($LASTEXITCODE -ne 0) { exit 1 }
 
+node scripts/check-version.mjs
+if ($LASTEXITCODE -ne 0) { exit 1 }
+
 node scripts/fetch-node.mjs
 if ($LASTEXITCODE -ne 0) { exit 1 }
 
