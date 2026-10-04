@@ -298,6 +298,7 @@ function ProviderCard({ snapshot }: { snapshot: ProviderRateLimit }) {
           {expanded ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
         </button>
       )}
+      {snapshot.sourceLabel && <div className="text-[10px] text-neutral-400">{snapshot.sourceLabel}</div>}
       {snapshot.status.kind === "ok" && <FreshnessNote snapshot={snapshot} />}
     </div>
   );
@@ -513,7 +514,7 @@ function FreshnessNote({ snapshot }: { snapshot: ProviderRateLimit }) {
     ? Math.max(0, Math.floor((Date.now() / 1000 - snapshot.dataAsOf) / 60))
     : 0;
   const notes = [
-    ageMinutes >= 5 ? `数据截至 ${ageMinutes} 分钟前` : null,
+    snapshot.sourceLabel && snapshot.dataAsOf ? `记录时间 ${new Date(snapshot.dataAsOf * 1000).toLocaleString()}` : ageMinutes >= 5 ? `数据截至 ${ageMinutes} 分钟前` : null,
     snapshot.resetCreditsCount ? `重置券 ×${snapshot.resetCreditsCount}` : null,
   ].filter(Boolean);
   if (notes.length === 0) return null;

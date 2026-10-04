@@ -39,6 +39,8 @@ import {
   quotaTabOrder as computeQuotaTabOrder,
 } from "../lib/quotaProducts";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { startLiveRefresh } from "../lib/liveRefresh";
 
 /** The dashboard/quota state every component reads through `useAppState`. */
 export interface AppStateValue {
@@ -51,6 +53,8 @@ export interface AppStateValue {
   hasAnyData: boolean;
   isLoadingData: boolean;
   hasLoadedUsageData: boolean;
+  usageError: string | null;
+  usageUpdatedAt: number | null;
   isInitialDataLoad: boolean;
   isRefreshingData: boolean;
 
@@ -146,6 +150,8 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const [hasAnyData, setHasAnyData] = useState(false);
   const [isLoadingData, setIsLoadingData] = useState(false);
   const [hasLoadedUsageData, setHasLoadedUsageData] = useState(false);
+  const [usageError, setUsageError] = useState<string | null>(null);
+  const [usageUpdatedAt, setUsageUpdatedAt] = useState<number | null>(null);
 
   const [timeRange, setTimeRangeRaw] = useState<TimeRange>("1D");
   const [customRangeFrom, setCustomRangeFrom] = useState<Date>(
@@ -167,6 +173,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const quotaRequest = useRef(0);
 
   const lastFetchTime = useRef<number | null>(null);
+  const usageRequest = useRef(0);
   const loadingRef = useRef(false);
   // Refs so the panel-shown listener sees current values without re-subscribing.
   const rangeRef = useRef<{ timeRange: TimeRange; from: Date; to: Date }>({
@@ -222,26 +229,34 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const fetchUsageData = useCallback(async () => {
-    if (!configuredRef.current || loadingRef.current) return;
+    if (!configuredRef.current) return;
+    const request = ++usageRequest.current;
     loadingRef.current = true;
     setIsLoadingData(true);
     try {
       const response = await api.fetchUsage(buildQuery());
+      if (request !== usageRequest.current) return;
+      setUsageError(null);
+      setUsageUpdatedAt(Date.now());
+      lastFetchTime.current = Date.now();
       setBuckets(response.buckets);
       setSessions(response.sessions ?? []);
       setHasAnyData(response.hasAnyData);
     } catch (err) {
-      // Silently fail — dashboard shows stale data or empty state (mirrors macOS).
+      if (request !== usageRequest.current) return;
+      setUsageError(String(err));
       console.warn("Failed to fetch usage data:", err);
     } finally {
-      lastFetchTime.current = Date.now();
-      setHasLoadedUsageData(true);
-      setIsLoadingData(false);
-      loadingRef.current = false;
+      if (request === usageRequest.current) {
+        setHasLoadedUsageData(true);
+        setIsLoadingData(false);
+        loadingRef.current = false;
+      }
     }
   }, [buildQuery]);
 
   const fetchUsageDataIfNeeded = useCallback(async () => {
+    if (loadingRef.current) return;
     if (lastFetchTime.current && Date.now() - lastFetchTime.current < 60_000) return;
     await fetchUsageData();
   }, [fetchUsageData]);
@@ -409,6 +424,18 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Other devices can upload without a local sync event.
+  useEffect(() => startLiveRefresh(async () => {
+    await Promise.allSettled([
+      loadingRef.current ? Promise.resolve() : fetchUsageData(),
+      refreshRateLimits(false),
+      api.getSyncState().then(setSyncState),
+    ]);
+  }, async () => {
+    const window = getCurrentWindow();
+    return await window.isVisible() && !await window.isMinimized();
+  }), [fetchUsageData, refreshRateLimits]);
+
   // Event subscriptions.
   useEffect(() => {
     const subs = [
@@ -497,6 +524,8 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     hasAnyData,
     isLoadingData,
     hasLoadedUsageData,
+    usageError,
+    usageUpdatedAt,
     isInitialDataLoad,
     isRefreshingData,
     timeRange,

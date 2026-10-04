@@ -104,7 +104,7 @@ Rust (Tauri 2)
   ├─ tray / panel        托盘 + 标准主窗口（显示/聚焦/隐藏到托盘）
   ├─ api_client          GET /api/usage、设备链接 code/poll
   ├─ sync_engine         spawn node <内置CLI> sync（120s 超时、CREATE_NO_WINDOW）
-  ├─ scheduler           30 分钟定时同步 + 24h 更新检查
+  ├─ scheduler           面板可见时约 1 分钟、托盘后台 30 分钟同步 + 24h 更新检查
   ├─ rate_limits         Codex / Claude 原生读取 + Kimi / ZCode / Grok typed CLI bridge
   ├─ quota_product       只读本地发现 + 两项选择策略（Cursor 待接入）
   ├─ zcode_credentials   Windows Credential Manager 安全存储
@@ -124,3 +124,10 @@ Rust (Tauri 2)
 ## License
 
 MIT
+
+## 自动刷新与跨设备统计
+
+- 面板可见且未最小化时，本机日志约每分钟同步一次（15 秒调度检查；同步耗时另计）；隐藏到托盘后保持 30 分钟间隔。前端每分钟重新获取云端用量、同步状态及已选择的订阅配额，慢请求不会在定时器内重叠。
+- 费用默认汇总当前账号、时间范围内的全部终端。设备/工具/模型/项目筛选仍然有效，界面显示统计范围、最近一次成功获取云端数据的时间及刷新失败提示。比较 Mac 与 Windows 时，应使用相同账号、时间范围、时区和筛选。
+- Windows 的 Claude 桌面发现同时支持普通 Roaming 和打包应用的 LocalCache 目录；安装目录类型不代表软件下载渠道。
+- Claude 桌面额度仅只读解析已有的 `plan-usage-history.json` v2，不访问桌面凭据或改动 Claude。多安装或多组织记录不猜测账号；记录超过 15 分钟标为历史非实时，超过 24 小时不显示百分比。它是账户额度观察值，不能转换为本机 Token、费用或实时余额。记录更新速度由 Claude 决定。

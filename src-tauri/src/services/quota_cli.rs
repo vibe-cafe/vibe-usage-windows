@@ -227,6 +227,7 @@ fn map_product(product: Product) -> Result<ProviderRateLimit, FetchError> {
         plan_label: product.plan_label,
         data_as_of: product.data_as_of.as_deref().and_then(parse_epoch),
         fetched_at: parse_epoch(&product.fetched_at),
+        source_label: None,
         five_hour_not_enforced: false,
         reset_credits_count: None,
         empty_reason: product.empty_reason.as_deref().and_then(empty_reason),

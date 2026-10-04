@@ -2,6 +2,7 @@
 //! Services/CodexRateLimitReader.swift and Services/ClaudeRateLimitReader.swift.
 
 pub mod claude;
+pub mod claude_desktop;
 pub mod codex;
 
 use serde::{Deserialize, Serialize};
@@ -96,6 +97,8 @@ pub enum RateLimitEmptyReason {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderRateLimit {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_label: Option<String>,
     pub provider: RateLimitProvider,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub meters: Vec<RateLimitMeter>,
@@ -129,6 +132,7 @@ impl ProviderRateLimit {
             plan_label: None,
             data_as_of: None,
             fetched_at: None,
+            source_label: None,
             five_hour_not_enforced: false,
             reset_credits_count: None,
             empty_reason: None,

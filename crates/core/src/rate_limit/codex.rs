@@ -41,6 +41,7 @@ pub fn read_from(sessions_dir: &Path, now: f64) -> ProviderRateLimit {
             plan_label: snapshot.plan_label,
             data_as_of: None,
             fetched_at: None,
+            source_label: None,
             five_hour_not_enforced: false,
             reset_credits_count: None,
             empty_reason: None,

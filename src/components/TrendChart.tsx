@@ -283,7 +283,7 @@ function ChartTooltip({
         <>
           <span style={{ color: "#CCCCCC" }}>总 Token: {formatNumber(barTotal(bar))}</span>
           <span className="flex gap-2" style={{ color: "#808080" }}>
-            <span>输入: {formatNumber(bar.input)}</span>
+            <span>输入（含缓存写入）: {formatNumber(bar.input)}</span>
             <span>输出: {formatNumber(bar.output)}</span>
           </span>
           {bar.cached > 0 && (

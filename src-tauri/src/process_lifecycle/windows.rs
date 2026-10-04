@@ -487,6 +487,11 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert!(job.empty());
+        // The process handle can signal before Job accounting finishes.
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while !job.empty() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }).await.expect("terminated Job must drain within the shutdown budget");
     }
 }

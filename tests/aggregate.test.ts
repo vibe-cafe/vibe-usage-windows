@@ -194,3 +194,22 @@ describe("rate-limit helpers", () => {
     expect(utilizationColor(90)).toBe("#F04545");
   });
 });
+
+describe("cache-write tokens", () => {
+  it("counts both TTLs once across summary, chart and device distribution without changing server cost", () => {
+    const b = bucket({ cacheCreation5mTokens: 20, cacheCreation1hTokens: 30 });
+    const summary = summarize([b], []);
+    const bars = buildChartData([b], [], "7D", 7, null, new Date("2026-07-03T12:00:00Z"));
+    const slices = aggregateSlices([b], b => b.hostname);
+    expect(summary.totalTokens).toBe(410);
+    expect(summary.totalCachedInputTokens).toBe(200);
+    expect(summary.totalCost).toBe(1.5);
+    expect(bars.reduce((n, b) => n + barTotal(b), 0)).toBe(410);
+    expect(slices.reduce((n, s) => n + s.tokens, 0)).toBe(410);
+  });
+  it("does not infer extra tokens from legacy totals or already-folded input", () => {
+    const b = bucket({ inputTokens: 150, totalTokens: 210, cacheCreationInputTokens: 50 });
+    expect(summarize([b], []).totalTokens).toBe(410);
+    expect(summarize([bucket({ cacheCreation5mTokens: null, cacheCreation1hTokens: null })], []).totalTokens).toBe(360);
+  });
+});

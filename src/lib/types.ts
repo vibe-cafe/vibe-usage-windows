@@ -11,15 +11,23 @@ export interface UsageBucket {
   outputTokens: number;
   /** Not yet emitted by the sync pipeline; optional so decoding keeps working once it appears. */
   cacheCreationInputTokens?: number | null;
+  /** Cache writes are separate from ordinary input in current API responses. */
+  cacheCreation5mTokens?: number | null;
+  cacheCreation1hTokens?: number | null;
   cachedInputTokens: number;
   reasoningOutputTokens: number;
   totalTokens: number;
   estimatedCost?: number | null;
 }
 
-/** input + output + reasoning + cached input — matches the web dashboard totals. */
+/** Cache-write TTL fields are disjoint from input; absent on legacy responses. */
+export function cacheWriteTokens(b: UsageBucket): number {
+  return (b.cacheCreation5mTokens ?? 0) + (b.cacheCreation1hTokens ?? 0);
+}
+
+/** All observed tokens, including cache reads and cache writes. */
 export function computedTotal(b: UsageBucket): number {
-  return b.inputTokens + b.outputTokens + b.reasoningOutputTokens + b.cachedInputTokens;
+  return b.inputTokens + b.outputTokens + b.reasoningOutputTokens + b.cachedInputTokens + cacheWriteTokens(b);
 }
 
 function localDateKey(value: string): string {
@@ -223,6 +231,7 @@ export type RateLimitEmptyReason =
   | "sessionWithoutPlanLimits";
 
 export interface ProviderRateLimit {
+  sourceLabel?: string | null;
   provider: RateLimitProvider;
   /** Absent/null means "the source did not say" — never render a verdict. */
   emptyReason?: RateLimitEmptyReason | null;
@@ -270,6 +279,7 @@ export interface SyncState {
 
 export interface AppStatus {
   configured: boolean;
+  hostname?: string | null;
   apiUrl: string;
   version: string;
   isDev: boolean;

@@ -11,6 +11,7 @@ import {
   bucketDayKey,
   bucketHourKey,
   computedTotal,
+  cacheWriteTokens,
   isHourly,
   sessionDate,
   sessionDayKey,
@@ -132,7 +133,8 @@ export function buildChartData(
       bar = emptyBar(key);
       map.set(key, bar);
     }
-    bar.input += bucket.inputTokens;
+    // Cache writes are input tokens; keep cache reads in their own segment.
+    bar.input += bucket.inputTokens + cacheWriteTokens(bucket);
     // Reasoning tokens are priced as output — three tiers: input/output/cache read.
     bar.output += bucket.outputTokens + bucket.reasoningOutputTokens;
     bar.cached += bucket.cachedInputTokens;

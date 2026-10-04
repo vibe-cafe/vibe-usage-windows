@@ -138,6 +138,7 @@ export function quotaEmptyStateText(
   providerName?: string,
 ): string {
   if (isRefreshing) return "正在读取订阅配额…";
+  if (snapshot.sourceLabel && snapshot.status.kind === "noData") return "桌面额度记录缺失、过期或账号不明确";
   switch (snapshot.emptyReason) {
     case "limitReached":
       return "本期订阅配额已用满 · 等待额度重置";
