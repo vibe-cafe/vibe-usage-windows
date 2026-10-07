@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { delimiter, dirname, isAbsolute, join, posix, resolve, win32 } from 'node:path';
 import { homedir } from 'node:os';
 import { getOpenCodeStores } from './opencode-roots.js';
@@ -10,6 +10,7 @@ import {
   discoverCodexHomes,
   extraRootList,
   grokSessionsDir,
+  normalizeExtraRoot,
 } from './extra-roots.js';
 import { findClineDataDirs } from './cline-roots.js';
 import { findCodeartsAgentDbs, resolveCodeartsAgentRoots } from './codearts-roots.js';
@@ -17,6 +18,7 @@ import { findColaDataDirs, getColaSessionsDir } from './cola-roots.js';
 import { findCraftDataDirs } from './craft-roots.js';
 import { findHermesDataDirs, getHermesHome } from './hermes-roots.js';
 import { findKimiCodeDataDirs } from './kimi-roots.js';
+import { findKikiDataDirs, KIKI_SOURCE_ID, resolveKikiRoots } from './kiki-roots.js';
 import { findOmpDataDirs, findPiDataDirs } from './pi-roots.js';
 import { findQoderDataDirs, getQoderProjectsDir } from './qoder-roots.js';
 import { findWorkbuddyDataDirs } from './workbuddy-roots.js';
@@ -176,15 +178,75 @@ export function findDshDataDirs() {
   return [getDshSessionsDir()].filter(existsSync);
 }
 
-/** mcode runtime database: VIBE_USAGE_MCODE_DB wins, then MCODE_HOME, then ~/.minimax. */
+const MCODE_DB_RELATIVE = join('v2', 'sqlite', 'runtime-state.sqlite');
+
+// Data-root variables the mcode CLI itself resolves, in its own precedence.
+// MCODE_HOME stays first as vibe-usage's pre-existing fixture override, then
+// the two public relocation variables from the mcode README.
+const MCODE_ROOT_ENV = ['MCODE_HOME', 'MINIMAX_DATA_DIR', 'MAVIS_DATA_DIR'];
+
+function mcodeRootFromEnv(env) {
+  for (const key of MCODE_ROOT_ENV) {
+    const value = env[key]?.trim();
+    if (!value) continue;
+    if (!isAbsolute(value)) {
+      throw new Error(`${key} must be an absolute path, got: ${JSON.stringify(value)}`);
+    }
+    return value;
+  }
+  return null;
+}
+
+/** mcode runtime database: VIBE_USAGE_MCODE_DB wins, then MCODE_HOME / MINIMAX_DATA_DIR / MAVIS_DATA_DIR, then ~/.minimax. */
 export function getMcodeDbPath(env = process.env, home = homedir()) {
   const override = env.VIBE_USAGE_MCODE_DB?.trim();
   if (override) return isAbsolute(override) ? override : resolve(override);
-  if (env.MCODE_HOME && !isAbsolute(env.MCODE_HOME)) {
-    throw new Error(`MCODE_HOME must be an absolute path, got: ${JSON.stringify(env.MCODE_HOME)}`);
+  const root = mcodeRootFromEnv(env) || join(home, '.minimax');
+  return join(root, MCODE_DB_RELATIVE);
+}
+
+/**
+ * Every mcode runtime database worth parsing.
+ *
+ * The mcode CLI relocates its whole data root with MINIMAX_DATA_DIR /
+ * MAVIS_DATA_DIR, scopes it to ~/.minimax-<profile> when a profile is active,
+ * and earlier source builds kept user data at ~/.minimax-code; the pre-rename
+ * home (~/.mavis) stays readable through the CLI's own compat link. Reading
+ * only ~/.minimax silently misses every session written in those layouts.
+ *
+ * Explicit roots keep returning their single unresolved path so a missing
+ * file still yields an empty result; the default layout only returns stores
+ * that exist, deduplicated by physical file so a compat symlink cannot make
+ * the same ledger count twice.
+ */
+export function getMcodeDbPaths(env = process.env, home = homedir()) {
+  if (env.VIBE_USAGE_MCODE_DB?.trim() || mcodeRootFromEnv(env)) return [getMcodeDbPath(env, home)];
+  const candidates = [
+    join(home, '.minimax'),
+    join(home, '.minimax-code'),
+    join(home, '.mavis'),
+  ];
+  try {
+    const profiles = readdirSync(home, { withFileTypes: true })
+      .filter(entry => entry.isDirectory() && /^\.(?:minimax|mavis)-.+$/.test(entry.name))
+      .map(entry => join(home, entry.name))
+      .sort();
+    candidates.push(...profiles);
+  } catch {
+    // Unreadable home directory: fall back to the default layout below.
   }
-  const root = env.MCODE_HOME || join(home, '.minimax');
-  return join(root, 'v2', 'sqlite', 'runtime-state.sqlite');
+  const paths = [];
+  const seen = new Set();
+  for (const dir of candidates) {
+    const dbPath = join(dir, MCODE_DB_RELATIVE);
+    if (!existsSync(dbPath)) continue;
+    let identity = dbPath;
+    try { identity = realpathSync(dbPath); } catch { /* keep the literal path */ }
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    paths.push(dbPath);
+  }
+  return paths;
 }
 
 // Devin (CLI and Desktop share one agent backend) keeps all sessions in a
@@ -406,10 +468,14 @@ export const TOOLS = [
     dataDir: join(homedir(), '.qwen', 'tmp'),
   },
   {
+    name: 'Kiki',
+    id: KIKI_SOURCE_ID,
+    dataDir: join(resolveKikiRoots()[0], 'sessions'),
+    detectDataDirs: findKikiDataDirs,
+  },
+  {
     name: 'Kimi Code',
     id: 'kimi-code',
-    // Current layout is ~/.kimi-code/sessions; ~/.kimi/sessions is the legacy
-    // path. The parser reads whichever exists (preferring ~/.kimi-code).
     dataDir: join(homedir(), '.kimi-code', 'sessions'),
     detectDataDirs: findKimiCodeDataDirs,
   },
@@ -417,7 +483,7 @@ export const TOOLS = [
     name: 'MiniMax Code',
     id: 'mcode',
     dataDir: join(homedir(), '.minimax', 'v2', 'sqlite', 'runtime-state.sqlite'),
-    detectDataDirs: () => [getMcodeDbPath()].filter(existsSync),
+    detectDataDirs: () => getMcodeDbPaths().filter(existsSync),
   },
   {
     name: 'MiMoCode',
@@ -460,7 +526,9 @@ export const TOOLS = [
     name: 'Hermes',
     id: 'hermes',
     dataDir: join(getHermesHome(), 'state.db'),
-    detectDataDirs: findHermesDataDirs,
+    detectDataDirs: ({ extraRoots } = {}) => findHermesDataDirs(
+      extraRootList(extraRoots?.hermes).map(root => normalizeExtraRoot(root)),
+    ),
   },
   {
     name: 'Kiro',

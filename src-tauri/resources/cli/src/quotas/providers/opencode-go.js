@@ -184,10 +184,13 @@ export async function fetchOpenCodeGoQuota({
       }), token);
     }
     if (response.status === 403) {
-      // A valid OpenCode key without an active Go subscription.
+      // A valid OpenCode key without an active Go subscription. The reason
+      // travels machine-readably so a client can say "not subscribed" instead
+      // of showing a neutral empty state.
       return attachCacheScope(quotaResult({
         id: PRODUCT_ID,
         status: 'no_data',
+        emptyReason: 'notEntitled',
         message: 'OpenCode Go subscription is not active',
         fetchedAt: now,
       }), token);

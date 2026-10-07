@@ -15,6 +15,19 @@ export const FETCHABLE_QUOTA_PRODUCT_IDS = Object.freeze([
   'opencode-go',
 ]);
 
+/**
+ * Machine-readable "why there was no window" values, shared with the desktop
+ * clients' `EmptyReason` (macOS `RateLimit.swift`) and additive within schema
+ * v1: a client that does not know the field ignores it, and a client that does
+ * can render the reason instead of a neutral empty state.
+ */
+export const QUOTA_EMPTY_REASONS = Object.freeze([
+  'limitReached',
+  'noWindow',
+  'notEntitled',
+  'sessionWithoutPlanLimits',
+]);
+
 const FETCH_STATUSES = new Set([
   'ok',
   'no_data',
@@ -129,6 +142,7 @@ export function quotaResult({
   dataAsOf = fetchedAt,
   message,
   source = 'live',
+  emptyReason,
 }) {
   if (!FETCHABLE_QUOTA_PRODUCT_IDS.includes(id)) {
     throw new TypeError(`unsupported quota product: ${id}`);
@@ -147,6 +161,12 @@ export function quotaResult({
   if (normalizedDataAsOf) result.dataAsOf = normalizedDataAsOf;
   if (typeof planLabel === 'string' && planLabel.trim()) result.planLabel = planLabel.trim();
   if (typeof message === 'string' && message.trim()) result.message = message.trim();
+  if (emptyReason !== undefined && emptyReason !== null) {
+    if (!QUOTA_EMPTY_REASONS.includes(emptyReason)) {
+      throw new TypeError(`invalid quota emptyReason: ${emptyReason}`);
+    }
+    result.emptyReason = emptyReason;
+  }
   return result;
 }
 

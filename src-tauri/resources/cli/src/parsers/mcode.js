@@ -6,7 +6,7 @@ import {
   isSqliteUnavailableError,
   sqliteUnavailableError,
 } from './sqlite.js';
-import { getMcodeDbPath } from '../tools.js';
+import { getMcodeDbPath, getMcodeDbPaths } from '../tools.js';
 
 const SOURCE = 'mcode';
 
@@ -47,13 +47,24 @@ const USAGE_SQL = `
 /**
  * Resolve the mcode runtime-state SQLite database. Mirrors the precedence used
  * by sibling tools (MiMoCode, DimAgent): explicit env var wins, then a
- * tool-specific HOME, then the default layout.
+ * tool-specific HOME (MCODE_HOME), then the mcode CLI's own relocation
+ * variables (MINIMAX_DATA_DIR / MAVIS_DATA_DIR), then the default layout.
  *
  * Defaults to `<homedir()>/.minimax/v2/sqlite/runtime-state.sqlite`, which is
  * where the mcode CLI keeps its WAL database on macOS / Linux.
  */
 export function resolveMcodeDbPath(env = process.env) {
   return getMcodeDbPath(env);
+}
+
+/**
+ * Every mcode store worth reading: the resolved default above, plus a
+ * `~/.minimax-<profile>` per active profile, the pre-npm `~/.minimax-code`
+ * and the pre-rename `~/.mavis` homes (and their profiles) when they hold a
+ * runtime-state database.
+ */
+export function resolveMcodeDbPaths(env = process.env, home) {
+  return getMcodeDbPaths(env, home);
 }
 
 /**
@@ -89,92 +100,116 @@ function dbHasColumns(dbPath, table, columns) {
 }
 
 export async function parse() {
-  const dbPath = resolveMcodeDbPath();
-  if (!existsSync(dbPath)) return { buckets: [], sessions: [] };
-
-  // Schema guard: every allow-listed column must exist. If the mcode
-  // runtime ever renames / drops a column, fail soft (skipped) so the
-  // incremental sync keeps the last good upload state for this source.
-  let schemaOk;
-  try {
-    schemaOk =
-      dbHasColumns(dbPath, 'local_runtime_token_usage', TOKEN_COLUMNS) &&
-      dbHasColumns(dbPath, 'local_runtime_sessions', SESSION_COLUMNS);
-  } catch (err) {
-    if (isSqliteUnavailableError(err)) throw sqliteUnavailableError('mcode');
-    return { buckets: [], sessions: [], skipped: true };
-  }
-  if (!schemaOk) {
-    return { buckets: [], sessions: [], skipped: true };
-  }
-
-  // Read tokens and session project metadata from one statement/snapshot.
-  let usageRows;
-  try {
-    usageRows = queryDbJsonSnapshotOnLock(dbPath, USAGE_SQL, {
-      tempPrefix: 'vibe-usage-mcode',
-    });
-  } catch (err) {
-    if (isSqliteUnavailableError(err)) throw sqliteUnavailableError('mcode');
-    return { buckets: [], sessions: [], skipped: true };
-  }
+  const dbPaths = getMcodeDbPaths();
+  // The first store that exists is the one the running CLI would use; schema
+  // or read failures there keep the fail-soft contract below. Later stores are
+  // best-effort extras (profiles, pre-npm / pre-rename homes) and a broken one
+  // must not suppress the live store.
+  const primary = dbPaths.find(path => existsSync(path));
 
   const entries = [];
+  const warnings = [];
+  // mcode's own migration can COPY a relocated legacy tree into ~/.minimax, so
+  // both copies exist. Collapse rows that reappear unchanged in a later store;
+  // duplicates inside one store are left alone — there they are the ledger.
+  const seenAcrossStores = new Set();
 
-  for (const row of usageRows) {
-    const sessionId = row.session_id != null ? String(row.session_id) : '';
-    if (!sessionId) continue;
-    const ts = tsToDate(row.ts);
-    if (!ts) continue;
+  for (const dbPath of dbPaths) {
+    if (!existsSync(dbPath)) continue;
+    const isPrimary = dbPath === primary;
 
-    // MCode stores output and reasoning as separate counters. Its own
-    // summary code computes total = input + output + reasoning, so do not
-    // subtract reasoning from output here.
-    const inputRaw = toNonNegative(row.input_tokens);
-    const cacheWrite = toNonNegative(row.cache_write_tokens);
-    const outputRaw = toNonNegative(row.output_tokens);
-    const reasoningRaw = toNonNegative(row.reasoning_tokens);
-    const cacheRead = toNonNegative(row.cache_read_tokens);
-
-    const inputTokens = inputRaw + cacheWrite;
-    const reasoningOutputTokens = reasoningRaw;
-    const outputTokens = outputRaw;
-    const cachedInputTokens = cacheRead;
-
-    if (
-      inputTokens +
-        outputTokens +
-        cachedInputTokens +
-        reasoningOutputTokens ===
-      0
-    ) {
+    // Schema guard: every allow-listed column must exist. If the mcode
+    // runtime ever renames / drops a column, fail soft (skipped) so the
+    // incremental sync keeps the last good upload state for this source.
+    let schemaOk;
+    try {
+      schemaOk =
+        dbHasColumns(dbPath, 'local_runtime_token_usage', TOKEN_COLUMNS) &&
+        dbHasColumns(dbPath, 'local_runtime_sessions', SESSION_COLUMNS);
+    } catch (err) {
+      if (isSqliteUnavailableError(err)) throw sqliteUnavailableError('mcode');
+      schemaOk = false;
+    }
+    if (!schemaOk) {
+      if (isPrimary) return { buckets: [], sessions: [], skipped: true };
+      warnings.push(`MiniMax Code: 跳过结构不兼容的数据库 ${dbPath}`);
       continue;
     }
 
-    const projectPath = row.project_workspace_dir || row.workspace_dir;
-    const project = projectPath ? projectFromPath(String(projectPath)) : 'unknown';
-    const model = row.model != null && String(row.model).trim()
-      ? String(row.model).trim()
-      : 'unknown';
+    // Read tokens and session project metadata from one statement/snapshot.
+    let usageRows;
+    try {
+      usageRows = queryDbJsonSnapshotOnLock(dbPath, USAGE_SQL, {
+        tempPrefix: 'vibe-usage-mcode',
+      });
+    } catch (err) {
+      if (isSqliteUnavailableError(err)) throw sqliteUnavailableError('mcode');
+      if (isPrimary) return { buckets: [], sessions: [], skipped: true };
+      warnings.push(`MiniMax Code: 无法读取 ${dbPath}，已跳过: ${err.message}`);
+      continue;
+    }
 
-    entries.push({
-      source: SOURCE,
-      model,
-      project,
-      timestamp: ts,
-      inputTokens,
-      outputTokens,
-      cachedInputTokens,
-      reasoningOutputTokens,
-    });
+    const identitiesInStore = new Set();
+    for (const row of usageRows) {
+      // Identity covers every selected column; only a byte-identical ledger
+      // row can collapse, and only against an earlier store.
+      const identity = JSON.stringify(row);
+      if (seenAcrossStores.has(identity)) continue;
+      identitiesInStore.add(identity);
+
+      const sessionId = row.session_id != null ? String(row.session_id) : '';
+      if (!sessionId) continue;
+      const ts = tsToDate(row.ts);
+      if (!ts) continue;
+
+      // MCode stores output and reasoning as separate counters. Its own
+      // summary code computes total = input + output + reasoning, so do not
+      // subtract reasoning from output here.
+      const inputRaw = toNonNegative(row.input_tokens);
+      const cacheWrite = toNonNegative(row.cache_write_tokens);
+      const outputRaw = toNonNegative(row.output_tokens);
+      const reasoningRaw = toNonNegative(row.reasoning_tokens);
+      const cacheRead = toNonNegative(row.cache_read_tokens);
+
+      const inputTokens = inputRaw + cacheWrite;
+      const reasoningOutputTokens = reasoningRaw;
+      const outputTokens = outputRaw;
+      const cachedInputTokens = cacheRead;
+
+      if (
+        inputTokens +
+          outputTokens +
+          cachedInputTokens +
+          reasoningOutputTokens ===
+        0
+      ) {
+        continue;
+      }
+
+      const projectPath = row.project_workspace_dir || row.workspace_dir;
+      const project = projectPath ? projectFromPath(String(projectPath)) : 'unknown';
+      const model = row.model != null && String(row.model).trim()
+        ? String(row.model).trim()
+        : 'unknown';
+
+      entries.push({
+        source: SOURCE,
+        model,
+        project,
+        timestamp: ts,
+        inputTokens,
+        outputTokens,
+        cachedInputTokens,
+        reasoningOutputTokens,
+      });
+    }
+    for (const identity of identitiesInStore) seenAcrossStores.add(identity);
   }
 
   return {
     buckets: aggregateToBuckets(entries),
-    // The token ledger contains assistant usage rows only. Reconstructing
-    // user prompts would require reading message payloads, which this parser
-    // deliberately never selects, so mcode emits buckets only like Alma.
     sessions: [],
+    ...(warnings.length > 0 ? { warnings } : {}),
   };
 }
 
