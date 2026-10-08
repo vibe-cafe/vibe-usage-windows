@@ -1,13 +1,32 @@
-import { afterEach, expect, test } from "vitest";
+import { afterEach, beforeAll, expect, test } from "vitest";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { extraRootsLoadPatch, formatInvokeError } from "../src/lib/extraRoots";
 import { ExtraRoots } from "../src/lib/types";
-import { validateExtraRoot } from "../src-tauri/resources/cli/src/extra-roots.js";
+import { cliPath } from "./cliUnderTest.mjs";
 
-const cliEntry = join(process.cwd(), "src-tauri/resources/cli/bin/vibe-usage.js");
+// The CLI is not bundled any more — the app resolves `@vibe-cafe/vibe-usage@latest`
+// at run time — so both the entry point and the validator below come from the
+// published package this run resolved.
+const cliEntry = cliPath("bin/vibe-usage.js");
+
+type ValidateExtraRoot = (
+  source: string,
+  value: string,
+) => { ok: boolean; path: unknown; reason?: string };
+let validateExtraRoot: ValidateExtraRoot;
+
+// A static import is impossible here: the path only exists after the launcher
+// resolves `latest`, so the specifier is runtime-selected.
+beforeAll(async () => {
+  const mod = (await import(pathToFileURL(cliPath("src/extra-roots.js")).href)) as {
+    validateExtraRoot: ValidateExtraRoot;
+  };
+  validateExtraRoot = mod.validateExtraRoot;
+});
 
 const tempDirs: string[] = [];
 

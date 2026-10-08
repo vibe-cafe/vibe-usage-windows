@@ -1,12 +1,16 @@
 #!/usr/bin/env node
 // Version consistency gate (counterpart of macOS scripts/check-version.sh):
-// App versions must agree, and the vendored CLI snapshot must carry the concrete
-// version pinned in package.json#vibeUsageCliVersion.
+// the three app version locations must agree.
 //
-// This script is offline and never re-vendors: it only compares the checked-in
-// snapshot against the pin, which is what keeps a release reproducible. Resolving
-// npm's `latest` dist-tag happens in scripts/vendor-cli.mjs, which a maintainer
-// runs by hand; upstream drift is reported by scripts/verify-cli-upstream.mjs.
+// There is no CLI version to check any more. The app runs
+// `@vibe-cafe/vibe-usage@latest` through `src-tauri/resources/cli-bootstrap.mjs`,
+// which resolves the registry's `latest` dist-tag at run time and caches what it
+// got — a client-side pin rots silently and freezes users out of every CLI fix,
+// the same policy the macOS app follows. `check-cli.mjs` in the macOS repo is
+// the pattern for validating the *published* package's contracts; this app
+// cannot check a version offline because it deliberately does not pin one.
+//
+// This script is offline and only reads the app manifests.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -18,38 +22,30 @@ const read = (p) => fs.readFileSync(path.join(root, p), "utf8");
 const packageJson = JSON.parse(read("package.json"));
 const pkg = packageJson.version;
 const cliChannel = packageJson.vibeUsageCliChannel;
-const expectedCli = packageJson.vibeUsageCliVersion;
 const tauri = JSON.parse(read("src-tauri/tauri.conf.json")).version;
 const cargo = /\[workspace\.package\][^[]*?version\s*=\s*"([^"]+)"/s.exec(read("Cargo.toml"))?.[1];
-const vendoredCli = JSON.parse(read("src-tauri/resources/cli/package.json")).version;
-const vendoredSource = JSON.parse(read("src-tauri/resources/cli/.vibe-usage-source.json"));
 
 console.log(`package.json:     ${pkg}`);
 console.log(`tauri.conf.json:  ${tauri}`);
 console.log(`Cargo.toml:       ${cargo}`);
 console.log(`CLI channel:      ${cliChannel}`);
-console.log(`Expected CLI:     ${expectedCli}`);
-console.log(`Vendored CLI:     ${vendoredCli}`);
-console.log(`CLI source:       ${vendoredSource.source}${vendoredSource.commit ? ` ${vendoredSource.commit}` : ""}`);
 
 if (pkg !== tauri || pkg !== cargo) {
   console.error("✗ version mismatch — update all three before releasing");
   process.exit(1);
 }
+// The channel is the one CLI setting a release can get wrong: anything but
+// `latest` would be a pin, and the launcher reads the dist-tag itself.
 if (cliChannel !== "latest") {
   console.error("✗ CLI channel must be latest");
   process.exit(1);
 }
-if (vendoredCli !== expectedCli) {
-  console.error("✗ vendored CLI does not match the pinned release version");
+if (packageJson.vibeUsageCliVersion !== undefined) {
+  console.error("✗ vibeUsageCliVersion must not come back — the app resolves latest at run time");
   process.exit(1);
 }
-if (!/^\d+\.\d+\.\d+(?:[-+].+)?$/.test(vendoredCli)) {
-  console.error("✗ vendored CLI must contain a concrete semantic version");
+if (!fs.existsSync(path.join(root, "src-tauri/resources/cli-bootstrap.mjs"))) {
+  console.error("✗ src-tauri/resources/cli-bootstrap.mjs is missing — the app has no way to run the CLI");
   process.exit(1);
 }
-if (vendoredSource.version !== vendoredCli) {
-  console.error("✗ vendored CLI source metadata disagrees with the snapshot — re-run scripts/vendor-cli.mjs");
-  process.exit(1);
-}
-console.log("✓ app versions and pinned vendored CLI are consistent");
+console.log("✓ app versions agree; CLI is resolved from the registry's latest at run time");

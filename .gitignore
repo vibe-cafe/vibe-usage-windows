@@ -9,3 +9,6 @@ tsconfig.tsbuildinfo
 
 # Local acceptance receipts and installers are never source files.
 /win_test/
+
+# Resolved @vibe-cafe/vibe-usage package used by the CLI-behaviour tests
+.cli-under-test/

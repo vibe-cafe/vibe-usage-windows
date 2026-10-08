@@ -2,9 +2,12 @@ import { expect, test } from "vitest";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
+import { cliPath } from "./cliUnderTest.mjs";
 
-test("bundled CLI returns the quota contract without inherited account credentials", () => {
+// Asserts the quota contract of the CLI the app actually runs (resolved from
+// npm's `latest` dist-tag) — the Rust side parses exactly this shape.
+test("published CLI returns the quota contract without inherited account credentials", () => {
   const root = mkdtempSync(join(tmpdir(), "vibe-windows-quota-"));
   try {
     const env: NodeJS.ProcessEnv = {
@@ -23,7 +26,7 @@ test("bundled CLI returns the quota contract without inherited account credentia
     };
     const invoke = (...args: string[]) => {
       const result = spawnSync(process.execPath, [
-        resolve("src-tauri/resources/cli/bin/vibe-usage.js"), ...args,
+        cliPath("bin/vibe-usage.js"), ...args,
       ], { env, cwd: root, encoding: "utf8", timeout: 10_000 });
       expect(result.error).toBeUndefined();
       expect(result.status).toBe(0);

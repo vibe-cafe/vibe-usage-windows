@@ -38,17 +38,14 @@ jobs:
       - name: Version consistency
         run: node scripts/check-version.mjs
 
-      # Release the reviewed, checked-in CLI snapshot. Pulling npm's moving
-      # latest tag here could silently replace the code covered by this build.
-      - name: Verify pinned vendored CLI snapshot
-        run: node scripts/check-version.mjs
-
-      # Advisory only. A release must stay reproducible, so a newer upstream CLI
-      # can never block or alter this build — it is reported so the upgrade PR can
-      # be opened deliberately. Reproducibility is unaffected either way.
-      - name: Report CLI upstream drift (advisory)
-        continue-on-error: true
-        run: node scripts/verify-cli-upstream.mjs
+      # The app no longer bundles the CLI: `cli-bootstrap.mjs` resolves
+      # `@vibe-cafe/vibe-usage@latest` in the user's machine and runs it with the
+      # bundled Node. It is the only path from this build to the CLI, so a build
+      # whose launcher cannot resolve and execute latest is broken for every
+      # user — this exercises that path for real (registry + integrity + run)
+      # instead of comparing a checked-in snapshot.
+      - name: CLI launcher resolves and runs latest
+        run: node src-tauri/resources/cli-bootstrap.mjs --version
 
       - name: Bundle Node runtime
         run: node scripts/fetch-node.mjs

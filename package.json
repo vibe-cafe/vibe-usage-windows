@@ -3,7 +3,6 @@
   "private": true,
   "version": "0.7.2",
   "vibeUsageCliChannel": "latest",
-  "vibeUsageCliVersion": "0.14.0",
   "type": "module",
   "description": "Vibe Usage for Windows — AI coding tool token usage tracker (Windows port of the macOS Vibe Usage app)",
   "scripts": {
@@ -13,10 +12,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "tauri": "tauri",
-    "vendor:cli": "node scripts/vendor-cli.mjs",
     "fetch:node": "node scripts/fetch-node.mjs",
     "check:version": "node scripts/check-version.mjs",
-    "check:cli-upstream": "node scripts/verify-cli-upstream.mjs",
+    "smoke:cli-launcher": "node src-tauri/resources/cli-bootstrap.mjs --version",
     "release:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release-windows.ps1",
     "release:windows:test": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release-windows.ps1 -ExternalTest"
   },

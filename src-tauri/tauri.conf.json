@@ -58,7 +58,7 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "resources/cli": "cli"
+      "resources/cli-bootstrap.mjs": "cli-bootstrap.mjs"
     },
     "windows": {
       "webviewInstallMode": {

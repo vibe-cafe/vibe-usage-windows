@@ -10,31 +10,31 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import zlib from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
+import { cliPath } from "./cliUnderTest.mjs";
 
 /**
- * Regression coverage for the DSH (DeepSeek Harness) parser that ships inside
- * the Windows installer.
+ * Regression coverage for the DSH (DeepSeek Harness) parser the Windows app runs.
  *
- * The Windows app never runs `npx`: `sync_engine.rs` always executes the vendored
- * snapshot at `src-tauri/resources/cli`. Release builds never re-vendor either —
- * the workflow only re-runs `check-version.mjs` against the snapshot committed in
- * the repository. A vendored CLI that lags upstream therefore ships to users
- * silently, which is exactly how 0.5.12 shipped a V0-only DSH parser while
- * DeepSeek Harness had moved to `session.v3.jsonl.zstd`.
+ * The app does not bundle the CLI: `sync_engine.rs` runs
+ * `src-tauri/resources/cli-bootstrap.mjs`, which resolves
+ * `@vibe-cafe/vibe-usage@latest` from the registry and executes it with the
+ * bundled Node. These tests therefore drive the *published* parser that
+ * resolution produced. That is the point of them: 0.5.12 shipped a V0-only DSH
+ * parser while DeepSeek Harness had moved to `session.v3.jsonl.zstd`, and a test
+ * that reads a checked-in snapshot cannot catch a snapshot that is already stale.
  *
- * These tests drive the real vendored parser in a subprocess, so they assert the
- * artifact users execute rather than a copy of its logic. No network access and
- * no real DSH store mutation is involved.
+ * The parser runs in a subprocess, so these assert the artifact users execute
+ * rather than a copy of its logic. Resolution needs the registry (cached after
+ * the first fetch); no real DSH store is mutated.
  */
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = resolve(HERE, "..");
-const PARSER_REL = "src-tauri/resources/cli/src/parsers/dsh.js";
-const DRIVER = join(HERE, "run-vendored-dsh-parser.mjs");
+const PARSER_PATH = cliPath("src/parsers/dsh.js");
+const DRIVER = join(HERE, "run-dsh-parser.mjs");
 
 const hasBuiltinZstd = typeof zlib.zstdCompressSync === "function";
 
@@ -190,13 +190,10 @@ interface ParserResult {
   error?: { name: string; code: string | null; message: string };
 }
 
-/** Run the vendored DSH parser from the installer resources against a fixture store. */
-function runVendoredParser(sessionsDir: string, parserPath?: string): ParserResult {
+/** Run the published DSH parser from the installer resources against a fixture store. */
+function runParser(sessionsDir: string, parserPath?: string): ParserResult {
   const env: NodeJS.ProcessEnv = { ...process.env, VIBE_USAGE_DSH_SESSIONS: sessionsDir };
-  if (parserPath) env.VIBE_USAGE_DSH_PARSER_PATH = parserPath;
-  // Never inherit a real DSH root from the ambient environment: every assertion
-  // below must describe this fixture store alone.
-  else delete env.VIBE_USAGE_DSH_PARSER_PATH;
+  env.VIBE_USAGE_DSH_PARSER_PATH = parserPath ?? PARSER_PATH;
 
   const proc = spawnSync(process.execPath, [DRIVER, sessionsDir], { encoding: "utf8", env });
   if (proc.status !== 0) {
@@ -216,9 +213,9 @@ function totals(result: ParserResult) {
   return sum;
 }
 
-describe("vendored DSH parser — parser generation", () => {
+describe("published DSH parser — parser generation", () => {
   it("accepts the current DSH session format generation, not just V0", () => {
-    const source = readFileSync(join(REPO_ROOT, PARSER_REL), "utf8");
+    const source = readFileSync(PARSER_PATH, "utf8");
 
     // A V0-only parser pins the constant to 0 and compares for equality, which is
     // what silently dropped every session.v3 file.
@@ -233,12 +230,12 @@ describe("vendored DSH parser — parser generation", () => {
   });
 });
 
-describe("vendored DSH parser — current generation", () => {
+describe("published DSH parser — current generation", () => {
   it("enumerates and parses session.v3.jsonl.zstd", { skip: !hasBuiltinZstd }, () => {
     const sessionsDir = makeStore();
     writeSession(sessionsDir, "session-current-v3", "session.v3.jsonl.zstd", v3Records("session-current-v3"));
 
-    const result = runVendoredParser(sessionsDir);
+    const result = runParser(sessionsDir);
 
     expect(result.ok).toBe(true);
     expect(result.buckets).toHaveLength(1);
@@ -256,7 +253,7 @@ describe("vendored DSH parser — current generation", () => {
     const sessionsDir = makeStore();
     writeSession(sessionsDir, "session-plain-v3", "session.v3.jsonl", v3Records("session-plain-v3"));
 
-    const result = runVendoredParser(sessionsDir);
+    const result = runParser(sessionsDir);
 
     expect(result.ok).toBe(true);
     expect(totals(result)).toEqual(EXPECTED_V3);
@@ -266,7 +263,7 @@ describe("vendored DSH parser — current generation", () => {
     const sessionsDir = makeStore();
     writeSession(sessionsDir, "session-buckets", "session.v3.jsonl.zstd", v3Records("session-buckets"));
 
-    const result = runVendoredParser(sessionsDir);
+    const result = runParser(sessionsDir);
     const bucket = result.buckets![0];
 
     // Cache writes fold into input; they must not also appear anywhere else.
@@ -297,14 +294,14 @@ describe("vendored DSH parser — current generation", () => {
     writeFileSync(join(dir, "session.v3.jsonl.zstd.tmp"), Buffer.from("noise"));
     writeFileSync(join(dir, "session.v3.backup.jsonl"), Buffer.from("{}\n"));
 
-    const result = runVendoredParser(sessionsDir);
+    const result = runParser(sessionsDir);
 
     expect(result.ok).toBe(true);
     expect(totals(result)).toEqual(EXPECTED_V3);
   });
 });
 
-describe("vendored DSH parser — generation selection", () => {
+describe("published DSH parser — generation selection", () => {
   it("counts only the newest generation when V0 and V3 coexist", { skip: !hasBuiltinZstd }, () => {
     const sessionsDir = makeStore();
     const dir = writeSession(sessionsDir, "session-migrated", "session.jsonl.zstd", v0Records("session-migrated"));
@@ -313,7 +310,7 @@ describe("vendored DSH parser — generation selection", () => {
       zstdFrames(v3Records("session-migrated")),
     );
 
-    const result = runVendoredParser(sessionsDir);
+    const result = runParser(sessionsDir);
 
     expect(result.ok).toBe(true);
     expect(result.buckets).toHaveLength(1);
@@ -329,7 +326,7 @@ describe("vendored DSH parser — generation selection", () => {
     const sessionsDir = makeStore();
     writeSession(sessionsDir, "session-legacy", "session.jsonl", v0Records("session-legacy"));
 
-    const result = runVendoredParser(sessionsDir);
+    const result = runParser(sessionsDir);
 
     expect(result.ok).toBe(true);
     expect(totals(result)).toEqual(EXPECTED_V0);
@@ -342,7 +339,7 @@ describe("vendored DSH parser — generation selection", () => {
     // upload stale numbers under the current session's identity.
     writeFileSync(join(dir, "session.v9.jsonl"), Buffer.from("{}\n"));
 
-    const result = runVendoredParser(sessionsDir);
+    const result = runParser(sessionsDir);
 
     expect(result.ok).toBe(true);
     expect(result.buckets).toHaveLength(0);
@@ -351,7 +348,7 @@ describe("vendored DSH parser — generation selection", () => {
   });
 });
 
-describe("vendored DSH parser — real store smoke test", () => {
+describe("published DSH parser — real store smoke test", () => {
   /**
    * Opt-in, never part of an automated run.
    *
@@ -394,7 +391,7 @@ describe("vendored DSH parser — real store smoke test", () => {
       cpSync(join(liveSessions, name), join(sessionsDir, name), { recursive: true });
     }
 
-    const result = runVendoredParser(sessionsDir);
+    const result = runParser(sessionsDir);
 
     expect(result.ok).toBe(true);
     expect(result.buckets?.length).toBeGreaterThan(0);

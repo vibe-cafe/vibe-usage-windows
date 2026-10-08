@@ -176,8 +176,11 @@ mod enabled {
     }
 
     fn cli_source() -> CliSource {
-        serde_json::from_str(include_str!("../../resources/cli/.vibe-usage-source.json"))
-            .unwrap_or_default()
+        // The CLI is no longer bundled: the launcher resolves `latest` at run
+        // time and caches the version it got, so a build cannot state one at
+        // compile time. Report the channel; the resolved version lives in the
+        // launcher's cache under the app's data dir.
+        CliSource { version: Some("latest".to_string()), commit: None }
     }
 
     fn status_code(status: &RateLimitStatus) -> &'static str {

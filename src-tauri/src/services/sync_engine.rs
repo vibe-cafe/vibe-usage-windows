@@ -1,8 +1,10 @@
 //! CLI sync subprocess — port of Services/SyncEngine.swift.
 //!
-//! Runs `node <resources>/cli/bin/vibe-usage.js sync` (the vendored
-//! @vibe-cafe/vibe-usage CLI) with a 120s timeout and no console window.
-
+//! Runs `node <resources>/cli-bootstrap.mjs sync`, which resolves
+//! `@vibe-cafe/vibe-usage@latest` from the registry, caches it, and runs it with
+//! this app's bundled Node — 120s timeout, no console window. The CLI is *not*
+//! bundled: a pinned copy rots silently and freezes users out of every CLI fix,
+//! which is the policy the macOS app already follows (`@latest` only).
 use crate::process_utils;
 use crate::state::{AppCtx, SyncState, SyncStatus};
 use std::path::PathBuf;
@@ -18,9 +20,10 @@ fn resource_path(app: &AppHandle, rel: &str) -> Option<PathBuf> {
     app.path().resolve(rel, tauri::path::BaseDirectory::Resource).ok()
 }
 
-/// The vendored CLI entry script.
+/// The CLI launcher script. It resolves and runs the published CLI, so nothing
+/// here depends on a particular CLI version.
 pub fn cli_entry(app: &AppHandle) -> Option<PathBuf> {
-    let p = resource_path(app, "cli/bin/vibe-usage.js")?;
+    let p = resource_path(app, "cli-bootstrap.mjs")?;
     p.is_file().then_some(p)
 }
 
@@ -52,10 +55,10 @@ pub fn node_for_statusline(app: &AppHandle) -> PathBuf {
 }
 
 fn cli_command(app: &AppHandle, args: &[&str]) -> Result<tokio::process::Command, String> {
-    let cli = cli_entry(app).ok_or("未找到内置 CLI 资源")?;
+    let cli = cli_entry(app).ok_or("未找到 CLI 启动脚本资源")?;
     let rt = detect_runtime(app).ok_or("未检测到可用的 Node.js 运行时，请安装 Node.js 22+")?;
-    let cli_dir = cli.parent().ok_or("内置 CLI 路径无效")?;
-    let cli_file = cli.file_name().ok_or("内置 CLI 路径无效")?;
+    let cli_dir = cli.parent().ok_or("CLI 启动脚本路径无效")?;
+    let cli_file = cli.file_name().ok_or("CLI 启动脚本路径无效")?;
 
     let mut cmd = tokio::process::Command::new(&rt.path);
     cmd.current_dir(cli_dir)
@@ -71,8 +74,17 @@ fn cli_command(app: &AppHandle, args: &[&str]) -> Result<tokio::process::Command
         let path = std::env::var("PATH").unwrap_or_default();
         cmd.env("PATH", format!("{}{sep}{path}", dir.display()));
     }
+    // The CLI resolves its state file from `VIBE_USAGE_STATE_DIR` alone — it does
+    // not follow the config dir — so both have to be set. The Windows build has
+    // always kept the two in the same directory, and passing the config dir twice
+    // is what keeps a run from writing `~/.vibe-usage/state.json` behind the
+    // app's back (which no uninstall would clean up).
     cmd.env(
         "VIBE_USAGE_CONFIG_DIR",
+        app.state::<AppCtx>().config.config_dir.clone(),
+    );
+    cmd.env(
+        "VIBE_USAGE_STATE_DIR",
         app.state::<AppCtx>().config.config_dir.clone(),
     );
     cmd.env("VIBE_USAGE_SURFACE", "windows-app");

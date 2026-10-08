@@ -1,32 +1,31 @@
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { cliPath } from "./cliUnderTest.mjs";
 
 /**
- * Behavioural coverage for the Windows patch to OpenCode root resolution.
+ * Behavioural coverage for the Windows OpenCode root resolution the app relies on.
  *
- * Upstream resolves OpenCode data from the XDG location only. Windows builds keep
- * session data under `%LOCALAPPDATA%\opencode`, so scripts/vendor-cli.mjs adds
- * that root to the default list in the vendored snapshot. A source fingerprint
- * cannot show that the added root is *reachable*: the patch is a control-flow
+ * Windows builds keep OpenCode session data under `%LOCALAPPDATA%\opencode`, and
+ * the CLI carries that root in its default list (upstream since 0.14.1). A source
+ * fingerprint cannot show that the root is *reachable*: it is a control-flow
  * change inside `defaultOpenCodeRoots()`, and the failure mode this suite exists
- * for is a rebase that leaves the function syntactically patched while producing
- * the wrong roots.
+ * for is a change that leaves the function syntactically fine while producing the
+ * wrong roots.
  *
  * The tests therefore call the exported `getOpenCodeStores()` — the public
- * root-discovery entry point the parser itself uses — in a subprocess whose
- * `USERPROFILE` and `LOCALAPPDATA` point at throwaway fixture directories. The
- * developer's real profile is never consulted, and `VIBE_USAGE_OPENCODE_DIRS` is
- * cleared so the environment cannot silently replace the defaults under test.
+ * root-discovery entry point the parser itself uses — from the published package
+ * the launcher resolved, in a subprocess whose `USERPROFILE` and `LOCALAPPDATA`
+ * point at throwaway fixture directories. The developer's real profile is never
+ * consulted, and `VIBE_USAGE_OPENCODE_DIRS` is cleared so the environment cannot
+ * silently replace the defaults under test.
  */
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = resolve(HERE, "..");
-const MODULE_REL = join("src-tauri", "resources", "cli", "src", "opencode-roots.js");
-const MODULE_PATH = join(REPO_ROOT, MODULE_REL);
+const MODULE_PATH = cliPath("src/opencode-roots.js");
 const PROBE = join(HERE, "run-opencode-roots-probe.mjs");
 
 const tempDirs: string[] = [];
@@ -94,8 +93,7 @@ function probe(
   // The override would bypass the defaults entirely, which is the opposite of
   // what these tests assert.
   delete env.VIBE_USAGE_OPENCODE_DIRS;
-  if (options.modulePath) env.VIBE_USAGE_OPENCODE_ROOTS_PATH = options.modulePath;
-  else delete env.VIBE_USAGE_OPENCODE_ROOTS_PATH;
+  env.VIBE_USAGE_OPENCODE_ROOTS_PATH = options.modulePath ?? MODULE_PATH;
 
   const proc = spawnSync(process.execPath, [PROBE, options.platform ?? "-"], { encoding: "utf8", env });
   if (proc.status !== 0 || !proc.stdout) {
