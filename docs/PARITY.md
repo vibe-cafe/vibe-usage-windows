@@ -78,7 +78,7 @@
 两处不属于"已上游"：
 
 1. **`STATE_DIR` 回退（改由应用侧承担）**：`src/state.js` 只识别 `VIBE_USAGE_STATE_DIR`，不跟随 `VIBE_USAGE_CONFIG_DIR`；`src/config.js` 的 `CONFIG_DIR` 则原生读取。因此 `sync_engine.rs` 同时导出 `VIBE_USAGE_CONFIG_DIR` 与 `VIBE_USAGE_STATE_DIR`（同一个应用配置目录），以保持 Windows 版"状态与配置同目录"的既有语义——否则状态会落到 `~/.vibe-usage/state.json`，卸载也不会清理。
-2. **Codex 持久化用量记录（仍是阻塞项）**：`src/parsers/codex-usage-record.js` 与 `codex.js` / `codex-cache.js` / `codex-segments.js` 中对应的接线只存在于原内置副本，上游 `main` 与 `0.14.1` 均无。它处理 `token_usage_record` 事件，并按"单次请求用量"对齐持久记录与 UI 累计计数（中断后两者会分叉、镜像事件会重复计数）。**在该特性进入上游并发布之前，切到 `latest` 会让 Windows 端的 Codex 计量与当前版本不一致**，`tests/codexUsageRecord.test.ts` 因此保持红；上游落地后这条即为绿的验收信号。
+2. **Codex 持久化用量记录（已上游，待发版）**：`src/parsers/codex-usage-record.js` 与 `codex.js` / `codex-cache.js` / `codex-segments.js` 的接线原先只存在于内置副本。现已作为 vibe-cafe/vibe-usage#121 提到上游（`node --test` 528 passed / 0 failed，新增 12 个用例；与内置副本逐字节等价，只剩注释差异）。含该修复的版本发布后，`tests/codexUsageRecord.test.ts` 即应转绿——这条用例就是验收信号。它并非 Windows 专属逻辑（`token_usage_record` 是 Codex 的日志格式），此前放在客户端里，macOS 端跑同一解析器时同样少算。
 
 ## 共享文件契约（与 CLI / macOS 版一致）
 
