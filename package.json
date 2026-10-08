@@ -1,7 +1,7 @@
 {
   "name": "vibe-usage-app-windows",
   "private": true,
-  "version": "0.7.1",
+  "version": "0.7.2",
   "vibeUsageCliChannel": "latest",
   "vibeUsageCliVersion": "0.14.0",
   "type": "module",
