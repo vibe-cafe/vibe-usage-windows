@@ -29,10 +29,10 @@ Windows 应用，自动追踪 AI 编程工具的 Token 用量和费用。App 常
 - ZCode Key 只保存在当前 Windows 用户的 Credential Manager 中，不写入设置文件、不回显，也不会跨区域试发
 - 支持今天 / 24H / 7D / 30D / 90D / 自定义日期，以及终端 / 工具 / 模型 / 项目筛选
 - 可在托盘图标显示今日费用和 Token 数
-- 内置 [@vibe-cafe/vibe-usage](https://github.com/vibe-cafe/vibe-usage) CLI 与 Node 运行时，开箱即用，无需安装 Node.js
+- 内置 Node 运行时与 CLI 启动器，开箱即用，无需安装 Node.js；CLI 本体在调用时从 npm 解析 `@vibe-cafe/vibe-usage@latest` 并按版本缓存
 - 可在设置中为 Codex、Grok、Antigravity / AGY 添加多个 Multica 或其他隔离运行时目录；各工具默认目录仍会继续扫描
 - 订阅配额读取对齐 macOS：Codex 优先读取实时官方用量、离线回退会话日志；Claude 使用无工具、无提示、无会话持久化的只读探测，不修改 Claude 状态栏配置
-- 内置 CLI 是仓库中已审查并固定的快照（版本见 `package.json` 的 `vibeUsageCliVersion`）；发布构建直接打包该快照，不会在构建期从 npm 解析或下载新的 Vibe Usage CLI，用户机器也不会在运行时拉取或执行未随安装包验证的新代码。npm `latest` 仅在维护者显式执行 `node scripts/vendor-cli.mjs` 更新快照时用于选择候选 CLI 版本
+- CLI 不内置、也不固定版本：`src-tauri/resources/cli-bootstrap.mjs` 在每次调用时解析 npm 的 `latest` dist-tag 并缓存该版本，因此上游修复不必等待本仓库发版即可到达用户。这也是 macOS 版一直采用的策略——固定版本的快照会静默落后，0.5.12 就是这样发出去一个只认 DSH V0 的解析器。启动器校验 tarball 的 sha512、校验失败即中止，并用暂存目录 + 原子改名安装，避免调度器与手动同步并发时互相破坏缓存
 - workflow_dispatch 生成的外测包可导出严格脱敏的配额诊断；正式 tag Release 不编译诊断实现，设置入口也不会显示
 - 支持开机自启动、单实例、应用内检查更新
 
@@ -88,10 +88,10 @@ pnpm tauri dev
 pnpm test                # 前端单测（formatters/aggregate/modelFamilies，与 Swift 实现对拍）
 powershell -NoProfile -File scripts/cargo-windows.ps1 test --workspace   # Rust 单测（配置迁移、产品发现/选择、配额桥、凭据边界等）
 powershell -NoProfile -File scripts/cargo-windows.ps1 test --workspace --features external-test-diagnostics # 外测更新隔离
-node scripts/test-vendored-cli.mjs --tests-from ../vibe-usage # 对实际内置 CLI 运行同版本的上游测试
+node --test tests/run-codex-usage-record.mjs   # Codex 用量记录（依赖下面的 CLI 解析）
 ```
 
-最后一项需要完整的 CLI Git checkout，其版本必须与内置快照一致（来源记录在 `src-tauri/resources/cli/.vibe-usage-source.json`）；npm 包没有 `test/` 目录，直接在里面运行 `node --test` 得到 0 项不能作为验收通过。
+涉及 CLI 行为的用例（`cliQuotaContract` / `cliConfigState` / `extraRoots` / `opencodeRoots` / `dshCompat` / `kimiQuota` / `uploadIdentity` / `codexUsageRecord`）不再对内置快照断言：`tests/cliUnderTest.mjs` 会调用发布用的启动器解析一次 npm `latest`，把这些断言指向用户真正会运行的那份 CLI（结果缓存在 `.cli-under-test/`，首次之后的运行只花一次元数据请求）。需要临时改用本地 CLI checkout 时设 `VIBE_USAGE_CLI_DIR`。
 
 当前“活跃时长”按会话累加 `activeSeconds`，并行会话会重复计时，Codex 单轮内也没有空闲截断；它不是人的实际使用时长。此轮不改变共享统计算法，跨端口径与历史数据处理另行评审。
 
@@ -111,7 +111,7 @@ Rust (Tauri 2)
   ├─ statusline_hook     仅安全退休旧版本能够证明归属的 Claude hook
   └─ updater             latest.json + SHA-256 校验 + NSIS 静默升级
 内置资源
-  ├─ resources/cli       vendored @vibe-cafe/vibe-usage（含 Windows 补丁, scripts/vendor-cli.mjs）
+  ├─ resources/cli-bootstrap.mjs  CLI 启动器：解析并缓存 npm latest，再用内置 Node 运行
   └─ resources/node      node.exe 22 LTS（scripts/fetch-node.mjs, 构建时下载）
 ```
 

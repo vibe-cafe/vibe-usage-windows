@@ -3,7 +3,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { parse } from '../src-tauri/resources/cli/src/parsers/codex.js';
+import { pathToFileURL } from 'node:url';
+import { cliPath } from './cliUnderTest.mjs';
+// A static import cannot be used: the CLI is resolved from npm's `latest` at run
+// time, so the parser path is only known once the launcher has resolved it.
+const { parse } = await import(pathToFileURL(cliPath('src/parsers/codex.js')).href);
 const at=n=>new Date(Date.UTC(2026,8,20,0,0,n)).toISOString();
 const u=(input=100,cached=20,output=10,reasoning=2)=>({input_tokens:input,cached_input_tokens:cached,output_tokens:output,reasoning_output_tokens:reasoning,total_tokens:input+output});
 const meta=(id='session',second=0,extra={})=>({timestamp:at(second),type:'session_meta',payload:{id,timestamp:at(second),cwd:'C:/test',...extra}});

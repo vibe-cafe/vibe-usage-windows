@@ -30,8 +30,10 @@ snapshot `14c7ccb5bf29` / development `458feb52202b` was tested on Windows:
 ## New revision
 
 App **0.5.12**, CLI **0.11.0**, unpublished. This revision has not yet run on
-Windows. Read package.json for the app version and the pinned CLI version;
-`.vibe-usage-source.json` records where the snapshot came from.
+Windows. Read package.json for the app version. That revision predates the
+current CLI model: the app no longer carries a pinned snapshot — it resolves
+`@vibe-cafe/vibe-usage@latest` at run time through
+`src-tauri/resources/cli-bootstrap.mjs`.
 
 - LONGPATH-CARGO-01: `scripts/cargo-windows.ps1` applies the same stable short
   target policy to development Cargo commands, forwards arguments and exit
@@ -110,7 +112,7 @@ node scripts/fetch-node.mjs
 powershell -NoProfile -File scripts/cargo-windows.ps1 test --workspace
 powershell -NoProfile -File scripts/cargo-windows.ps1 test --workspace --features external-test-diagnostics
 powershell -NoProfile -File scripts/cargo-windows.ps1 test -p vibe-usage-app --features external-test-diagnostics process_lifecycle -- --nocapture
-node scripts/test-vendored-cli.mjs --tests-from ..\vibe-usage
+node src-tauri/resources/cli-bootstrap.mjs --version   # 启动器能解析并运行 npm latest
 powershell -NoProfile -File scripts/cargo-windows.ps1 test -p vibe-usage-app --features external-test-diagnostics credential_manager_roundtrip_isolated -- --ignored --nocapture
 pnpm run release:windows:test
 ```

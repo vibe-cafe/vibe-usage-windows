@@ -1,14 +1,29 @@
-import { expect, test } from "vitest";
+import { beforeAll, expect, test } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  kimiCredentialPath,
-  kimiCredentialPaths,
-  parseKimiUsage,
-} from "../src-tauri/resources/cli/src/quotas/providers/kimi-code.js";
+import { pathToFileURL } from "node:url";
+import { cliPath } from "./cliUnderTest.mjs";
 
-test("bundled CLI reads Kimi Code 2.x quota fields", () => {
+type KimiQuotaModule = {
+  kimiCredentialPath: (...args: never[]) => string;
+  kimiCredentialPaths: (...args: never[]) => string[];
+  parseKimiUsage: (usage: unknown) => unknown;
+};
+let kimiCredentialPath: KimiQuotaModule["kimiCredentialPath"];
+let kimiCredentialPaths: KimiQuotaModule["kimiCredentialPaths"];
+let parseKimiUsage: KimiQuotaModule["parseKimiUsage"];
+
+// A static import cannot be used: the provider lives in the published CLI the
+// launcher resolved from npm's `latest` dist-tag, so its path is runtime-selected.
+beforeAll(async () => {
+  const mod = (await import(
+    pathToFileURL(cliPath("src/quotas/providers/kimi-code.js")).href
+  )) as KimiQuotaModule;
+  ({ kimiCredentialPath, kimiCredentialPaths, parseKimiUsage } = mod);
+});
+
+test("published CLI reads Kimi Code 2.x quota fields", () => {
   expect(parseKimiUsage({
     usages: {
       limit_5h: { used_ratio: 0.3, reset_time: "2026-09-11T18:00:00Z" },

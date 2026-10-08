@@ -71,17 +71,14 @@
 9. **设置页「托盘」分组**：macOS 的「菜单栏」对应 Windows 的「托盘」，两项合并进「常规」，不单列分组。
 10. **官方图标资产**：七家图标直接复用 macOS 已验收的官方标准资产（@2x 56px，透明底 + 官方容器），本仓库不改色、不加边框；卡片与设置页共用同一个 `ProviderIcon`。
 
-## CLI Windows 补丁（vendored，见 `scripts/vendor-cli.mjs`）
+## CLI Windows 适配（不再内置快照）
 
-上游 `@vibe-cafe/vibe-usage@0.11.0`（快照版本以 `package.json` 的 `vibeUsageCliVersion` 为准）的 Windows 问题，vendor 时自动打补丁（补丁锚点丢失会构建失败，防止 CLI 升级后静默失效）：
+应用不再内置 CLI：`src-tauri/resources/cli-bootstrap.mjs` 在每次调用时解析 npm `latest`、校验 sha512 后缓存并用内置 Node 运行。原先由 `scripts/vendor-cli.mjs` 打的那批 Windows 补丁已随 `windows-support` PR 进入上游（`src/init.js` 的 `cmd /c start`、`codex.js` / `qwen-code.js` 的反斜杠 cwd、`opencode-roots.js` 的 `%LOCALAPPDATA%\opencode`、`amp.js` 的 `%LOCALAPPDATA%\amp\threads`，以及 `config.json` / `state.json` 被误建成目录时的自愈）。
 
-1. `src/init.js` `openBrowser`：`execFile('start')` → `cmd /c start ""`（`start` 是 cmd 内建命令）
-2. `src/parsers/codex.js` `extractProject` 与 `src/parsers/qwen-code.js`：`split('/')` → `split(/[\\/]/)`（Windows cwd 反斜杠）
-3. `src/opencode-roots.js` 默认根列表：在 XDG 根之后追加 `%LOCALAPPDATA%\opencode`（0.10.31 起上游把根解析移出 parser，故补丁 rebase 到该文件；语义为追加候选根，XDG 仍排首位）
-4. `src/parsers/amp.js`：增加 `%LOCALAPPDATA%\amp\threads` 探测（原 XDG 路径保底）
-5. `src/state.js`：`STATE_DIR` 增加 `VIBE_USAGE_CONFIG_DIR` 回退，使 CLI 状态与配置落在同一应用配置目录；`src/config.js` / `src/state.js` 另含 `config.json` / `state.json` 路径被误创建为目录时的 EISDIR 自愈
+两处不属于"已上游"：
 
-其中 `VIBE_USAGE_CONFIG_DIR` 的支持程度在两个文件上并不相同：`src/config.js` 的 `CONFIG_DIR` 上游（0.10.31 起，含 0.11.0）已原生读取该变量，而 `src/state.js` 的 `STATE_DIR` 上游只识别 `VIBE_USAGE_STATE_DIR`，故第 5 项的回退仍由本仓库补丁提供，不能因上游版本较新而删除。以上补丁建议同步提交上游 PR；合并后 vendor 脚本的补丁会因锚点变化自动报错提醒移除。
+1. **`STATE_DIR` 回退（改由应用侧承担）**：`src/state.js` 只识别 `VIBE_USAGE_STATE_DIR`，不跟随 `VIBE_USAGE_CONFIG_DIR`；`src/config.js` 的 `CONFIG_DIR` 则原生读取。因此 `sync_engine.rs` 同时导出 `VIBE_USAGE_CONFIG_DIR` 与 `VIBE_USAGE_STATE_DIR`（同一个应用配置目录），以保持 Windows 版"状态与配置同目录"的既有语义——否则状态会落到 `~/.vibe-usage/state.json`，卸载也不会清理。
+2. **Codex 持久化用量记录（已上游，待发版）**：`src/parsers/codex-usage-record.js` 与 `codex.js` / `codex-cache.js` / `codex-segments.js` 的接线原先只存在于内置副本。现已作为 vibe-cafe/vibe-usage#121 提到上游（`node --test` 528 passed / 0 failed，新增 12 个用例；与内置副本逐字节等价，只剩注释差异）。含该修复的版本发布后，`tests/codexUsageRecord.test.ts` 即应转绿——这条用例就是验收信号。它并非 Windows 专属逻辑（`token_usage_record` 是 Codex 的日志格式），此前放在客户端里，macOS 端跑同一解析器时同样少算。
 
 ## 共享文件契约（与 CLI / macOS 版一致）
 
