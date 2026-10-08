@@ -43,6 +43,10 @@ test("Tauri sync injects the Windows App surface and package version", () => {
 test("the app resolves the CLI from npm's latest at run time", () => {
   const packageJson = JSON.parse(readFileSync("package.json", "utf-8"));
   const tauriConf = JSON.parse(readFileSync("src-tauri/tauri.conf.json", "utf-8"));
+  // The Windows overlay is what a Windows bundle actually uses, so both files
+  // have to ship the launcher — a deleted resource directory here fails the
+  // build only on the Windows runner.
+  const windowsConf = JSON.parse(readFileSync("src-tauri/tauri.windows.conf.json", "utf-8"));
   const workflow = readFileSync(".github/workflows/release.yml", "utf-8");
   const localRelease = readFileSync("scripts/release-windows.ps1", "utf-8");
 
@@ -53,6 +57,8 @@ test("the app resolves the CLI from npm's latest at run time", () => {
   expect(tauriConf.bundle.resources).toEqual({
     "resources/cli-bootstrap.mjs": "cli-bootstrap.mjs",
   });
+  expect(windowsConf.bundle.resources["resources/cli-bootstrap.mjs"]).toBe("cli-bootstrap.mjs");
+  expect(Object.keys(windowsConf.bundle.resources)).not.toContain("resources/cli");
   // The launcher is the app's only path to the CLI, so a release has to prove it
   // can resolve and execute latest.
   expect(workflow).toContain("cli-bootstrap.mjs --version");
