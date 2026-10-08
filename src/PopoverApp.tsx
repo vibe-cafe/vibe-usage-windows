@@ -10,6 +10,7 @@ import { TrendChart } from "./components/TrendChart";
 import { DistributionGrid } from "./components/DistributionGrid";
 import { FooterBar } from "./components/FooterBar";
 import { Inbox } from "lucide-react";
+import { UsageCoverage } from "./components/UsageCoverage";
 
 export function PopoverApp() {
   const state = useAppState();
@@ -55,6 +56,7 @@ function DashboardView() {
 
       <div className="no-scrollbar h-[560px] grow overflow-y-auto">
         <div className="flex flex-col gap-[14px] p-4">
+          {state.usageError && <div role="alert" className="text-[11px] text-danger">用量刷新失败，当前显示可能是旧数据：{state.usageError}</div>}
           {state.isInitialDataLoad || (!state.hasLoadedUsageData && state.buckets.length === 0) ? (
             <>
               <RateLimitCards />
@@ -94,6 +96,8 @@ function DashboardContent() {
           <FilterTags />
         </div>
         <SummaryCards />
+        <UsageCoverage />
+        <p className="text-[11px] leading-relaxed text-neutral-400">本机 Windows：{state.status?.hostname ?? "读取中"}。Token／费用仅统计已采集的会话日志，不代表订阅额度。Claude 桌面聊天及缺少本地日志的远程会话未计入。</p>
         <TrendChart />
         <DistributionGrid />
       </div>

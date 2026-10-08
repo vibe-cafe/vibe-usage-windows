@@ -18,6 +18,11 @@ const FIVE_HOURS: f64 = 5.0 * 3600.0;
 const SEVEN_DAYS: f64 = 7.0 * 86_400.0;
 
 pub async fn fetch() -> Result<ProviderRateLimit, String> {
+    // Desktop observations are local-only and must not be confused with a
+    // separately configured CLI account. No Claude process is started here.
+    if let Some(snapshot) = vibe_core::rate_limit::claude_desktop::read(
+        &vibe_core::quota_product::DiscoveryEnvironment::live(), now_epoch(),
+    ) { return Ok(snapshot); }
     let candidates = discover_binaries();
     if candidates.is_empty() {
         return Err("未找到 Claude Code".into());
@@ -231,6 +236,7 @@ fn parse_payload(root: &Value, now: f64) -> Option<ProviderRateLimit> {
             .map(capitalize),
         data_as_of: Some(now),
         fetched_at: Some(now),
+        source_label: None,
         five_hour_not_enforced: false,
         reset_credits_count: None,
         // A JSONL/cache snapshot cannot tell "used up" from "nothing here".
@@ -290,6 +296,7 @@ fn cached_snapshot_from(path: &Path, now: f64) -> Option<ProviderRateLimit> {
         plan_label: None,
         data_as_of: Some(fetched_at),
         fetched_at: Some(fetched_at),
+        source_label: None,
         five_hour_not_enforced: false,
         reset_credits_count: None,
         // A JSONL/cache snapshot cannot tell "used up" from "nothing here".

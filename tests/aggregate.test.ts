@@ -194,3 +194,66 @@ describe("rate-limit helpers", () => {
     expect(utilizationColor(90)).toBe("#F04545");
   });
 });
+
+describe("cache-write tokens", () => {
+  it("counts both TTLs once across summary, chart and device distribution without changing server cost", () => {
+    const b = bucket({ cacheCreation5mTokens: 20, cacheCreation1hTokens: 30 });
+    const summary = summarize([b], []);
+    const bars = buildChartData([b], [], "7D", 7, null, new Date("2026-07-03T12:00:00Z"));
+    const slices = aggregateSlices([b], b => b.hostname);
+    expect(summary.totalTokens).toBe(410);
+    expect(summary.totalCachedInputTokens).toBe(200);
+    expect(summary.totalCost).toBe(1.5);
+    expect(bars.reduce((n, b) => n + barTotal(b), 0)).toBe(410);
+    expect(slices.reduce((n, s) => n + s.tokens, 0)).toBe(410);
+  });
+  it("does not infer extra tokens from legacy totals or already-folded input", () => {
+    const b = bucket({ inputTokens: 150, totalTokens: 210, cacheCreationInputTokens: 50 });
+    expect(summarize([b], []).totalTokens).toBe(410);
+    expect(summarize([bucket({ cacheCreation5mTokens: null, cacheCreation1hTokens: null })], []).totalTokens).toBe(360);
+  });
+});
+
+describe("rolling chart boundaries", () => {
+  it("keeps the partial first day returned by a rolling 7-day query", () => {
+    const now = new Date("2026-10-04T21:00:00");
+    const buckets = [
+      bucket({ bucketStart: new Date("2026-09-27T00:00:00").toISOString() }),
+      bucket({ bucketStart: new Date("2026-10-04T00:00:00").toISOString() }),
+    ];
+    const sessions = [session({ firstMessageAt: new Date("2026-09-27T00:00:00").toISOString() })];
+    const bars = buildChartData(buckets, sessions, "7D", 7, null, now);
+    expect(bars).toHaveLength(8);
+    expect(bars[0].id).toBe("2026-09-27");
+    expect(bars.reduce((n, b) => n + b.cost, 0)).toBe(summarize(buckets, sessions).totalCost);
+    expect(bars.reduce((n, b) => n + barTotal(b), 0)).toBe(summarize(buckets, sessions).totalTokens);
+    expect(bars.reduce((n, b) => n + b.activeMinutes * 60, 0)).toBe(summarize(buckets, sessions).totalActiveSeconds);
+  });
+  it("keeps a returned partial first hour without extending today", () => {
+    const now = new Date("2026-10-04T21:30:00");
+    const edge = new Date(now.getTime() - 86400_000);
+    edge.setMinutes(0, 0, 0);
+    const buckets = [bucket({ bucketStart: edge.toISOString() })];
+    const bars = buildChartData(buckets, [], "1D", 1, null, now);
+    expect(bars).toHaveLength(25);
+    expect(bars.reduce((n, b) => n + b.cost, 0)).toBe(1.5);
+    expect(buildChartData(buckets, [], "today", 1, null, now)).toHaveLength(22);
+  });
+  it.each([
+    ["2026-03-10", ["2026-03-06", "2026-03-07", "2026-03-08", "2026-03-09", "2026-03-10"]],
+    ["2026-11-03", ["2026-10-30", "2026-10-31", "2026-11-01", "2026-11-02", "2026-11-03"]],
+  ])("fills calendar dates across DST ending %s", (end, expected) => {
+    const oldTz = process.env.TZ;
+    try {
+      process.env.TZ = "America/Los_Angeles";
+      const to = new Date(end + "T00:00:00");
+      const buckets = expected.map(day => bucket({ bucketStart: new Date(day + "T00:00:00").toISOString() }));
+      const bars = buildChartData(buckets, [], "custom", 5, to, to);
+      expect(bars.map(b => b.id)).toEqual(expected);
+      expect(bars.reduce((n, b) => n + b.cost, 0)).toBe(7.5);
+    } finally {
+      if (oldTz === undefined) delete process.env.TZ;
+      else process.env.TZ = oldTz;
+    }
+  });
+});

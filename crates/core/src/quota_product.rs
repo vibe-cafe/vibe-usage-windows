@@ -278,6 +278,9 @@ fn application_paths(
             _ => {}
         }
     }
+    if provider == RateLimitProvider::ClaudeCode {
+        paths.extend(crate::rate_limit::claude_desktop::data_dirs(environment));
+    }
     paths
 }
 

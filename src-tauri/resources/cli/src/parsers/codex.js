@@ -1,3 +1,4 @@
+import { normalizeUsageRecord } from './codex-usage-record.js';
 import {
   closeSync,
   createReadStream,
@@ -137,7 +138,7 @@ async function readSessionHeader(filePath, snapshotSize) {
   for await (const line of readLines(filePath, snapshotSize)) {
     if (!line.trim()) continue;
     try {
-      const obj = JSON.parse(line);
+      const obj = normalizeUsageRecord(JSON.parse(line));
       if (obj.type !== 'session_meta' || !obj.payload) continue;
       const meta = obj.payload;
       return {
@@ -336,7 +337,7 @@ async function indexSessionFile(filePath, snapshotSize, lines = null) {
   for await (const line of (lines ?? readLines(filePath, snapshotSize))) {
     if (!line.trim()) continue;
     try {
-      const obj = JSON.parse(line);
+      const obj = normalizeUsageRecord(JSON.parse(line));
       parsedRecordCount++;
 
       const recordTimestamp = timestampMs(obj.timestamp);
@@ -633,12 +634,17 @@ async function parseSessionFile(filePath, snapshotSize, fm, boundary, {
   let serviceTier = previousTail?.serviceTier || null;
   let prevTotal = previousTail?.prevTotal || null;
   let prevCumulativeTotal = previousTail?.prevCumulativeTotal ?? null;
+  let prevRecordTotal = previousTail?.prevRecordTotal ?? null;
+  let pendingUsageMirror = previousTail?.pendingUsageMirror ?? null;
   const start = previousTail?.parsedBytes || 0;
   for await (const line of (lines ?? readLines(filePath, snapshotSize, start))) {
     if (!line.trim()) continue;
     try {
-      const obj = JSON.parse(line);
+      const obj = normalizeUsageRecord(JSON.parse(line));
       parsedRecordIndex++;
+      // A resumed/new turn cannot be the delayed mirror of the preceding request.
+      if (obj.type === 'session_meta' || obj.type === 'turn_context' || obj.type === 'token_usage_record'
+          || (obj.type === 'event_msg' && isTaskStarted(obj.payload))) pendingUsageMirror = null;
 
         // A direct child task boundary covers every copied record, including
         // timing/meta events. The raw-token ordinal covers full-history and
@@ -715,11 +721,19 @@ async function parseSessionFile(filePath, snapshotSize, fm, boundary, {
         // compaction — and must count as zero, not a second copy of
         // last_token_usage. Guarded to positive totals so builds that leave
         // total_token_usage all-zero can't suppress real usage.
+      const isUsageRecord = payload.usage_record === true;
+      // Durable and UI cumulative counters may diverge after an interrupted call.
+      // Match their per-request usage instead, retaining the marker across appends.
+      const isMirror = !isUsageRecord && pendingUsageMirror && sameRequestUsage(pendingUsageMirror, info.last_token_usage);
+      pendingUsageMirror = isUsageRecord ? info.last_token_usage : null;
       const cumulativeTotal = info.total_token_usage?.total_tokens;
       const isDuplicateEmission = typeof cumulativeTotal === 'number'
         && cumulativeTotal > 0
-        && cumulativeTotal === prevCumulativeTotal;
-      if (typeof cumulativeTotal === 'number') prevCumulativeTotal = cumulativeTotal;
+        && cumulativeTotal === (isUsageRecord ? prevRecordTotal : prevCumulativeTotal);
+      if (typeof cumulativeTotal === 'number') {
+        if (isUsageRecord) prevRecordTotal = cumulativeTotal;
+        else prevCumulativeTotal = cumulativeTotal;
+      }
 
         // Prefer incremental per-request usage; compute delta from cumulative
         // totals as fallback. Always advance the cumulative baseline, even
@@ -747,7 +761,7 @@ async function parseSessionFile(filePath, snapshotSize, fm, boundary, {
         // avoids counting the full cumulative total again after a model switch.
       if (curr) prevTotal = { ...curr };
       if (!usage) continue;
-      if (isReplayedHistory || isDuplicateEmission) continue;
+      if (isReplayedHistory || isDuplicateEmission || isMirror) continue;
 
       const timestamp = obj.timestamp ? new Date(obj.timestamp) : null;
       if (!timestamp || isNaN(timestamp.getTime())) continue;
@@ -814,6 +828,8 @@ async function parseSessionFile(filePath, snapshotSize, fm, boundary, {
       serviceTier,
       prevTotal,
       prevCumulativeTotal,
+      prevRecordTotal,
+      pendingUsageMirror,
       buckets,
       sessionAccumulator,
       guardHash: guard.hash,
@@ -1167,6 +1183,12 @@ async function parseNativeCodex({ codexExtraHome, extraRoots = [] } = {}) {
   }
 
   return { ...mergeFileResults(results), cache: cacheStats };
+}
+
+function sameRequestUsage(left, right) {
+  if (!left || !right) return false;
+  return ['input_tokens', 'cached_input_tokens', 'output_tokens', 'reasoning_output_tokens']
+    .every(key => (left[key] || 0) === (right[key] || 0));
 }
 
 export async function parse(options = {}) {

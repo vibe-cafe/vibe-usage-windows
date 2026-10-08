@@ -286,7 +286,83 @@ if (localFlag >= 0) {
   sourceMetadata = vendorFromNpm();
 }
 
+
+// Preserve durable Codex accounting records on Windows, including cold re-vendors.
+function applyCodexUsageRecordPatch() {
+  fs.writeFileSync(path.join(destDir, "src/parsers/codex-usage-record.js"), `// Durable per-request usage can survive even when the UI token_count is missing.
+// Convert both indexing and accounting passes identically; keep the source marker
+// so the following UI mirror is not counted again when its cumulative total lags.
+export function normalizeUsageRecord(obj) {
+  if (obj?.type !== 'token_usage_record') return obj;
+  const p = obj.payload;
+  const usage = p?.usage;
+  const total = p?.thread_token_usage;
+  if (!usage || !total || !Number.isFinite(total.total_tokens) || total.total_tokens <= 0) return obj;
+  for (const value of [usage.input_tokens, usage.output_tokens, usage.cached_input_tokens ?? 0, usage.reasoning_output_tokens ?? 0]) {
+    if (!Number.isFinite(value) || value < 0) return obj;
+  }
+  return { ...obj, type: 'event_msg', payload: {
+    type: 'token_count', usage_record: true,
+    info: { last_token_usage: pickUsage(usage), total_token_usage: pickUsage(total) },
+  }};
+}
+
+function pickUsage(value) {
+  const keys = ['input_tokens', 'output_tokens', 'cached_input_tokens', 'cache_read_input_tokens',
+    'cache_write_input_tokens', 'reasoning_output_tokens', 'total_tokens'];
+  return Object.fromEntries(keys.filter(key => Number.isFinite(value[key])).map(key => [key, value[key]]));
+}
+`);
+  patchFile("src/parsers/codex.js", [
+    [`import {
+  closeSync,`, `import { normalizeUsageRecord } from './codex-usage-record.js';
+import {
+  closeSync,`, "Codex durable usage compatibility"],
+    ["const obj = JSON.parse(line);", "const obj = normalizeUsageRecord(JSON.parse(line));", "Codex durable usage compatibility"],
+    ["  let prevCumulativeTotal = previousTail?.prevCumulativeTotal ?? null;", `  let prevCumulativeTotal = previousTail?.prevCumulativeTotal ?? null;
+  let prevRecordTotal = previousTail?.prevRecordTotal ?? null;
+  let pendingUsageMirror = previousTail?.pendingUsageMirror ?? null;`, "Codex durable usage compatibility"],
+    ["      parsedRecordIndex++;", `      parsedRecordIndex++;
+      // A resumed/new turn cannot be the delayed mirror of the preceding request.
+      if (obj.type === 'session_meta' || obj.type === 'turn_context' || obj.type === 'token_usage_record'
+          || (obj.type === 'event_msg' && isTaskStarted(obj.payload))) pendingUsageMirror = null;`, "Codex durable usage compatibility"],
+    ["      const cumulativeTotal = info.total_token_usage?.total_tokens;", `      const isUsageRecord = payload.usage_record === true;
+      // Durable and UI cumulative counters may diverge after an interrupted call.
+      // Match their per-request usage instead, retaining the marker across appends.
+      const isMirror = !isUsageRecord && pendingUsageMirror && sameRequestUsage(pendingUsageMirror, info.last_token_usage);
+      pendingUsageMirror = isUsageRecord ? info.last_token_usage : null;
+      const cumulativeTotal = info.total_token_usage?.total_tokens;`, "Codex durable usage compatibility"],
+    ["&& cumulativeTotal === prevCumulativeTotal;", "&& cumulativeTotal === (isUsageRecord ? prevRecordTotal : prevCumulativeTotal);", "Codex durable usage compatibility"],
+    ["      if (typeof cumulativeTotal === 'number') prevCumulativeTotal = cumulativeTotal;", `      if (typeof cumulativeTotal === 'number') {
+        if (isUsageRecord) prevRecordTotal = cumulativeTotal;
+        else prevCumulativeTotal = cumulativeTotal;
+      }`, "Codex durable usage compatibility"],
+    ["if (isReplayedHistory || isDuplicateEmission) continue;", "if (isReplayedHistory || isDuplicateEmission || isMirror) continue;", "Codex durable usage compatibility"],
+    ["      prevCumulativeTotal,", `      prevCumulativeTotal,
+      prevRecordTotal,
+      pendingUsageMirror,`, "Codex durable usage compatibility"],
+    ["export async function parse(options = {}) {", `function sameRequestUsage(left, right) {
+  if (!left || !right) return false;
+  return ['input_tokens', 'cached_input_tokens', 'output_tokens', 'reasoning_output_tokens']
+    .every(key => (left[key] || 0) === (right[key] || 0));
+}
+
+export async function parse(options = {}) {`, "Codex durable usage compatibility"],
+  ]);
+  patchFile("src/parsers/codex-segments.js", [
+    ["import { createHash } from 'node:crypto';", `import { createHash } from 'node:crypto';
+import { normalizeUsageRecord } from './codex-usage-record.js';`, "Codex durable usage compatibility"],
+    ["function accountingRecord(obj, context) {", `function accountingRecord(obj, context) {
+  obj = normalizeUsageRecord(obj);`, "Codex durable usage compatibility"],
+    ["['type', 'started_at', 'model']", "['type', 'started_at', 'model', 'usage_record']", "Codex durable usage compatibility"],
+  ]);
+  patchFile("src/parsers/codex-cache.js", [
+    ["CODEX_PARSER_ALGORITHM_VERSION = 4", "CODEX_PARSER_ALGORITHM_VERSION = 5", "Codex durable usage compatibility"],
+  ]);
+}
+
 applyWindowsPatches();
+applyCodexUsageRecordPatch();
 
 const pkg = JSON.parse(fs.readFileSync(path.join(destDir, "package.json"), "utf8"));
 if (pkg.name !== "@vibe-cafe/vibe-usage" || !/^\d+\.\d+\.\d+(?:[-+].+)?$/.test(pkg.version)) {

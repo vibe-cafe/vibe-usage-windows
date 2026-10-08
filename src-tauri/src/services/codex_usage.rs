@@ -232,6 +232,7 @@ fn parse_usage_response(root: &Value, now: f64) -> Option<ProviderRateLimit> {
     Some(ProviderRateLimit {
         provider: RateLimitProvider::Codex,
         meters: Vec::new(),
+        source_label: None,
         five_hour_not_enforced: five_hour.is_none(),
         five_hour,
         seven_day,

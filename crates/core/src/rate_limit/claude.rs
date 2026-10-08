@@ -69,6 +69,7 @@ pub fn read_from(capture_file: &Path, enabled: bool, now: f64) -> ProviderRateLi
             .and_then(Value::as_str)
             .and_then(parse_iso8601_epoch),
         fetched_at: None,
+        source_label: None,
         five_hour_not_enforced: false,
         reset_credits_count: None,
         empty_reason: None,

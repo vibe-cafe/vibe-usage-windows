@@ -12,6 +12,7 @@ import {
   bucketDayKey,
   bucketHourKey,
   computedTotal,
+  cacheWriteTokens,
   isHourly,
   modelName,
   sessionDate,
@@ -137,7 +138,8 @@ export function buildChartData(
       bar = emptyBar(key);
       map.set(key, bar);
     }
-    bar.input += bucket.inputTokens;
+    // Cache writes are input tokens; keep cache reads in their own segment.
+    bar.input += bucket.inputTokens + cacheWriteTokens(bucket);
     // Reasoning tokens are priced as output — three tiers: input/output/cache read.
     bar.output += bucket.outputTokens + bucket.reasoningOutputTokens;
     bar.cached += bucket.cachedInputTokens;
@@ -165,6 +167,9 @@ export function buildChartData(
       start.setHours(0, 0, 0, 0);
     } else {
       start = new Date(currentHour.getTime() - 23 * 3600_000);
+      // A rolling response can include the partial hour at its left edge.
+      const boundary = new Date(currentHour.getTime() - 24 * 3600_000);
+      if (map.has(utcHourKey(boundary))) start = boundary;
     }
 
     const result: BarData[] = [];
@@ -178,11 +183,23 @@ export function buildChartData(
   // Daily: fill all days in range ending at today (or custom `to`).
   const endDay = customTo ? new Date(customTo) : new Date(now);
   endDay.setHours(0, 0, 0, 0);
+  const startDay = new Date(endDay);
+  startDay.setDate(startDay.getDate() - visibleDayCount + 1);
+  if (range !== "custom") {
+    // Rolling N-day responses can span N+1 calendar dates. Preserve returned
+    // boundary buckets (and sessions) so the chart agrees with the summary.
+    const boundary = new Date(now.getTime() - visibleDayCount * 86400_000);
+    boundary.setHours(0, 0, 0, 0);
+    for (const date = new Date(boundary); date < startDay; date.setDate(date.getDate() + 1)) {
+      if (map.has(localDayKey(date))) {
+        startDay.setTime(date.getTime());
+        break;
+      }
+    }
+  }
   const result: BarData[] = [];
-  for (let i = visibleDayCount - 1; i >= 0; i--) {
-    const date = new Date(endDay.getTime() - i * 86400_000);
-    // Re-normalize across DST shifts
-    date.setHours(0, 0, 0, 0);
+  // Calendar arithmetic avoids duplicate/missing dates across DST changes.
+  for (const date = new Date(startDay); date <= endDay; date.setDate(date.getDate() + 1)) {
     const key = localDayKey(date);
     result.push(map.get(key) ?? emptyBar(key));
   }

@@ -16,6 +16,7 @@ use vibe_core::{ProviderRateLimit, RateLimitProvider};
 #[serde(rename_all = "camelCase")]
 pub struct AppStatus {
     configured: bool,
+    hostname: Option<String>,
     api_url: String,
     version: String,
     is_dev: bool,
@@ -55,6 +56,7 @@ pub fn get_app_status(app: AppHandle) -> AppStatus {
 
     AppStatus {
         configured: api_key.is_some(),
+        hostname: config.as_ref().and_then(|c| c.hostname.clone()).or_else(AppCtx::hostname),
         api_url,
         version: app.package_info().version.to_string(),
         is_dev: crate::state::IS_DEV,
