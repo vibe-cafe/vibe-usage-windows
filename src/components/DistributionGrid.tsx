@@ -10,7 +10,7 @@ import {
   formatNumber,
   formatSlicePercent,
 } from "../lib/formatters";
-import { UsageBucket } from "../lib/types";
+import { UsageBucket, modelName, toolName } from "../lib/types";
 import { MiddleTruncateLabel } from "./MiddleTruncateLabel";
 
 type MetricMode = "tokens" | "cost";
@@ -19,15 +19,26 @@ export function DistributionGrid() {
   const state = useAppState();
 
   const filtered = useMemo(
-    () => filterBuckets(state.buckets, state.filters, state.timeRange),
-    [state.buckets, state.filters, state.timeRange],
+    () => filterBuckets(state.buckets, state.filters, state.timeRange, state.names),
+    [state.buckets, state.filters, state.timeRange, state.names],
   );
 
   return (
     <div className="grid grid-cols-2 items-stretch gap-[10px]">
       <DonutCard title="终端分布" Icon={Monitor} buckets={filtered} keyFn={(b) => b.hostname} />
-      <DonutCard title="工具分布" Icon={SquareTerminal} buckets={filtered} keyFn={(b) => b.source} />
-      <DonutCard title="模型分布" Icon={Cpu} buckets={filtered} keyFn={(b) => b.model} />
+      <DonutCard
+        title="工具分布"
+        Icon={SquareTerminal}
+        buckets={filtered}
+        keyFn={(b) => toolName(state.names, b.source)}
+      />
+      <DonutCard
+        title="模型分布"
+        Icon={Cpu}
+        buckets={filtered}
+        // By display name: one model reported under several ids is one row.
+        keyFn={(b) => modelName(state.names, b.model)}
+      />
       <DonutCard title="项目分布" Icon={Folder} buckets={filtered} keyFn={(b) => b.project} />
     </div>
   );

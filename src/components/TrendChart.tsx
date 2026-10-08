@@ -30,7 +30,7 @@ export function TrendChart() {
   const hourly = isHourly(state.timeRange);
 
   const data = useMemo(() => {
-    const buckets = filterBuckets(state.buckets, state.filters, state.timeRange);
+    const buckets = filterBuckets(state.buckets, state.filters, state.timeRange, state.names);
     const sessions = filterSessions(state.sessions, state.filters, state.timeRange);
     return buildChartData(
       buckets,
@@ -44,6 +44,7 @@ export function TrendChart() {
     state.sessions,
     state.filters,
     state.timeRange,
+    state.names,
     state.visibleDayCount,
     state.normalizedCustomRange,
   ]);

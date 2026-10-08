@@ -29,6 +29,7 @@ import {
   TimeRange,
   UpdateInfo,
   UsageBucket,
+  UsageNames,
   UsageQuery,
   UsageSession,
   ZCodeCredentialStatus,
@@ -49,6 +50,9 @@ export interface AppStateValue {
   buckets: UsageBucket[];
   sessions: UsageSession[];
   hasAnyData: boolean;
+  /** Display names the server sent with the current usage; null before the
+   *  first fetch or when an older server omits them. */
+  names: UsageNames | null;
   isLoadingData: boolean;
   hasLoadedUsageData: boolean;
   isInitialDataLoad: boolean;
@@ -144,6 +148,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const [buckets, setBuckets] = useState<UsageBucket[]>([]);
   const [sessions, setSessions] = useState<UsageSession[]>([]);
   const [hasAnyData, setHasAnyData] = useState(false);
+  const [names, setNames] = useState<UsageNames | null>(null);
   const [isLoadingData, setIsLoadingData] = useState(false);
   const [hasLoadedUsageData, setHasLoadedUsageData] = useState(false);
 
@@ -228,6 +233,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     try {
       const response = await api.fetchUsage(buildQuery());
       setBuckets(response.buckets);
+      setNames(response.names ?? null);
       setSessions(response.sessions ?? []);
       setHasAnyData(response.hasAnyData);
     } catch (err) {
@@ -495,6 +501,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     buckets,
     sessions,
     hasAnyData,
+    names,
     isLoadingData,
     hasLoadedUsageData,
     isInitialDataLoad,

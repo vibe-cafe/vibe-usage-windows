@@ -5,6 +5,7 @@
 import {
   UsageBucket,
   UsageSession,
+  UsageNames,
   FilterState,
   TimeRange,
   bucketDate,
@@ -12,6 +13,7 @@ import {
   bucketHourKey,
   computedTotal,
   isHourly,
+  modelName,
   sessionDate,
   sessionDayKey,
   sessionHourKey,
@@ -24,6 +26,7 @@ export function filterBuckets(
   buckets: UsageBucket[],
   filters: FilterState,
   range: TimeRange,
+  names: UsageNames | null | undefined,
   now: Date = new Date(),
 ): UsageBucket[] {
   const cutoff = startCutoff(range, now);
@@ -33,7 +36,9 @@ export function filterBuckets(
       if (date && date < cutoff) return false;
     }
     if (filters.sources.size > 0 && !filters.sources.has(bucket.source)) return false;
-    if (filters.models.size > 0 && !filters.models.has(bucket.model)) return false;
+    // Models match on the display name: one name merges every id a tool
+    // reported for that model, so selecting it selects all of them.
+    if (filters.models.size > 0 && !filters.models.has(modelName(names, bucket.model))) return false;
     if (filters.projects.size > 0 && !filters.projects.has(bucket.project)) return false;
     if (filters.hostnames.size > 0 && !filters.hostnames.has(bucket.hostname)) return false;
     return true;

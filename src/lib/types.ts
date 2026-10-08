@@ -76,6 +76,95 @@ export interface UsageResponse {
   buckets: UsageBucket[];
   sessions?: UsageSession[] | null;
   hasAnyData: boolean;
+  /** Absent on a server that predates the field; lookups then show raw ids. */
+  names?: UsageNames | null;
+}
+
+/**
+ * Display names and family rows supplied by the server alongside the usage.
+ *
+ * Naming has one implementation, in `vibe-cafe`: it resolves every id against
+ * its models.dev snapshot and its source registry and returns the answer with
+ * the data. This app therefore keeps no id→name table and no matching rules —
+ * an id the server could not resolve simply has no entry, and the UI shows it
+ * exactly as reported. `vibe-usage-app` (macOS) reads the same fields, so the
+ * two agree by construction instead of by two hand-synced tables.
+ */
+export interface UsageNames {
+  /** Upload source id → product name ("claude-code" → "Claude Code"). */
+  sources: Record<string, string>;
+  /** Raw model id as a tool reported it → official name. */
+  models: Record<string, string>;
+  /** Raw model id → family key ("k3" → "kimi"). */
+  modelFamilies: Record<string, string>;
+  /** The family rows `modelFamilies` refers to, in the server's order. */
+  families: UsageFamily[];
+}
+
+export interface UsageFamily {
+  key: string;
+  label: string;
+  provider: string;
+}
+
+/** Product name for an upload source, or the source id as reported. */
+export function toolName(names: UsageNames | null | undefined, source: string): string {
+  return names?.sources[source] ?? source;
+}
+
+/** Official model name, or the raw id as reported. */
+export function modelName(names: UsageNames | null | undefined, model: string): string {
+  return names?.models[model] ?? model;
+}
+
+/** Display name → family key, resolved through the raw ids behind each name. */
+export function familyKeyByDisplayName(
+  buckets: UsageBucket[],
+  names: UsageNames | null | undefined,
+): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const b of buckets) {
+    const name = modelName(names, b.model);
+    if (map.has(name)) continue;
+    const key = names?.modelFamilies[b.model];
+    if (key) map.set(name, key);
+  }
+  return map;
+}
+
+/** One option of the model filter: a display name, and the family it sits in. */
+export interface ModelFilterGroup {
+  key: string;
+  label: string;
+  models: string[];
+}
+
+/**
+ * The model filter's options, grouped by the family the server placed each
+ * display name in — the server's rows, in the server's order, with unplaced
+ * names under 其他. The two desktop apps used to carry their own copies of this
+ * table (the Windows one said so in a comment), which is what this removes.
+ */
+export function modelFilterGroups(
+  buckets: UsageBucket[],
+  names: UsageNames | null | undefined,
+): ModelFilterGroup[] {
+  const familyOf = familyKeyByDisplayName(buckets, names);
+  const displayNames = [...new Set(buckets.map((b) => modelName(names, b.model)))].sort();
+  const members = new Map<string, string[]>();
+  const unplaced: string[] = [];
+  for (const name of displayNames) {
+    const key = familyOf.get(name);
+    if (key) members.set(key, [...(members.get(key) ?? []), name]);
+    else unplaced.push(name);
+  }
+  const groups: ModelFilterGroup[] = [];
+  for (const family of names?.families ?? []) {
+    const models = members.get(family.key);
+    if (models?.length) groups.push({ key: family.key, label: family.label, models });
+  }
+  if (unplaced.length) groups.push({ key: "other", label: "其他", models: unplaced });
+  return groups;
 }
 
 // ---------------------------------------------------------------------------

@@ -25,10 +25,10 @@ export function SummaryCards() {
   const [cachedTokenMode, setCachedTokenMode] = useState<TokenMode>("international");
 
   const totals = useMemo(() => {
-    const buckets = filterBuckets(state.buckets, state.filters, state.timeRange);
+    const buckets = filterBuckets(state.buckets, state.filters, state.timeRange, state.names);
     const sessions = filterSessions(state.sessions, state.filters, state.timeRange);
     return summarize(buckets, sessions);
-  }, [state.buckets, state.sessions, state.filters, state.timeRange]);
+  }, [state.buckets, state.sessions, state.filters, state.timeRange, state.names]);
 
   return (
     <div className="flex w-full items-start gap-2">

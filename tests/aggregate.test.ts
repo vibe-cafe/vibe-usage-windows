@@ -66,8 +66,8 @@ describe("filterBuckets", () => {
     const todayLocalIso = new Date("2026-07-03T10:00:00").toISOString();
     const yesterdayIso = new Date("2026-07-02T10:00:00").toISOString();
     const buckets = [bucket({ bucketStart: todayLocalIso }), bucket({ bucketStart: yesterdayIso })];
-    expect(filterBuckets(buckets, emptyFilters(), "today", now)).toHaveLength(1);
-    expect(filterBuckets(buckets, emptyFilters(), "1D", now)).toHaveLength(2);
+    expect(filterBuckets(buckets, emptyFilters(), "today", null, now)).toHaveLength(1);
+    expect(filterBuckets(buckets, emptyFilters(), "1D", null, now)).toHaveLength(2);
   });
 });
 

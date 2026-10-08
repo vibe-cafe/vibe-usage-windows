@@ -3,8 +3,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, Cpu, Folder, Monitor, SquareTerminal } from "lucide-react";
 import { useAppState } from "../state/AppStateContext";
-import { FilterState, filtersAreEmpty, TIME_RANGE_ORDER, timeRangeLabel } from "../lib/types";
-import { groupModelsByFamily } from "../lib/modelFamilies";
+import {
+  FilterState,
+  ModelFilterGroup,
+  filtersAreEmpty,
+  modelFilterGroups,
+  modelName,
+  TIME_RANGE_ORDER,
+  timeRangeLabel,
+  toolName,
+} from "../lib/types";
 import { localDayKey } from "../lib/formatters";
 import { MiddleTruncateLabel } from "./MiddleTruncateLabel";
 
@@ -33,13 +41,28 @@ export function FilterTags() {
     const h = new Set<string>();
     for (const b of state.buckets) {
       s.add(b.source);
-      m.add(b.model);
+      // Display names, not raw ids: one name is one option, because the server
+      // merges the ids a tool reported for the same model.
+      m.add(modelName(state.names, b.model));
       p.add(b.project);
       h.add(b.hostname);
     }
     const sort = (x: Set<string>) => [...x].sort();
-    return { sources: sort(s), models: sort(m), projects: sort(p), hostnames: sort(h) };
-  }, [state.buckets]);
+    return {
+      // Source *values* stay the raw ids — that is what a bucket carries — but
+      // they read in product-name order.
+      sources: [...s].sort((a, b) => toolName(state.names, a).localeCompare(toolName(state.names, b))),
+      models: sort(m),
+      projects: sort(p),
+      hostnames: sort(h),
+    };
+  }, [state.buckets, state.names]);
+
+  // The model filter's families come from the server; this app keeps no table.
+  const groups = useMemo(
+    () => modelFilterGroups(state.buckets, state.names),
+    [state.buckets, state.names],
+  );
 
   // Close dropdown when clicking outside the filter grid.
   useEffect(() => {
@@ -183,6 +206,8 @@ export function FilterTags() {
           <DropdownPanel
             dimension={openFilter}
             values={valuesFor(openFilter)}
+            groups={groups}
+            labels={openFilter === "source" ? (value) => toolName(state.names, value) : undefined}
             selected={selectedFor(openFilter)}
             onToggle={(v) => toggleValue(openFilter, v)}
             onSetSelected={(s) => setSelected(openFilter, s)}
@@ -281,12 +306,16 @@ function CustomRangeControls() {
 function DropdownPanel({
   dimension,
   values,
+  groups,
+  labels,
   selected,
   onToggle,
   onSetSelected,
 }: {
   dimension: Dimension;
   values: string[];
+  groups: ModelFilterGroup[];
+  labels?: (value: string) => string;
   selected: Set<string>;
   onToggle: (value: string) => void;
   onSetSelected: (next: Set<string>) => void;
@@ -315,13 +344,13 @@ function DropdownPanel({
       }}
     >
       {dimension === "model" ? (
-        <ModelOptions models={values} selected={selected} onToggle={onToggle} onSetSelected={onSetSelected} />
+        <ModelOptions groups={groups} selected={selected} onToggle={onToggle} onSetSelected={onSetSelected} />
       ) : (
         <div className="flex flex-col gap-0.5">
           {values.map((value) => (
             <OptionRow
               key={value}
-              title={value === "" ? "未知" : value}
+              title={value === "" ? "未知" : (labels?.(value) ?? value)}
               isSelected={selected.has(value)}
               onClick={() => onToggle(value)}
             />
@@ -333,24 +362,23 @@ function DropdownPanel({
 }
 
 function ModelOptions({
-  models,
+  groups,
   selected,
   onToggle,
   onSetSelected,
 }: {
-  models: string[];
+  groups: ModelFilterGroup[];
   selected: Set<string>;
   onToggle: (value: string) => void;
   onSetSelected: (next: Set<string>) => void;
 }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const groups = groupModelsByFamily(models);
 
   return (
     <div className="flex flex-col">
       {groups.map((group) => {
-        const familyKey = group.family?.key ?? "other";
-        const familyLabel = group.family?.label ?? "其他";
+        const familyKey = group.key;
+        const familyLabel = group.label;
         const familyModels = new Set(group.models);
         const selectedInFamily = [...familyModels].filter((m) => selected.has(m));
         const allSelected = familyModels.size > 0 && selectedInFamily.length === familyModels.size;
