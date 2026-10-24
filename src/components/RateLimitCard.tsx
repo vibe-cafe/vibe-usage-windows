@@ -149,7 +149,7 @@ export function RateLimitCards() {
   const snapshot = (provider: RateLimitProvider): ProviderRateLimit =>
     state.rateLimits.find((item) => item.provider === provider) ?? {
       provider,
-      status: { kind: provider === "cursor" ? "disabled" : "noData" },
+      status: { kind: "noData" },
     };
 
   return (
@@ -271,12 +271,11 @@ function ProviderCard({ snapshot }: { snapshot: ProviderRateLimit }) {
         )}
       </div>
 
-      {snapshot.status.kind === "ok" && <QuotaRows rows={visibleRows} />}
-      {snapshot.status.kind === "disabled" && snapshot.provider !== "cursor" && (
+      {snapshot.status.kind === "ok" && <QuotaRows rows={visibleRows} wideLabels={snapshot.provider === "cursor" || snapshot.provider === "antigravity"} />}
+      {snapshot.status.kind === "disabled" && (
         <MessageContent text="订阅配额未启用" />
       )}
-      {(snapshot.status.kind === "noData" ||
-        (snapshot.status.kind === "disabled" && snapshot.provider === "cursor")) && (
+      {snapshot.status.kind === "noData" && (
         <QuietText text={emptyStateText(snapshot, state)} />
       )}
       {snapshot.status.kind === "unauthorized" && (
@@ -308,6 +307,8 @@ function unauthorizedText(provider: RateLimitProvider, region: "bigModel" | "zAI
   if (provider === "zcode") {
     return `请在设置中配置 ${region === "bigModel" ? "BigModel" : "Z.ai"} API Key`;
   }
+  if (provider === "cursor") return "请在 Cursor 中重新登录后重试";
+  if (provider === "antigravity") return "请安装 agy 并登录后重试";
   if (provider === "kimi-code") return "请重新登录 Kimi Code 后重试";
   // The key comes from OpenCode's own store; only OpenCode can re-issue it.
   if (provider === "opencode-go") return "请在 OpenCode 中重新登录后重试";
@@ -318,12 +319,6 @@ function unauthorizedText(provider: RateLimitProvider, region: "bigModel" | "zAI
  *  separates "installed but nothing to show yet" from "not on this machine". */
 function emptyStateText(snapshot: ProviderRateLimit, state: AppStateValue): string {
   if (state.isRefreshingRateLimits) return "正在读取订阅配额…";
-  if (snapshot.provider === "cursor") {
-    const detected = state.quotaProducts.find((item) => item.provider === "cursor")?.isDetected;
-    return detected
-      ? "已识别 Cursor · 等待官方配额接口"
-      : "未检测到 Cursor · 等待官方配额接口";
-  }
   const detected =
     state.quotaProducts.find((item) => item.provider === snapshot.provider)?.isDetected === true;
   return quotaEmptyStateText(
@@ -338,7 +333,7 @@ function QuietText({ text }: { text: string }) {
   return <span className="text-[11px] leading-snug text-neutral-500">{text}</span>;
 }
 
-function QuotaRows({ rows }: { rows: RowItem[] }) {
+function QuotaRows({ rows, wideLabels }: { rows: RowItem[]; wideLabels: boolean }) {
   const [hovered, setHovered] = useState<{ index: number; anchor: HTMLElement } | null>(null);
   const hoveredRow = hovered ? rows[hovered.index] : null;
   const hoveredWindow = hoveredRow?.kind === "live" ? hoveredRow.window : null;
@@ -351,6 +346,7 @@ function QuotaRows({ rows }: { rows: RowItem[] }) {
             key={`${row.label}-${index}`}
             label={row.label}
             window={row.window}
+            wideLabel={wideLabels}
             onHover={(anchor) => setHovered(anchor ? { index, anchor } : null)}
           />
         ) : (
@@ -371,20 +367,22 @@ function QuotaRows({ rows }: { rows: RowItem[] }) {
 function QuotaRow({
   label,
   window: quotaWindow,
+  wideLabel,
   onHover,
 }: {
   label: string;
   window: RateLimitWindow;
+  wideLabel: boolean;
   /** Anchor is the whole row, so the tooltip lines up with the label column. */
   onHover: (anchor: HTMLElement | null) => void;
 }) {
   const elapsed = elapsedPercent(quotaWindow);
   const rowRef = useRef<HTMLDivElement | null>(null);
   return (
-    <div ref={rowRef} className="flex items-center gap-1.5" style={{ height: ROW_HEIGHT }}>
+    <div ref={rowRef} className="flex items-center gap-1.5" style={{ height: wideLabel ? 28 : ROW_HEIGHT }}>
       <span
-        className="w-10 shrink-0 truncate font-mono text-[11px] font-medium"
-        style={{ color: "#999999" }}
+        className={`shrink-0 font-mono text-[11px] font-medium ${wideLabel ? "line-clamp-2 whitespace-normal leading-[13px]" : "truncate"}`}
+        style={{ color: "#999999", width: wideLabel ? 96 : 40 }}
         title={label}
       >
         {label}

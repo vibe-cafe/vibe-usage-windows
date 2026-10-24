@@ -270,6 +270,28 @@ mod tests {
     }
 
     #[test]
+    fn cursor_and_antigravity_use_the_versioned_cli_contract() {
+        let requested = [RateLimitProvider::Cursor, RateLimitProvider::Antigravity];
+        assert!(requested.iter().all(|provider| uses_cli(*provider)));
+        let payload = serde_json::to_vec(&serde_json::json!({
+            "schemaVersion": 1,
+            "products": (["cursor", "antigravity"].map(|id| serde_json::json!({
+                "id": id, "status": "ok", "fetchedAt": "2026-10-23T00:00:00Z",
+                "meters": [{"id": "weekly", "label": "7d", "utilization": 42.5,
+                    "windowSeconds": 604800, "resetsAt": "2026-11-01T00:00:00Z"}]
+            })))
+        }))
+        .unwrap();
+        let snapshots = decode(&payload, &requested).unwrap();
+        assert_eq!(snapshots.len(), 2);
+        for snapshot in snapshots {
+            assert_eq!(snapshot.status, RateLimitStatus::Ok);
+            assert_eq!(snapshot.meters[0].utilization, 42.5);
+            assert!(snapshot.meters[0].resets_at.is_some());
+        }
+    }
+
+    #[test]
     fn response_must_cover_exactly_the_requested_products_once() {
         let requested = [RateLimitProvider::KimiCode, RateLimitProvider::Grok];
         for ids in [

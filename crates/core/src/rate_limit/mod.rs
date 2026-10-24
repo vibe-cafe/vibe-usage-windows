@@ -53,6 +53,8 @@ pub enum RateLimitProvider {
     OpenCodeGo,
     #[serde(rename = "cursor")]
     Cursor,
+    #[serde(rename = "antigravity")]
+    Antigravity,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

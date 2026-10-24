@@ -157,9 +157,6 @@ pub async fn get_rate_limits(app: &AppHandle, force: bool) -> Vec<ProviderRateLi
     let result = selected
         .into_iter()
         .map(|provider| {
-            if provider == RateLimitProvider::Cursor {
-                return ProviderRateLimit::empty(provider, RateLimitStatus::Disabled);
-            }
             cache
                 .snapshots
                 .get(&provider)

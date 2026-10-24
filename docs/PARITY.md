@@ -45,7 +45,7 @@
 | `SyncEngine`（npx/bun x，120s） | `services/sync_engine.rs`（内置 CLI + node，120s，CREATE_NO_WINDOW） |
 | 设置中的隔离运行时目录（Codex / Grok / Antigravity） | 原生文件夹选择器 + 同一组 CLI `config roots/add-root/remove-root` 命令 |
 | `SyncScheduler`（30 分钟） | `services/scheduler.rs` |
-| 七产品订阅配额目录与任意数量选择 | Codex / Claude 原生适配；Kimi / ZCode / Grok / OpenCode Go 使用版本化 typed CLI bridge（OpenCode Go 的凭据读取由内置 CLI 负责：2.x 凭据表 → 1.x `auth.json` 回退）；Cursor 独立显示待接入 |
+| 八产品订阅配额目录与任意数量选择 | Codex / Claude 原生适配；Kimi / ZCode / Grok / OpenCode Go 使用版本化 typed CLI bridge（OpenCode Go 的凭据读取由内置 CLI 负责：2.x 凭据表 → 1.x `auth.json` 回退）；Cursor / Antigravity 使用版本化 CLI 配额适配器 |
 | `RateLimitCardView`：`QuotaTabStripView`（整目录图标 Tab：已生效彩色在前、未生效置灰在后、可拖动排序、最右齿轮进设置、已启用但非 ok 加琥珀点）+ 一行两张 240px 卡片横滑，Tab 与横滑双向联动（点 Tab 滑过去、滑动时高亮跟随前缘卡片）；卡片只属于已启用产品，全部关闭时只剩图标行 | `components/RateLimitCard.tsx` + `components/QuotaTabStrip.tsx`：同一模型（HTML5 拖放排序、前缘卡片经滚动位置判定、`quotaTabOrder` 顺序与 `quotaProductOrder` 持久化、齿轮调 `open_settings_window`） |
 | `RateLimitCardView.emptyStateText(for:isDetected:)` / `ProviderRateLimit.EmptyReason` | `lib/quotaProducts.ts:quotaEmptyStateText` + Rust `RateLimitEmptyReason`（`crates/core/src/rate_limit/mod.rs`） |
 | `RateLimitCardView.ProviderIcon`（官方 28/56px 资产，卡片与设置共用） | `components/ProviderIcon.tsx`（`src/assets/*-icon.png` 为官方资产 @2x=56px，卡片 14px 显示）+ 符号兜底 |

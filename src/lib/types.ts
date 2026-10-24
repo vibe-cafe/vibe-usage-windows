@@ -273,6 +273,7 @@ export type RateLimitProvider =
   | "zcode"
   | "grok"
   | "cursor"
+  | "antigravity"
   | "opencode-go";
 
 export interface RateLimitMeter {

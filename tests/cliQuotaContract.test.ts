@@ -23,6 +23,8 @@ test("published CLI returns the quota contract without inherited account credent
       KIMI_CODE_HOME: join(root, "kimi-code"),
       KIMI_SHARE_DIR: join(root, "kimi"),
       GROK_HOME: join(root, "grok"),
+      CURSOR_STATE_DB_PATH: join(root, "cursor-absent.vscdb"),
+      ANTIGRAVITY_CLI_PATH: join(root, "agy-absent"),
     };
     const invoke = (...args: string[]) => {
       const result = spawnSync(process.execPath, [
@@ -35,18 +37,19 @@ test("published CLI returns the quota contract without inherited account credent
     expect(invoke("config", "roots")).toEqual({});
     const discovery = invoke("quota", "discover", "--json");
     expect(discovery.schemaVersion).toBe(1);
-    for (const id of ["kimi-code", "zcode", "grok"]) {
+    for (const id of ["kimi-code", "zcode", "grok", "cursor", "antigravity"]) {
       expect(discovery.products.find((p: { id: string }) => p.id === id)?.fetchable).toBe(true);
     }
-    expect(discovery.products.find((p: { id: string }) => p.id === "cursor")?.fetchable).toBe(false);
     const quota = invoke("quota", "fetch", "--product", "kimi-code",
-      "--product", "zcode", "--product", "grok", "--json");
+      "--product", "zcode", "--product", "grok", "--product", "cursor", "--product", "antigravity", "--json");
     expect(quota.schemaVersion).toBe(1);
     expect(quota.products.map((p: { id: string; status: string; meters: unknown[] }) =>
       ({ id: p.id, status: p.status, meters: p.meters }))).toEqual([
       { id: "kimi-code", status: "missing_credentials", meters: [] },
       { id: "zcode", status: "missing_credentials", meters: [] },
       { id: "grok", status: "no_data", meters: [] },
+      { id: "cursor", status: "missing_credentials", meters: [] },
+      { id: "antigravity", status: "missing_credentials", meters: [] },
     ]);
   } finally {
     rmSync(root, { recursive: true, force: true });
