@@ -273,6 +273,7 @@ export type RateLimitProvider =
   | "zcode"
   | "grok"
   | "cursor"
+  | "antigravity"
   | "opencode-go";
 
 export interface RateLimitMeter {
@@ -284,6 +285,15 @@ export interface RateLimitMeter {
   resetsAt?: number | null;
   /** seconds; enables the elapsed-time bar */
   windowDuration?: number | null;
+  /** Split of this meter's allowance (Cursor's own vs third-party models);
+   *  shown only in the row's tooltip. */
+  breakdown?: RateLimitMeterPart[];
+}
+
+export interface RateLimitMeterPart {
+  label: string;
+  /** 0-100 */
+  utilization: number;
 }
 
 export type RateLimitStatus =

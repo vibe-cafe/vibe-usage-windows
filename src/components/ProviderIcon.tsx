@@ -15,7 +15,7 @@ import kimiIcon from "../assets/kimi-icon.png";
 import openCodeIcon from "../assets/opencode-icon@2x.png";
 import zcodeIcon from "../assets/zcode-icon.png";
 
-const ICONS: Record<RateLimitProvider, string> = {
+const ICONS: Partial<Record<RateLimitProvider, string>> = {
   codex: codexIcon,
   claudeCode: claudeIcon,
   "kimi-code": kimiIcon,
@@ -32,6 +32,7 @@ const FALLBACKS: Record<RateLimitProvider, typeof Sparkles> = {
   zcode: Sparkles,
   grok: Sparkles,
   cursor: Sparkles,
+  antigravity: Sparkles,
   "opencode-go": Code,
 };
 
@@ -43,7 +44,7 @@ export function ProviderIcon({
   size?: number;
 }) {
   const [failed, setFailed] = useState(false);
-  if (!failed) {
+  if (!failed && ICONS[provider]) {
     return (
       <img
         src={ICONS[provider]}

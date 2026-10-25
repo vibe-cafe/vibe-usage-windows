@@ -33,6 +33,17 @@ pub struct RateLimitMeter {
     pub resets_at: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub window_duration: Option<f64>,
+    /// Optional split of this meter's allowance (Cursor's own vs third-party
+    /// models). It explains the row and only appears in its tooltip.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub breakdown: Vec<RateLimitMeterPart>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RateLimitMeterPart {
+    pub label: String,
+    pub utilization: f64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -53,6 +64,8 @@ pub enum RateLimitProvider {
     OpenCodeGo,
     #[serde(rename = "cursor")]
     Cursor,
+    #[serde(rename = "antigravity")]
+    Antigravity,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

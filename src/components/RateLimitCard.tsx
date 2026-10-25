@@ -8,6 +8,7 @@ import { AppStateValue, useAppState } from "../state/AppStateContext";
 import {
   ProviderRateLimit,
   RateLimitMeter,
+  RateLimitMeterPart,
   RateLimitProvider,
   RateLimitWindow,
 } from "../lib/types";
@@ -149,7 +150,7 @@ export function RateLimitCards() {
   const snapshot = (provider: RateLimitProvider): ProviderRateLimit =>
     state.rateLimits.find((item) => item.provider === provider) ?? {
       provider,
-      status: { kind: provider === "cursor" ? "disabled" : "noData" },
+      status: { kind: "noData" },
     };
 
   return (
@@ -208,7 +209,7 @@ const TOOLTIP_GAP = 6;
 const TOOLTIP_MARGIN = 8;
 
 type RowItem =
-  | { kind: "live"; label: string; window: RateLimitWindow }
+  | { kind: "live"; label: string; window: RateLimitWindow; breakdown?: RateLimitMeterPart[] }
   | { kind: "placeholder"; label: string; message: string };
 
 function meterWindow(meter: RateLimitMeter): RateLimitWindow {
@@ -230,15 +231,20 @@ function ProviderCard({ snapshot }: { snapshot: ProviderRateLimit }) {
     kind: "live",
     label: meter.label,
     window: meterWindow(meter),
+    breakdown: meter.breakdown,
   }));
   if (rows.length === 0) {
     if (snapshot.fiveHour) {
       rows.push({ kind: "live", label: "5h", window: snapshot.fiveHour });
     } else if (expectsFiveHour) {
+      // The live endpoint asserting the limit is off, or a Pro plan (OpenAI
+      // keeps 5h off for Pro since 2026-07-12), reads as 不限额; otherwise a
+      // JSONL snapshot only means no recent event carried it.
+      const unlimited = snapshot.fiveHourNotEnforced || plan === "pro" || plan === "prolite";
       rows.push({
         kind: "placeholder",
         label: "5h",
-        message: snapshot.fiveHourNotEnforced ? "官方当前未启用" : "近 5 小时无活动",
+        message: unlimited ? "不限额" : "近 5 小时无活动",
       });
     }
     if (snapshot.sevenDay) rows.push({ kind: "live", label: "7d", window: snapshot.sevenDay });
@@ -259,6 +265,14 @@ function ProviderCard({ snapshot }: { snapshot: ProviderRateLimit }) {
         <span className="truncate text-[13px] font-semibold text-white">
           {providerLabel(snapshot.provider, state.quotaProducts)}
         </span>
+        {!!snapshot.resetCreditsCount && (
+          <span
+            className="shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-medium"
+            style={{ background: "rgba(242,184,64,0.12)", color: "#F2B840" }}
+          >
+            重置券 ×{snapshot.resetCreditsCount}
+          </span>
+        )}
         <div className="grow" />
         {state.isRefreshingRateLimits && <div className="spinner h-3 w-3 shrink-0" />}
         {snapshot.planLabel && (
@@ -272,11 +286,10 @@ function ProviderCard({ snapshot }: { snapshot: ProviderRateLimit }) {
       </div>
 
       {snapshot.status.kind === "ok" && <QuotaRows rows={visibleRows} />}
-      {snapshot.status.kind === "disabled" && snapshot.provider !== "cursor" && (
+      {snapshot.status.kind === "disabled" && (
         <MessageContent text="订阅配额未启用" />
       )}
-      {(snapshot.status.kind === "noData" ||
-        (snapshot.status.kind === "disabled" && snapshot.provider === "cursor")) && (
+      {snapshot.status.kind === "noData" && (
         <QuietText text={emptyStateText(snapshot, state)} />
       )}
       {snapshot.status.kind === "unauthorized" && (
@@ -299,7 +312,6 @@ function ProviderCard({ snapshot }: { snapshot: ProviderRateLimit }) {
         </button>
       )}
       {snapshot.sourceLabel && <div className="text-[10px] text-neutral-400">{snapshot.sourceLabel}</div>}
-      {snapshot.status.kind === "ok" && <FreshnessNote snapshot={snapshot} />}
     </div>
   );
 }
@@ -308,6 +320,8 @@ function unauthorizedText(provider: RateLimitProvider, region: "bigModel" | "zAI
   if (provider === "zcode") {
     return `请在设置中配置 ${region === "bigModel" ? "BigModel" : "Z.ai"} API Key`;
   }
+  if (provider === "cursor") return "请在 Cursor 中重新登录后重试";
+  if (provider === "antigravity") return "请安装 agy 并登录后重试";
   if (provider === "kimi-code") return "请重新登录 Kimi Code 后重试";
   // The key comes from OpenCode's own store; only OpenCode can re-issue it.
   if (provider === "opencode-go") return "请在 OpenCode 中重新登录后重试";
@@ -318,12 +332,6 @@ function unauthorizedText(provider: RateLimitProvider, region: "bigModel" | "zAI
  *  separates "installed but nothing to show yet" from "not on this machine". */
 function emptyStateText(snapshot: ProviderRateLimit, state: AppStateValue): string {
   if (state.isRefreshingRateLimits) return "正在读取订阅配额…";
-  if (snapshot.provider === "cursor") {
-    const detected = state.quotaProducts.find((item) => item.provider === "cursor")?.isDetected;
-    return detected
-      ? "已识别 Cursor · 等待官方配额接口"
-      : "未检测到 Cursor · 等待官方配额接口";
-  }
   const detected =
     state.quotaProducts.find((item) => item.provider === snapshot.provider)?.isDetected === true;
   return quotaEmptyStateText(
@@ -361,7 +369,11 @@ function QuotaRows({ rows }: { rows: RowItem[] }) {
 
       {hovered && hoveredRow && hoveredWindow && (
         <TooltipLayer anchor={hovered.anchor}>
-          <Tooltip label={hoveredRow.label} window={hoveredWindow} />
+          <Tooltip
+            label={hoveredRow.label}
+            window={hoveredWindow}
+            breakdown={hoveredRow.kind === "live" ? hoveredRow.breakdown : undefined}
+          />
         </TooltipLayer>
       )}
     </div>
@@ -425,29 +437,91 @@ function EmptyQuotaRow({ label, message }: { label: string; message: string }) {
   );
 }
 
-function Tooltip({ label, window: quotaWindow }: { label: string; window: RateLimitWindow }) {
+/** Spelled-out tooltip titles for the generic window labels; the same table
+ *  as the Mac's `tooltipTitle(for:)`. Other labels (Opus, 额外…) read as-is. */
+function tooltipTitle(label: string): string {
+  switch (label) {
+    case "5h":
+      return "5 小时窗口";
+    case "7d":
+      return "7 天窗口";
+    // A subscription month is 28-31 days, so the title names it instead of
+    // echoing the raw token.
+    case "Month":
+      return "月度窗口";
+    default:
+      return label;
+  }
+}
+
+function Tooltip({
+  label,
+  window: quotaWindow,
+  breakdown = [],
+}: {
+  label: string;
+  window: RateLimitWindow;
+  breakdown?: RateLimitMeterPart[];
+}) {
   const elapsed = elapsedPercent(quotaWindow);
   const remaining =
     quotaWindow.resetsAt != null
       ? formatTimeUntil(new Date(quotaWindow.resetsAt * 1000))
       : null;
+  const tokenColor = utilizationColor(quotaWindow.utilization);
   return (
     <div
       className="flex flex-col gap-[5px] whitespace-nowrap rounded-[5px] bg-black px-2.5 py-2 text-[11px] shadow-[0_2px_5px_rgba(0,0,0,0.5)]"
       style={{ border: "0.5px solid #383838" }}
     >
-      <span className="font-semibold text-white">{label}</span>
-      <span style={{ color: utilizationColor(quotaWindow.utilization) }}>
-        已使用 {formatPercent(quotaWindow.utilization)}
-      </span>
-      <span className="text-neutral-400">
-        {elapsed != null && remaining != null
-          ? `已过去 ${formatPercent(elapsed)} · 剩余 ${remaining}`
-          : remaining != null
-            ? `重置剩余 ${remaining}`
-            : "重置时间未知"}
-      </span>
+      <span className="font-semibold text-white">{tooltipTitle(label)}</span>
+      <TooltipRow
+        dotColor={tokenColor}
+        label="Token 用量"
+        value={`已使用 ${formatPercent(quotaWindow.utilization)}`}
+        valueColor={tokenColor}
+        medium
+      />
+      {elapsed != null && remaining != null ? (
+        <TooltipRow label="时间" value={`已过去 ${formatPercent(elapsed)} · 剩余 ${remaining}`} />
+      ) : remaining != null ? (
+        <TooltipRow label="重置" value={`剩余 ${remaining}`} />
+      ) : (
+        <TooltipRow label="时间" value="未知" valueColor="#808080" />
+      )}
+      {breakdown.map((part) => (
+        <TooltipRow
+          key={part.label}
+          dotColor="#4d4d4d"
+          label={part.label}
+          value={formatPercent(part.utilization)}
+        />
+      ))}
     </div>
+  );
+}
+
+function TooltipRow({
+  dotColor = "#8c8c8c",
+  label,
+  value,
+  valueColor = "#d1d1d1",
+  medium = false,
+}: {
+  dotColor?: string;
+  label: string;
+  value: string;
+  valueColor?: string;
+  medium?: boolean;
+}) {
+  return (
+    <span className="flex items-center gap-1.5">
+      <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: dotColor }} />
+      <span style={{ color: "#8c8c8c" }}>{label}</span>
+      <span className={medium ? "font-medium" : undefined} style={{ color: valueColor }}>
+        {value}
+      </span>
+    </span>
   );
 }
 
@@ -507,18 +581,6 @@ function TooltipLayer({ anchor, children }: { anchor: HTMLElement; children: Rea
     </div>,
     document.body,
   );
-}
-
-function FreshnessNote({ snapshot }: { snapshot: ProviderRateLimit }) {
-  const ageMinutes = snapshot.dataAsOf
-    ? Math.max(0, Math.floor((Date.now() / 1000 - snapshot.dataAsOf) / 60))
-    : 0;
-  const notes = [
-    snapshot.sourceLabel && snapshot.dataAsOf ? `记录时间 ${new Date(snapshot.dataAsOf * 1000).toLocaleString()}` : ageMinutes >= 5 ? `数据截至 ${ageMinutes} 分钟前` : null,
-    snapshot.resetCreditsCount ? `重置券 ×${snapshot.resetCreditsCount}` : null,
-  ].filter(Boolean);
-  if (notes.length === 0) return null;
-  return <div className="truncate text-[10px] text-neutral-500">{notes.join(" · ")}</div>;
 }
 
 function MessageContent({ text }: { text: string }) {

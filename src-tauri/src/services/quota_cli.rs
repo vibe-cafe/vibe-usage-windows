@@ -9,7 +9,8 @@ use std::time::Duration;
 use tauri::AppHandle;
 use vibe_core::quota_product::{cli_id, cli_provider, ZCodeQuotaRegion};
 use vibe_core::{
-    ProviderRateLimit, RateLimitEmptyReason, RateLimitMeter, RateLimitProvider, RateLimitStatus,
+    ProviderRateLimit, RateLimitEmptyReason, RateLimitMeter, RateLimitMeterPart, RateLimitProvider,
+    RateLimitStatus,
 };
 
 const SCHEMA_VERSION: u32 = 1;
@@ -90,6 +91,30 @@ struct Meter {
     utilization: f64,
     resets_at: Option<String>,
     window_seconds: Option<f64>,
+    #[serde(default)]
+    breakdown: Vec<MeterPart>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MeterPart {
+    id: String,
+    label: String,
+    utilization: f64,
+}
+
+/// The CLI speaks English labels; the cards are Chinese. Only ids this app
+/// knows are renamed, so a new CLI meter still renders as reported.
+fn display_label(provider: RateLimitProvider, id: &str, label: String) -> String {
+    if provider != RateLimitProvider::Cursor {
+        return label;
+    }
+    match id {
+        // Same row name as Claude's pay-as-you-go spend.
+        "on-demand" => "额外".into(),
+        "auto" => "Cursor 模型".into(),
+        "api" => "第三方模型".into(),
+        _ => label,
+    }
 }
 
 pub async fn fetch(
@@ -201,11 +226,19 @@ fn map_product(product: Product) -> Result<ProviderRateLimit, FetchError> {
         .meters
         .into_iter()
         .map(|meter| RateLimitMeter {
+            label: display_label(provider, &meter.id, meter.label),
             id: meter.id,
-            label: meter.label,
             utilization: meter.utilization.clamp(0.0, 100.0),
             resets_at: meter.resets_at.as_deref().and_then(parse_epoch),
             window_duration: meter.window_seconds.filter(|value| *value > 0.0),
+            breakdown: meter
+                .breakdown
+                .into_iter()
+                .map(|part| RateLimitMeterPart {
+                    label: display_label(provider, &part.id, part.label),
+                    utilization: part.utilization.clamp(0.0, 100.0),
+                })
+                .collect(),
         })
         .collect::<Vec<_>>();
     let status = match product.status.as_str() {
@@ -270,6 +303,28 @@ mod tests {
     }
 
     #[test]
+    fn cursor_and_antigravity_use_the_versioned_cli_contract() {
+        let requested = [RateLimitProvider::Cursor, RateLimitProvider::Antigravity];
+        assert!(requested.iter().all(|provider| uses_cli(*provider)));
+        let payload = serde_json::to_vec(&serde_json::json!({
+            "schemaVersion": 1,
+            "products": (["cursor", "antigravity"].map(|id| serde_json::json!({
+                "id": id, "status": "ok", "fetchedAt": "2026-10-23T00:00:00Z",
+                "meters": [{"id": "weekly", "label": "7d", "utilization": 42.5,
+                    "windowSeconds": 604800, "resetsAt": "2026-11-01T00:00:00Z"}]
+            })))
+        }))
+        .unwrap();
+        let snapshots = decode(&payload, &requested).unwrap();
+        assert_eq!(snapshots.len(), 2);
+        for snapshot in snapshots {
+            assert_eq!(snapshot.status, RateLimitStatus::Ok);
+            assert_eq!(snapshot.meters[0].utilization, 42.5);
+            assert!(snapshot.meters[0].resets_at.is_some());
+        }
+    }
+
+    #[test]
     fn response_must_cover_exactly_the_requested_products_once() {
         let requested = [RateLimitProvider::KimiCode, RateLimitProvider::Grok];
         for ids in [
@@ -322,6 +377,25 @@ mod tests {
         assert_eq!(snapshots[0].provider, RateLimitProvider::Grok);
         assert_eq!(snapshots[0].meters[0].label, "7d");
         assert_eq!(snapshots[0].meters[0].utilization, 30.0);
+    }
+
+    #[test]
+    fn cursor_month_carries_its_split_and_on_demand_reads_like_claude_extra() {
+        let snapshots = decode(
+            br#"{"schemaVersion":1,"products":[{"id":"cursor","status":"ok","meters":[{"id":"plan","label":"Month","utilization":48,"windowSeconds":2678400,"breakdown":[{"id":"auto","label":"Cursor models","utilization":4},{"id":"api","label":"Third-party models","utilization":88}]},{"id":"on-demand","label":"On-demand","utilization":25}],"fetchedAt":"2026-10-23T00:00:00Z"}]}"#,
+            &[RateLimitProvider::Cursor],
+        )
+        .unwrap();
+        let meters = &snapshots[0].meters;
+        assert_eq!(meters.iter().map(|m| m.label.as_str()).collect::<Vec<_>>(), ["Month", "额外"]);
+        assert_eq!(
+            meters[0].breakdown,
+            vec![
+                RateLimitMeterPart { label: "Cursor 模型".into(), utilization: 4.0 },
+                RateLimitMeterPart { label: "第三方模型".into(), utilization: 88.0 },
+            ]
+        );
+        assert!(meters[1].breakdown.is_empty());
     }
 
     #[test]

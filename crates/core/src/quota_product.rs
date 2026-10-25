@@ -114,7 +114,7 @@ pub struct ProductDefinition {
 /// App-owned presentation, routing and discovery rules. The vendored CLI
 /// keeps its independent versioned contract; changing it requires CLI review.
 pub fn catalog() -> &'static [ProductDefinition] {
-    use QuotaProductAvailability::{PendingProtocol, Ready};
+    use QuotaProductAvailability::Ready;
     use RateLimitProvider::*;
     &[
         ProductDefinition {
@@ -168,10 +168,22 @@ pub fn catalog() -> &'static [ProductDefinition] {
         ProductDefinition {
             provider: Cursor,
             display_name: "Cursor",
-            availability: PendingProtocol,
-            cli_id: None,
+            availability: Ready,
+            cli_id: Some("cursor"),
             command: "cursor",
             relative_paths: &[".cursor"],
+        },
+        ProductDefinition {
+            provider: Antigravity,
+            display_name: "Antigravity / AGY",
+            availability: Ready,
+            cli_id: Some("antigravity"),
+            command: "agy",
+            relative_paths: &[
+                ".gemini/antigravity-cli",
+                ".gemini/antigravity",
+                ".local/bin/agy.exe",
+            ],
         },
     ]
 }
@@ -264,7 +276,9 @@ fn application_paths(
                 paths.push(root.join("Cursor").join("Cursor.exe"));
                 paths.push(root.join("cursor").join("Cursor.exe"));
             }
-            RateLimitProvider::KimiCode | RateLimitProvider::Grok => {}
+            RateLimitProvider::KimiCode
+            | RateLimitProvider::Grok
+            | RateLimitProvider::Antigravity => {}
             // OpenCode keeps its data + credential store under
             // `%LOCALAPPDATA%\opencode` on Windows, which the home-relative
             // `relative_paths` cannot express.
@@ -331,13 +345,24 @@ mod tests {
         }
         assert_eq!(
             ids,
-            HashSet::from(["kimi-code", "zcode", "grok", "opencode-go"])
+            HashSet::from([
+                "kimi-code",
+                "zcode",
+                "grok",
+                "opencode-go",
+                "cursor",
+                "antigravity"
+            ])
         );
         assert_eq!(
             cli_provider("opencode-go"),
             Some(RateLimitProvider::OpenCodeGo)
         );
-        assert_eq!(cli_id(RateLimitProvider::Cursor), None);
+        assert_eq!(cli_id(RateLimitProvider::Cursor), Some("cursor"));
+        assert_eq!(
+            cli_provider("antigravity"),
+            Some(RateLimitProvider::Antigravity)
+        );
         assert_eq!(cli_id(RateLimitProvider::Codex), None);
         assert_eq!(cli_id(RateLimitProvider::ClaudeCode), None);
         assert_eq!(cli_provider("unknown"), None);
@@ -413,14 +438,7 @@ mod tests {
             &discover_with(&home_env),
             RateLimitProvider::OpenCodeGo
         ));
-        fs::create_dir_all(
-            home_env
-                .home
-                .join(".local")
-                .join("share")
-                .join("opencode"),
-        )
-        .unwrap();
+        fs::create_dir_all(home_env.home.join(".local").join("share").join("opencode")).unwrap();
         assert!(detected(
             &discover_with(&home_env),
             RateLimitProvider::OpenCodeGo
