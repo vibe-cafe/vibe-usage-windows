@@ -108,24 +108,21 @@ fn parse_proxy_server(raw: &str) -> Option<String> {
     if raw.is_empty() {
         return None;
     }
-    // Per-protocol list: a bare "http=..." has '=' before any "://".
-    let is_list = match (raw.find('='), raw.find("://")) {
-        (Some(eq), Some(sch)) => eq < sch,
-        (Some(_), None) => true,
-        _ => false,
-    };
-    let entry = if is_list {
-        let find = |name: &str| {
-            raw.split(';')
-                .filter_map(|part| part.trim().split_once('='))
-                .find(|(k, _)| k.trim().eq_ignore_ascii_case(name))
-                .map(|(_, v)| v)
-        };
-        find("https").or_else(|| find("http"))?
-    } else {
-        raw
-    };
-    normalize_proxy_entry(entry)
+    // Per-protocol list: the text before the first '=' is a bare protocol
+    // name ("http=..."). A '=' inside "user:p=ss@host" has a ':' before it.
+    let is_list = raw
+        .split_once('=')
+        .is_some_and(|(k, _)| !k.trim().is_empty() && k.trim().chars().all(|c| c.is_ascii_alphabetic()));
+    if !is_list {
+        return normalize_proxy_entry(raw);
+    }
+    // Try https first, then http; an empty/invalid https entry falls back.
+    ["https", "http"].into_iter().find_map(|name| {
+        raw.split(';')
+            .filter_map(|part| part.trim().split_once('='))
+            .filter(|(k, _)| k.trim().eq_ignore_ascii_case(name))
+            .find_map(|(_, v)| normalize_proxy_entry(v))
+    })
 }
 
 fn normalize_proxy_entry(entry: &str) -> Option<String> {
@@ -151,6 +148,9 @@ fn valid_host_port(authority: &str) -> bool {
         let Some((h, tail)) = v6.split_once(']') else {
             return false;
         };
+        if h.parse::<std::net::Ipv6Addr>().is_err() {
+            return false;
+        }
         match tail {
             "" => (h, None),
             t => match t.strip_prefix(':') {
@@ -169,7 +169,9 @@ fn valid_host_port(authority: &str) -> bool {
     }
     match port {
         None => true,
-        Some(p) => !p.is_empty() && p.len() <= 5 && p.chars().all(|c| c.is_ascii_digit()),
+        Some(p) => {
+            p.chars().all(|c| c.is_ascii_digit()) && matches!(p.parse::<u32>(), Ok(1..=65535))
+        }
     }
 }
 
@@ -243,6 +245,50 @@ mod tests {
         assert_eq!(p("a b:80"), None);
         assert_eq!(p("http://http://127.0.0.1:1"), None);
         assert_eq!(p("http=;https="), None);
+    }
+
+    #[test]
+    fn out_of_range_port_and_bad_ipv6_rejected() {
+        assert_eq!(p("127.0.0.1:99999"), None);
+        assert_eq!(p("127.0.0.1:0"), None);
+        assert_eq!(p("127.0.0.1:65536"), None);
+        assert_eq!(p("127.0.0.1:65535").as_deref(), Some("http://127.0.0.1:65535"));
+        assert_eq!(p("[not-ip]:8080"), None);
+        assert_eq!(p("[::1"), None);
+    }
+
+    #[test]
+    fn empty_https_entry_falls_back_to_http() {
+        assert_eq!(
+            p("http=127.0.0.1:7890;https= ;").as_deref(),
+            Some("http://127.0.0.1:7890")
+        );
+        assert_eq!(
+            p("http=127.0.0.1:7890;https=bad:port").as_deref(),
+            Some("http://127.0.0.1:7890")
+        );
+    }
+
+    #[test]
+    fn list_whitespace_and_trailing_semicolon() {
+        assert_eq!(
+            p(" http=a:1 ; https=b:2 ; ").as_deref(),
+            Some("http://b:2")
+        );
+        assert_eq!(p("http=a:1;").as_deref(), Some("http://a:1"));
+        assert_eq!(p(";;").as_deref(), None);
+    }
+
+    #[test]
+    fn credentials_without_scheme() {
+        assert_eq!(
+            p("user:pass@proxy.corp:8080").as_deref(),
+            Some("http://user:pass@proxy.corp:8080")
+        );
+        assert_eq!(
+            p("user:p=ss@proxy.corp:8080").as_deref(),
+            Some("http://user:p=ss@proxy.corp:8080")
+        );
     }
 
     #[test]
