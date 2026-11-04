@@ -101,25 +101,35 @@ pub fn system_proxy_url() -> Option<String> {
 /// list `http=h:p;https=h:p;socks=h:p` (https entry wins, then http; each
 /// entry may itself carry a scheme). `socks`/`ftp` entries and any other
 /// scheme are unsupported by Node's env proxy, so they yield `None` rather
-/// than a malformed URL.
+/// than a malformed URL. Final validation uses the WHATWG `url` parser, the
+/// same rules Node applies, so anything accepted here Node can also parse.
 #[cfg_attr(not(windows), allow(dead_code))]
 fn parse_proxy_server(raw: &str) -> Option<String> {
     let raw = raw.trim();
     if raw.is_empty() {
         return None;
     }
-    // Per-protocol list: the text before the first '=' is a bare protocol
-    // name ("http=..."). A '=' inside "user:p=ss@host" has a ':' before it.
-    let is_list = raw
-        .split_once('=')
-        .is_some_and(|(k, _)| !k.trim().is_empty() && k.trim().chars().all(|c| c.is_ascii_alphabetic()));
+    // Per-protocol list only when every ';'-separated item is "<known protocol>=...".
+    // A '=' elsewhere (e.g. user "alice=name:pw@host") does not make a list.
+    const PROTOCOLS: [&str; 5] = ["http", "https", "ftp", "socks", "gopher"];
+    let parts: Vec<&str> = raw
+        .split(';')
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .collect();
+    let items: Vec<(&str, &str)> = parts.iter().filter_map(|p| p.split_once('=')).collect();
+    let is_list = !parts.is_empty()
+        && items.len() == parts.len()
+        && items
+            .iter()
+            .all(|(k, _)| PROTOCOLS.iter().any(|n| k.trim().eq_ignore_ascii_case(n)));
     if !is_list {
         return normalize_proxy_entry(raw);
     }
     // Try https first, then http; an empty/invalid https entry falls back.
     ["https", "http"].into_iter().find_map(|name| {
-        raw.split(';')
-            .filter_map(|part| part.trim().split_once('='))
+        items
+            .iter()
             .filter(|(k, _)| k.trim().eq_ignore_ascii_case(name))
             .find_map(|(_, v)| normalize_proxy_entry(v))
     })
@@ -134,77 +144,33 @@ fn normalize_proxy_entry(entry: &str) -> Option<String> {
         None => ("http", entry),
     };
     let rest = rest.trim_end_matches('/');
-    // Optional "user:pass@" prefix; the authority is what follows the last '@'.
-    let authority = match rest.rsplit_once('@') {
-        Some((userinfo, a)) => {
-            if !valid_userinfo(userinfo) {
-                return None;
-            }
-            a
-        }
-        None => rest,
-    };
-    if !valid_host_port(authority) {
+    if rest.is_empty() || rest.chars().any(char::is_whitespace) {
         return None;
     }
-    Some(format!("{scheme}://{rest}"))
-}
-
-/// RFC 3986 userinfo: unreserved, sub-delims, ':' and well-formed %XX.
-fn valid_userinfo(userinfo: &str) -> bool {
-    let b = userinfo.as_bytes();
-    let mut i = 0;
-    while i < b.len() {
-        match b[i] {
-            c if c.is_ascii_alphanumeric() || b"-._~!$&'()*+,;=:".contains(&c) => i += 1,
-            b'%' if i + 2 < b.len() && b[i + 1].is_ascii_hexdigit() && b[i + 2].is_ascii_hexdigit() => {
-                i += 3
-            }
-            _ => return false,
-        }
-    }
-    true
-}
-
-fn valid_host_port(authority: &str) -> bool {
-    let (host, port) = if let Some(v6) = authority.strip_prefix('[') {
-        // [::1] or [::1]:8080
-        let Some((h, tail)) = v6.split_once(']') else {
-            return false;
-        };
-        if h.parse::<std::net::Ipv6Addr>().is_err() {
-            return false;
-        }
-        match tail {
-            "" => (h, None),
-            t => match t.strip_prefix(':') {
-                Some(p) => (h, Some(p)),
-                None => return false,
-            },
-        }
-    } else {
-        match authority.split_once(':') {
-            Some((h, p)) => (h, Some(p)),
-            None => (authority, None),
-        }
-    };
-    // Bracketed hosts were already validated as IPv6; bare hostnames and IPv4
-    // use a whitelist.
-    let bracketed = authority.starts_with('[');
-    if host.is_empty()
-        || (!bracketed
-            && !host
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_')))
+    let url = url::Url::parse(&format!("{scheme}://{rest}")).ok()?;
+    if !matches!(url.scheme(), "http" | "https")
+        || url.path() != "/"
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || url.port() == Some(0)
     {
-        return false;
+        return None;
     }
-    match port {
-        None => true,
-        Some(p) => {
-            p.chars().all(|c| c.is_ascii_digit()) && matches!(p.parse::<u32>(), Ok(1..=65535))
+    match url.host()? {
+        url::Host::Domain(d) => {
+            // Reject leftovers the URL parser tolerates but no real host has
+            // (e.g. ';;'). IDNs are already Punycode (ASCII) here.
+            if d.is_empty()
+                || !d
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+            {
+                return None;
+            }
         }
+        url::Host::Ipv4(_) | url::Host::Ipv6(_) => {}
     }
+    Some(url.as_str().trim_end_matches('/').to_string())
 }
 
 /// Kill a child and its whole descendant tree.
@@ -239,7 +205,7 @@ mod tests {
         // Issue #124 (Hiddify).
         assert_eq!(p("http://127.0.0.1:12334").as_deref(), Some("http://127.0.0.1:12334"));
         assert_eq!(p("HTTP://127.0.0.1:12334").as_deref(), Some("http://127.0.0.1:12334"));
-        assert_eq!(p("https://proxy.corp:443").as_deref(), Some("https://proxy.corp:443"));
+        assert_eq!(p("https://proxy.corp:443").as_deref(), Some("https://proxy.corp"));
         assert_eq!(p("http://127.0.0.1:12334/").as_deref(), Some("http://127.0.0.1:12334"));
     }
 
@@ -273,7 +239,6 @@ mod tests {
         assert_eq!(p("   "), None);
         assert_eq!(p("http://"), None);
         assert_eq!(p("host:port"), None);
-        assert_eq!(p("host:"), None);
         assert_eq!(p("a b:80"), None);
         assert_eq!(p("http://http://127.0.0.1:1"), None);
         assert_eq!(p("http=;https="), None);
@@ -319,7 +284,7 @@ mod tests {
         );
         assert_eq!(
             p("user:p=ss@proxy.corp:8080").as_deref(),
-            Some("http://user:p=ss@proxy.corp:8080")
+            Some("http://user:p%3Dss@proxy.corp:8080")
         );
     }
 
@@ -333,23 +298,42 @@ mod tests {
         assert_eq!(p("bad]:8080"), None);
         assert_eq!(p("ba[d:8080"), None);
         assert_eq!(p("ho%st:8080"), None);
-        assert_eq!(p("h\u{00e9}st:8080"), None);
-        assert_eq!(p("under_score.host-1:80").as_deref(), Some("http://under_score.host-1:80"));
+        assert_eq!(p("127.0.0.999:7890"), None);
+        assert_eq!(
+            p("http=127.0.0.1:7890;https=127.0.0.999:7890").as_deref(),
+            Some("http://127.0.0.1:7890")
+        );
+        assert_eq!(p("under_score.host-1:80").as_deref(), Some("http://under_score.host-1"));
         // userinfo
         assert_eq!(p("us er:pw@h:80"), None);
         assert_eq!(p("user:p/w@h:80"), None);
-        assert_eq!(p("user:p@w@h:80"), None);
-        assert_eq!(p("user:p%zzw@h:80"), None);
-        assert_eq!(p("user:pw%@h:80"), None);
-        assert_eq!(p("user:p\u{00e9}@h:80"), None);
+        assert_eq!(p("user:p@w@h:80").as_deref(), Some("http://user:p%40w@h"));
         assert_eq!(
             p("us.er:p%40w!$&'()*+,~@h:80").as_deref(),
-            Some("http://us.er:p%40w!$&'()*+,~@h:80")
+            Some("http://us.er:p%40w!$&'()*+,~@h")
         );
         assert_eq!(
             p("http=bad user:x@h:1;https=h:2").as_deref(),
             Some("http://h:2")
         );
+    }
+
+    #[test]
+    fn idn_hosts_become_punycode() {
+        assert_eq!(p("h\u{00e9}st:8080").as_deref(), Some("http://xn--hst-bma:8080"));
+        let idn = p("\u{4f8b}\u{5b50}.\u{6d4b}\u{8bd5}:8080").unwrap();
+        assert!(idn.starts_with("http://xn--") && idn.ends_with(":8080"), "{idn}");
+        assert_eq!(p("intranet_box:3128").as_deref(), Some("http://intranet_box:3128"));
+    }
+
+    #[test]
+    fn equals_in_username_is_not_a_list() {
+        assert_eq!(
+            p("alice=name:pw@proxy.corp:8080").as_deref(),
+            Some("http://alice%3Dname:pw@proxy.corp:8080")
+        );
+        // Unknown protocol key in a list-looking value: not a list, not valid.
+        assert_eq!(p("foo=a:1"), None);
     }
 
     #[test]
