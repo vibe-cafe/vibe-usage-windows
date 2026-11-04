@@ -156,6 +156,11 @@ fn normalize_proxy_entry(entry: &str) -> Option<String> {
     {
         return None;
     }
+    // Node later runs decodeURIComponent() on the credentials; reject values
+    // it would throw on (malformed %XX or non-UTF-8 bytes).
+    if !decodes_as_utf8(url.username()) || !decodes_as_utf8(url.password().unwrap_or("")) {
+        return None;
+    }
     match url.host()? {
         url::Host::Domain(d) => {
             // Reject leftovers the URL parser tolerates but no real host has
@@ -171,6 +176,27 @@ fn normalize_proxy_entry(entry: &str) -> Option<String> {
         url::Host::Ipv4(_) | url::Host::Ipv6(_) => {}
     }
     Some(url.as_str().trim_end_matches('/').to_string())
+}
+
+/// True when percent-decoding `s` succeeds and yields valid UTF-8.
+fn decodes_as_utf8(s: &str) -> bool {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' {
+            let hex = b.get(i + 1..i + 3).and_then(|h| std::str::from_utf8(h).ok());
+            match hex.and_then(|h| u8::from_str_radix(h, 16).ok()) {
+                Some(v) => out.push(v),
+                None => return false,
+            }
+            i += 3;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).is_ok()
 }
 
 /// Kill a child and its whole descendant tree.
@@ -334,6 +360,34 @@ mod tests {
         );
         // Unknown protocol key in a list-looking value: not a list, not valid.
         assert_eq!(p("foo=a:1"), None);
+    }
+
+    #[test]
+    fn bad_percent_encoding_in_credentials_falls_back() {
+        for bad in ["user:p%w@proxy.corp:8080", "user:p%FF@proxy.corp:8080", "us%@h:80", "u%4@h:80"] {
+            assert_eq!(p(bad), None, "{bad}");
+            assert_eq!(
+                p(&format!("http=127.0.0.1:7890;https={bad}")).as_deref(),
+                Some("http://127.0.0.1:7890"),
+                "{bad}"
+            );
+        }
+        assert_eq!(
+            p("user:p%C3%A9@h:80").as_deref(),
+            Some("http://user:p%C3%A9@h")
+        );
+    }
+
+    #[test]
+    fn path_query_fragment_rejected() {
+        assert_eq!(p("127.0.0.1:7890/proxy"), None);
+        assert_eq!(p("http://127.0.0.1:7890/pac.js"), None);
+        assert_eq!(p("127.0.0.1:7890?x=1"), None);
+        assert_eq!(p("127.0.0.1:7890#frag"), None);
+        assert_eq!(
+            p("http=127.0.0.1:7890;https=h:1/path").as_deref(),
+            Some("http://127.0.0.1:7890")
+        );
     }
 
     #[test]
