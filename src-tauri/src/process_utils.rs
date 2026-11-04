@@ -135,11 +135,35 @@ fn normalize_proxy_entry(entry: &str) -> Option<String> {
     };
     let rest = rest.trim_end_matches('/');
     // Optional "user:pass@" prefix; the authority is what follows the last '@'.
-    let authority = rest.rsplit_once('@').map_or(rest, |(_, a)| a);
+    let authority = match rest.rsplit_once('@') {
+        Some((userinfo, a)) => {
+            if !valid_userinfo(userinfo) {
+                return None;
+            }
+            a
+        }
+        None => rest,
+    };
     if !valid_host_port(authority) {
         return None;
     }
     Some(format!("{scheme}://{rest}"))
+}
+
+/// RFC 3986 userinfo: unreserved, sub-delims, ':' and well-formed %XX.
+fn valid_userinfo(userinfo: &str) -> bool {
+    let b = userinfo.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            c if c.is_ascii_alphanumeric() || b"-._~!$&'()*+,;=:".contains(&c) => i += 1,
+            b'%' if i + 2 < b.len() && b[i + 1].is_ascii_hexdigit() && b[i + 2].is_ascii_hexdigit() => {
+                i += 3
+            }
+            _ => return false,
+        }
+    }
+    true
 }
 
 fn valid_host_port(authority: &str) -> bool {
@@ -164,7 +188,15 @@ fn valid_host_port(authority: &str) -> bool {
             None => (authority, None),
         }
     };
-    if host.is_empty() || host.chars().any(|c| c.is_whitespace() || "/?#@\\;=".contains(c)) {
+    // Bracketed hosts were already validated as IPv6; bare hostnames and IPv4
+    // use a whitelist.
+    let bracketed = authority.starts_with('[');
+    if host.is_empty()
+        || (!bracketed
+            && !host
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_')))
+    {
         return false;
     }
     match port {
@@ -288,6 +320,35 @@ mod tests {
         assert_eq!(
             p("user:p=ss@proxy.corp:8080").as_deref(),
             Some("http://user:p=ss@proxy.corp:8080")
+        );
+    }
+
+    #[test]
+    fn host_whitelist_and_userinfo_validation() {
+        // Invalid https entry must fall back to the valid http one.
+        assert_eq!(
+            p("http=127.0.0.1:7890;https=bad]:8080").as_deref(),
+            Some("http://127.0.0.1:7890")
+        );
+        assert_eq!(p("bad]:8080"), None);
+        assert_eq!(p("ba[d:8080"), None);
+        assert_eq!(p("ho%st:8080"), None);
+        assert_eq!(p("h\u{00e9}st:8080"), None);
+        assert_eq!(p("under_score.host-1:80").as_deref(), Some("http://under_score.host-1:80"));
+        // userinfo
+        assert_eq!(p("us er:pw@h:80"), None);
+        assert_eq!(p("user:p/w@h:80"), None);
+        assert_eq!(p("user:p@w@h:80"), None);
+        assert_eq!(p("user:p%zzw@h:80"), None);
+        assert_eq!(p("user:pw%@h:80"), None);
+        assert_eq!(p("user:p\u{00e9}@h:80"), None);
+        assert_eq!(
+            p("us.er:p%40w!$&'()*+,~@h:80").as_deref(),
+            Some("http://us.er:p%40w!$&'()*+,~@h:80")
+        );
+        assert_eq!(
+            p("http=bad user:x@h:1;https=h:2").as_deref(),
+            Some("http://h:2")
         );
     }
 
