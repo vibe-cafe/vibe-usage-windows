@@ -185,9 +185,10 @@ fn decodes_as_utf8(s: &str) -> bool {
     let mut i = 0;
     while i < b.len() {
         if b[i] == b'%' {
-            let hex = b.get(i + 1..i + 3).and_then(|h| std::str::from_utf8(h).ok());
-            match hex.and_then(|h| u8::from_str_radix(h, 16).ok()) {
-                Some(v) => out.push(v),
+            // from_str_radix would accept "+1"; require two real hex digits.
+            let hex = b.get(i + 1..i + 3).filter(|h| h.iter().all(u8::is_ascii_hexdigit));
+            match hex.and_then(|h| std::str::from_utf8(h).ok()) {
+                Some(h) => out.push(u8::from_str_radix(h, 16).unwrap_or(0)),
                 None => return false,
             }
             i += 3;
@@ -364,7 +365,7 @@ mod tests {
 
     #[test]
     fn bad_percent_encoding_in_credentials_falls_back() {
-        for bad in ["user:p%w@proxy.corp:8080", "user:p%FF@proxy.corp:8080", "us%@h:80", "u%4@h:80"] {
+        for bad in ["user:p%w@proxy.corp:8080", "user:p%FF@proxy.corp:8080", "us%@h:80", "u%4@h:80", "u:p%+1@h:80", "u:p%-1@h:80"] {
             assert_eq!(p(bad), None, "{bad}");
             assert_eq!(
                 p(&format!("http=127.0.0.1:7890;https={bad}")).as_deref(),
