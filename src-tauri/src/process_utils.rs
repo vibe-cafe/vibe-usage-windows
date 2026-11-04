@@ -62,7 +62,8 @@ pub fn launch_executable(path: &Path) -> Result<(), String> {
 }
 
 /// Windows system proxy from the registry (Internet Settings), as an
-/// `http://host:port` URL. None when disabled/unset or on other platforms.
+/// `http(s)://host:port` URL (see `parse_proxy_server`). None when
+/// disabled/unset/unrecognized or on other platforms.
 pub fn system_proxy_url() -> Option<String> {
     #[cfg(windows)]
     {
@@ -81,21 +82,94 @@ pub fn system_proxy_url() -> Option<String> {
         if server.is_empty() {
             return None;
         }
-        // Either "host:port" (all protocols) or "http=h:p;https=h:p;...".
-        let hostport = if server.contains('=') {
-            server
-                .split(';')
-                .filter_map(|part| part.trim().split_once('='))
-                .find(|(scheme, _)| *scheme == "https" || *scheme == "http")
-                .map(|(_, hp)| hp.to_string())?
-        } else {
-            server.to_string()
-        };
-        Some(format!("http://{hostport}"))
+        let url = parse_proxy_server(server);
+        if url.is_none() {
+            // Never log the raw value: it may carry user:password.
+            log::warn!("system proxy ignored: unrecognized ProxyServer format");
+        }
+        url
     }
     #[cfg(not(windows))]
     {
         None
+    }
+}
+
+/// Turn a Windows `ProxyServer` value into a proxy URL Node can use, or `None`
+/// when the value is not something we can express safely. Accepted forms:
+/// `host:port`, `http://host:port`, `https://host:port`, and the per-protocol
+/// list `http=h:p;https=h:p;socks=h:p` (https entry wins, then http; each
+/// entry may itself carry a scheme). `socks`/`ftp` entries and any other
+/// scheme are unsupported by Node's env proxy, so they yield `None` rather
+/// than a malformed URL.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn parse_proxy_server(raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    // Per-protocol list: a bare "http=..." has '=' before any "://".
+    let is_list = match (raw.find('='), raw.find("://")) {
+        (Some(eq), Some(sch)) => eq < sch,
+        (Some(_), None) => true,
+        _ => false,
+    };
+    let entry = if is_list {
+        let find = |name: &str| {
+            raw.split(';')
+                .filter_map(|part| part.trim().split_once('='))
+                .find(|(k, _)| k.trim().eq_ignore_ascii_case(name))
+                .map(|(_, v)| v)
+        };
+        find("https").or_else(|| find("http"))?
+    } else {
+        raw
+    };
+    normalize_proxy_entry(entry)
+}
+
+fn normalize_proxy_entry(entry: &str) -> Option<String> {
+    let entry = entry.trim();
+    let (scheme, rest) = match entry.split_once("://") {
+        Some((s, r)) if s.eq_ignore_ascii_case("http") => ("http", r),
+        Some((s, r)) if s.eq_ignore_ascii_case("https") => ("https", r),
+        Some(_) => return None, // socks5://, ftp://, ...
+        None => ("http", entry),
+    };
+    let rest = rest.trim_end_matches('/');
+    // Optional "user:pass@" prefix; the authority is what follows the last '@'.
+    let authority = rest.rsplit_once('@').map_or(rest, |(_, a)| a);
+    if !valid_host_port(authority) {
+        return None;
+    }
+    Some(format!("{scheme}://{rest}"))
+}
+
+fn valid_host_port(authority: &str) -> bool {
+    let (host, port) = if let Some(v6) = authority.strip_prefix('[') {
+        // [::1] or [::1]:8080
+        let Some((h, tail)) = v6.split_once(']') else {
+            return false;
+        };
+        match tail {
+            "" => (h, None),
+            t => match t.strip_prefix(':') {
+                Some(p) => (h, Some(p)),
+                None => return false,
+            },
+        }
+    } else {
+        match authority.split_once(':') {
+            Some((h, p)) => (h, Some(p)),
+            None => (authority, None),
+        }
+    };
+    if host.is_empty() || host.chars().any(|c| c.is_whitespace() || "/?#@\\;=".contains(c)) {
+        return false;
+    }
+    match port {
+        None => true,
+        Some(p) => !p.is_empty() && p.len() <= 5 && p.chars().all(|c| c.is_ascii_digit()),
     }
 }
 
@@ -114,4 +188,71 @@ pub fn kill_child_tree(child: &mut tokio::process::Child) {
         }
     }
     let _ = child.start_kill();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_proxy_server as p;
+
+    #[test]
+    fn plain_host_port_gets_http() {
+        assert_eq!(p("127.0.0.1:7890").as_deref(), Some("http://127.0.0.1:7890"));
+        assert_eq!(p("  proxy.corp:8080 ").as_deref(), Some("http://proxy.corp:8080"));
+    }
+
+    #[test]
+    fn existing_scheme_is_not_doubled() {
+        // Issue #124 (Hiddify).
+        assert_eq!(p("http://127.0.0.1:12334").as_deref(), Some("http://127.0.0.1:12334"));
+        assert_eq!(p("HTTP://127.0.0.1:12334").as_deref(), Some("http://127.0.0.1:12334"));
+        assert_eq!(p("https://proxy.corp:443").as_deref(), Some("https://proxy.corp:443"));
+        assert_eq!(p("http://127.0.0.1:12334/").as_deref(), Some("http://127.0.0.1:12334"));
+    }
+
+    #[test]
+    fn per_protocol_prefers_https_then_http() {
+        assert_eq!(
+            p("http=a:1;https=b:2;ftp=c:3").as_deref(),
+            Some("http://b:2")
+        );
+        assert_eq!(p("ftp=c:3;http=a:1").as_deref(), Some("http://a:1"));
+        assert_eq!(
+            p("http=http://a:1;https=http://b:2").as_deref(),
+            Some("http://b:2")
+        );
+        assert_eq!(p("HTTPS=b:2").as_deref(), Some("http://b:2"));
+    }
+
+    #[test]
+    fn socks_and_unknown_are_rejected() {
+        assert_eq!(p("socks=127.0.0.1:1080"), None);
+        assert_eq!(p("socks5://127.0.0.1:1080"), None);
+        assert_eq!(p("socks://127.0.0.1:1080"), None);
+        assert_eq!(p("ftp=a:1"), None);
+        assert_eq!(p("ftp://a:1"), None);
+        assert_eq!(p("http=socks5://a:1"), None);
+    }
+
+    #[test]
+    fn malformed_values_are_rejected() {
+        assert_eq!(p(""), None);
+        assert_eq!(p("   "), None);
+        assert_eq!(p("http://"), None);
+        assert_eq!(p("host:port"), None);
+        assert_eq!(p("host:"), None);
+        assert_eq!(p("a b:80"), None);
+        assert_eq!(p("http://http://127.0.0.1:1"), None);
+        assert_eq!(p("http=;https="), None);
+    }
+
+    #[test]
+    fn ipv6_and_credentials() {
+        assert_eq!(p("[::1]:8080").as_deref(), Some("http://[::1]:8080"));
+        assert_eq!(p("http://[::1]:8080").as_deref(), Some("http://[::1]:8080"));
+        assert_eq!(
+            p("http://user:pw@proxy.corp:8080").as_deref(),
+            Some("http://user:pw@proxy.corp:8080")
+        );
+        assert_eq!(p("http://user:pw@:8080"), None);
+    }
 }
