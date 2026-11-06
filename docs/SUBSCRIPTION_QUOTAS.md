@@ -21,7 +21,7 @@
 - 必须带进程内 `--settings '{"env":{"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC":""}}'`。只从子进程环境里删掉这个变量不够：Claude Code 启动后会重新读 `~/.claude/settings.json` 的 `env`，变量一旦生效，订阅账号的 `get_usage` 会回 `rate_limits: null`。值必须是空字符串，不能写 `"0"`；不写盘，也不传 `--bare`。
 - `get_usage` 请求必须带 `skip_behaviors: true`（2026-11-06 经维护者按架构审批门批准）。不带时，Claude Code 会先扫描最近 7 天的本地对话记录，为 `/usage` 生成消耗分析，扫完才回答。卡片不使用这部分，而重度用户的这次扫描可能超过单个程序 8 秒的预算（#25）。配额与套餐字段在两种情况下来自同一路径。
 - 套餐名照 `subscription_type` 显示，首字母大写。2026-10-30 起 Max 20x 改名 Ultra，但 Claude Code 对这类账号仍报 `max`，所以显示 Max；不按「没有 5 小时窗口」推断 Ultra，因为未验证的 Ultra 账号仍有 5 小时窗口。
-- 窗口为 `null` 视为「没有该窗口」，不是坏数据。实时回答、`~/.claude.json` 缓存、Claude Desktop 记录（`crates/core/src/rate_limit/claude_desktop.rs`）三条路径都只跳过该窗口，保留其余窗口；非空但不是数字的值仍判为无效记录。
+- 窗口为 `null` 视为「没有该窗口」，不是坏数据。实时回答、`~/.claude.json` 缓存、Claude Desktop 记录（`crates/core/src/rate_limit/claude_desktop.rs`）三条路径都只跳过该窗口，保留其余窗口。Claude Desktop 记录里非空但不是数字的值仍判整条无效；实时回答和缓存遇到不合法的窗口只丢掉该窗口。
 
 ## 空态判定（不猜）
 
