@@ -102,7 +102,11 @@ pub fn parse(bytes: &[u8], now: f64) -> Option<ProviderRateLimit> {
         ("cw", "Cowork"),
         ("oa", "OAuth apps"),
     ] {
-        let Some(value) = usage.get(key) else {
+        // A window the account does not have may be written as `null` (verified
+        // Ultra accounts have no 5h window since 2026-10-30). That is absence,
+        // not a malformed record: skip the meter instead of discarding the
+        // other windows. Non-null non-numbers are still rejected below.
+        let Some(value) = usage.get(key).filter(|v| !v.is_null()) else {
             continue;
         };
         let utilization = value.as_f64()?;
@@ -186,6 +190,38 @@ mod tests {
         assert!(decode(vec![
             sample(NOW - 10.0, "one", 28.0),
             json!({"t":NOW*1000.0,"org":"one","u":{}})
+        ])
+        .is_none());
+    }
+    #[test]
+    fn null_window_is_skipped_without_discarding_the_others() {
+        // Verified Ultra: no 5h window.
+        let s = decode(vec![
+            json!({"t":NOW*1000.0,"org":"one","u":{"fh":null,"sd":47}}),
+        ])
+        .unwrap();
+        assert_eq!(s.status, RateLimitStatus::Ok);
+        assert_eq!(s.meters.len(), 1);
+        assert_eq!(s.meters[0].label, "7d");
+        assert_eq!(s.meters[0].utilization, 47.0);
+
+        // Optional model windows may be null too; zero stays a real reading.
+        let s = decode(vec![json!({
+            "t":NOW*1000.0,"org":"one","u":{"fh":0,"sd":13,"so":null,"sn":null,"cw":null}
+        })])
+        .unwrap();
+        let labels: Vec<_> = s.meters.iter().map(|m| m.label.as_str()).collect();
+        assert_eq!(labels, ["5h", "7d"]);
+        assert_eq!(s.meters[0].utilization, 0.0);
+    }
+    #[test]
+    fn all_null_or_non_numeric_windows_still_yield_no_snapshot() {
+        assert!(decode(vec![
+            json!({"t":NOW*1000.0,"org":"one","u":{"fh":null,"sd":null}})
+        ])
+        .is_none());
+        assert!(decode(vec![
+            json!({"t":NOW*1000.0,"org":"one","u":{"fh":"12","sd":13}})
         ])
         .is_none());
     }

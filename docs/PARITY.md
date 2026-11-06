@@ -52,7 +52,7 @@
 | ZCode 两区域 Key | BigModel / Z.ai 分开存入 Windows Credential Manager；只向明确选择的区域请求注入 |
 | `RuntimeDetector` | `crates/core/runtime.rs`（Windows 路径 + 捆绑 node 兜底） |
 | `CodexRateLimitReader` | `crates/core/rate_limit/codex.rs` |
-| `ClaudeRateLimitReader` | `crates/core/rate_limit/claude.rs` |
+| `ClaudeUsageProbe`（Claude Code stdio `get_usage` 探测）+ `ClaudeUsageCache` | `src-tauri/src/services/claude_usage.rs`（探测参数与请求体与 macOS 逐项一致，见 `docs/SUBSCRIPTION_QUOTAS.md`「Claude 探测约束」）+ `crates/core/rate_limit/claude_desktop.rs`（Desktop 记录） |
 | 旧 `StatuslineHook` | `crates/core/statusline_hook.rs` 仅用于安全退休本应用可证明归属的旧 hook |
 | `MenuBarController`（NSStatusItem + NSPanel） | `tray.rs` + `panel.rs`（托盘 + 标准主窗口） |
 | Sparkle | `services/updater.rs`（latest.json + SHA-256 + NSIS） |
@@ -86,7 +86,7 @@
 |---|---|
 | `%USERPROFILE%\.vibe-usage\config.json` | `apiKey` / `apiUrl` / `hostname`（camelCase，与 CLI 互写） |
 | `%USERPROFILE%\.vibe-usage\state.json` | CLI 增量同步状态；「重置配置」时一并删除（修复 macOS/CLI 的 reset 不清 state 问题） |
-| `%USERPROFILE%\.vibe-usage\claude-rate-limits.json` | 旧版本缓存，仅作安全回退；新版本不安装 statusline |
+| `%USERPROFILE%\.vibe-usage\claude-rate-limits.json` | 旧版本 statusline 留下的抓取文件；当前版本不再读取（`crates/core/rate_limit/claude.rs` 的旧解析器已无调用方），也不安装 statusline |
 | `%USERPROFILE%\.codex\sessions\` | Codex 配额读取（只读） |
 | `%APPDATA%\ai.vibecafe.vibe-usage.windows\settings.json` | 应用设置（对应 macOS UserDefaults） |
 

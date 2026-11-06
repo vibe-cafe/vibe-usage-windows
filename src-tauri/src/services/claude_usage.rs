@@ -17,6 +17,51 @@ const CANDIDATE_TIMEOUT: Duration = Duration::from_secs(8);
 const FIVE_HOURS: f64 = 5.0 * 3600.0;
 const SEVEN_DAYS: f64 = 7.0 * 86_400.0;
 
+/// Process-local settings that unset `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`.
+/// Removing it from the child environment is not enough: Claude Code re-applies
+/// `~/.claude/settings.json` `env` after start, and with the flag set
+/// `get_usage` answers `rate_limits: null` on a subscription account. Empty
+/// string, not `"0"` (any non-empty value is truthy). Never written to disk.
+/// Mirrors macOS `ClaudeUsageProbe.nonessentialTrafficOverrideSettings`.
+const NONESSENTIAL_TRAFFIC_OVERRIDE_SETTINGS: &str =
+    r#"{"env":{"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC":""}}"#;
+
+/// Mirrors macOS `ClaudeUsageProbe.processArguments`. `--print` is required:
+/// Claude Code (2.1.246 and later) exits with "--input-format=stream-json
+/// requires --print." before the control protocol starts, so without it every
+/// probe fails (vibe-usage-windows#25, vibe-usage-app#35).
+const PROBE_ARGS: [&str; 15] = [
+    "--print",
+    "--safe-mode",
+    "--no-session-persistence",
+    "--strict-mcp-config",
+    "--mcp-config",
+    r#"{"mcpServers":{}}"#,
+    "--tools",
+    "",
+    "--output-format",
+    "stream-json",
+    "--input-format",
+    "stream-json",
+    "--verbose",
+    "--settings",
+    NONESSENTIAL_TRAFFIC_OVERRIDE_SETTINGS,
+];
+
+/// `get_usage` control request. `skip_behaviors` stops Claude Code from first
+/// scanning every local transcript of the last seven days for the `/usage`
+/// "what's contributing" analysis; the card never reads it, and on heavy
+/// accounts that scan can outlast `CANDIDATE_TIMEOUT`. The quota fields come
+/// from the same code path either way. Approved by the maintainer on
+/// 2026-11-06 under the architecture approval gate (vibe-usage-windows#25).
+fn usage_request() -> Value {
+    json!({
+        "type": "control_request",
+        "request_id": "vibe-usage",
+        "request": {"subtype": "get_usage", "skip_behaviors": true}
+    })
+}
+
 pub async fn fetch() -> Result<ProviderRateLimit, String> {
     // Desktop observations are local-only and must not be confused with a
     // separately configured CLI account. No Claude process is started here.
@@ -83,20 +128,7 @@ fn discover_binaries() -> Vec<PathBuf> {
 
 async fn run_probe(candidate: &Path) -> Result<ProviderRateLimit, String> {
     let mut command = tokio::process::Command::new(candidate);
-    command.args([
-        "--safe-mode",
-        "--no-session-persistence",
-        "--strict-mcp-config",
-        "--mcp-config",
-        r#"{"mcpServers":{}}"#,
-        "--tools",
-        "",
-        "--output-format",
-        "stream-json",
-        "--input-format",
-        "stream-json",
-        "--verbose",
-    ]);
+    command.args(PROBE_ARGS);
     command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -169,11 +201,7 @@ async fn exchange(
         match response.get("request_id").and_then(Value::as_str) {
             Some("vibe-init") if !sent_usage => {
                 sent_usage = true;
-                send(
-                    &mut stdin,
-                    &json!({"type":"control_request","request_id":"vibe-usage","request":{"subtype":"get_usage"}}),
-                )
-                .await?;
+                send(&mut stdin, &usage_request()).await?;
             }
             Some("vibe-usage") => {
                 stdin.shutdown().await.map_err(|e| e.to_string())?;
@@ -369,6 +397,121 @@ mod tests {
         let snapshot = snapshot_from_payload(&payload, 1_800_000_000.0).unwrap();
         assert_eq!(snapshot.status, RateLimitStatus::Ok);
         assert_eq!(snapshot.empty_reason, None);
+    }
+
+    /// Without `--print` Claude Code rejects stream-json input and exits before
+    /// `initialize`; the argument list must stay in step with macOS.
+    #[test]
+    fn probe_runs_in_print_mode_with_the_same_arguments_as_macos() {
+        assert_eq!(
+            PROBE_ARGS,
+            [
+                "--print",
+                "--safe-mode",
+                "--no-session-persistence",
+                "--strict-mcp-config",
+                "--mcp-config",
+                r#"{"mcpServers":{}}"#,
+                "--tools",
+                "",
+                "--output-format",
+                "stream-json",
+                "--input-format",
+                "stream-json",
+                "--verbose",
+                "--settings",
+                NONESSENTIAL_TRAFFIC_OVERRIDE_SETTINGS,
+            ]
+        );
+        assert!(!PROBE_ARGS.contains(&"--bare"));
+    }
+
+    /// The override unsets exactly one key, with an empty (falsy) string.
+    #[test]
+    fn settings_override_only_unsets_nonessential_traffic() {
+        let index = PROBE_ARGS.iter().position(|a| *a == "--settings").unwrap();
+        let settings: Value = serde_json::from_str(PROBE_ARGS[index + 1]).unwrap();
+        assert_eq!(
+            settings,
+            json!({"env": {"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": ""}})
+        );
+    }
+
+    /// Without `skip_behaviors`, Claude Code scans seven days of transcripts
+    /// before it answers; heavy accounts time out (vibe-usage-windows#25).
+    #[test]
+    fn usage_request_skips_the_transcript_scan() {
+        let request = usage_request();
+        assert_eq!(request["type"], "control_request");
+        assert_eq!(request["request_id"], "vibe-usage");
+        assert_eq!(
+            request["request"],
+            json!({"subtype": "get_usage", "skip_behaviors": true})
+        );
+        assert!(request["request"]["skip_behaviors"].is_boolean());
+    }
+
+    /// With `skip_behaviors` the reply carries `behaviors: null`; windows and
+    /// plan are unaffected.
+    #[test]
+    fn reply_without_behaviors_keeps_windows_and_plan() {
+        let payload = json!({
+            "subscription_type": "max",
+            "rate_limits_available": true,
+            "behaviors": null,
+            "rate_limits": {
+                "five_hour": {"utilization": 3, "resets_at": "2030-01-01T01:00:00Z"},
+                "seven_day": {"utilization": 42, "resets_at": "2030-01-05T00:00:00Z"}
+            }
+        });
+        let snapshot = snapshot_from_payload(&payload, 1_800_000_000.0).unwrap();
+        assert_eq!(snapshot.status, RateLimitStatus::Ok);
+        assert_eq!(snapshot.plan_label.as_deref(), Some("Max"));
+        assert_eq!(snapshot.five_hour.unwrap().utilization, 3.0);
+        assert_eq!(snapshot.seven_day.unwrap().utilization, 42.0);
+    }
+
+    /// Verified Ultra accounts (Max 20x was renamed on 2026-10-30) have no 5h
+    /// window. That is an ordinary subscription answer, not "plan limits don't
+    /// apply"; Claude Code still reports `subscription_type: "max"` for them.
+    #[test]
+    fn weekly_only_plan_parses_without_a_five_hour_window() {
+        let payload = json!({
+            "subscription_type": "max",
+            "rate_limits_available": true,
+            "rate_limits": {
+                "five_hour": null,
+                "seven_day": {"utilization": 47, "resets_at": "2030-01-05T00:00:00Z"}
+            }
+        });
+        let snapshot = snapshot_from_payload(&payload, 1_800_000_000.0).unwrap();
+        assert_eq!(snapshot.status, RateLimitStatus::Ok);
+        assert_eq!(snapshot.empty_reason, None);
+        assert!(snapshot.five_hour.is_none());
+        assert_eq!(snapshot.seven_day.unwrap().utilization, 47.0);
+        assert_eq!(snapshot.plan_label.as_deref(), Some("Max"));
+    }
+
+    #[test]
+    fn cache_without_a_five_hour_window_keeps_the_weekly_window() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join(".claude.json");
+        let now = 1_800_000_000.0;
+        let value = json!({
+            "oauthAccount": {"accountUuid": "same"},
+            "cachedUsageUtilization": {
+                "fetchedAtMs": (now - 60.0) * 1000.0,
+                "accountUuid": "same",
+                "utilization": {
+                    "five_hour": null,
+                    "seven_day": {"utilization": 47, "resets_at": "2030-01-05T00:00:00Z"}
+                }
+            }
+        });
+        std::fs::write(&file, value.to_string()).unwrap();
+        let snapshot = cached_snapshot_from(&file, now).unwrap();
+        assert!(snapshot.five_hour.is_none());
+        assert_eq!(snapshot.seven_day.unwrap().utilization, 47.0);
     }
 
     #[test]
