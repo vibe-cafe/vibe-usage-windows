@@ -13,6 +13,16 @@
 - `rate_limits.rs`：刷新调度和短期内存缓存。Codex/Claude 保留原读取实现（Claude 原生探测的 `rate_limits_available:false` 直接给出 `sessionWithoutPlanLimits` 空态原因），其他已接入产品通过 `quota_cli.rs` 使用固定 CLI 的 JSON 协议；CLI 结果里的可选 `emptyReason` 会映射到 `RateLimitEmptyReason`，缺失或未知取值保持 `None`（向前兼容）。
 - 前端从目录获取产品名称，使用共享卡片展示配额；官方图标资产（七家，@2x）由 `src/assets/` 提供，卡片与设置页共用 `src/components/ProviderIcon.tsx`。类型定义保留编译期检查，产品特有的登录提示仍由 UI 处理。
 
+## Claude 探测约束（与 macOS 逐项一致）
+
+`src-tauri/src/services/claude_usage.rs` 启动 Claude Code 的参数与 macOS `ClaudeUsageProbe.processArguments` 相同，单元测试锁定：
+
+- 必须带 `--print`。Claude Code 2.1.246 起，`--input-format stream-json` 缺 `--print` 会直接报错退出，探测在 `initialize` 之前就失败（vibe-usage-app#35；Windows 到 #25 才补上）。
+- 必须带进程内 `--settings '{"env":{"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC":""}}'`。只从子进程环境里删掉这个变量不够：Claude Code 启动后会重新读 `~/.claude/settings.json` 的 `env`，变量一旦生效，订阅账号的 `get_usage` 会回 `rate_limits: null`。值必须是空字符串，不能写 `"0"`；不写盘，也不传 `--bare`。
+- `get_usage` 请求必须带 `skip_behaviors: true`（2026-11-06 经维护者按架构审批门批准）。不带时，Claude Code 会先扫描最近 7 天的本地对话记录，为 `/usage` 生成消耗分析，扫完才回答。卡片不使用这部分，而重度用户的这次扫描可能超过单个程序 8 秒的预算（#25）。配额与套餐字段在两种情况下来自同一路径。
+- 套餐名照 `subscription_type` 显示，首字母大写。2026-10-30 起 Max 20x 改名 Ultra，但 Claude Code 对这类账号仍报 `max`，所以显示 Max；不按「没有 5 小时窗口」推断 Ultra，因为未验证的 Ultra 账号仍有 5 小时窗口。
+- 窗口为 `null` 视为「没有该窗口」，不是坏数据。实时回答、`~/.claude.json` 缓存、Claude Desktop 记录（`crates/core/src/rate_limit/claude_desktop.rs`）三条路径都只跳过该窗口，保留其余窗口。Claude Desktop 记录里非空但不是数字的值仍判整条无效；实时回答和缓存遇到不合法的窗口只丢掉该窗口。
+
 ## 空态判定（不猜）
 
 卡片的空态文案只复述数据源真正报告过的内容：刷新在途 →「正在读取订阅配额…」；Codex 实时用量接口的 `allowed:false` / `limit_reached:true` →「本期订阅配额已用满 · 等待额度重置」；同一接口应答但没有生效窗口 →「当前没有生效的额度窗口」；OpenCode Go 用量接口对没有 Go 订阅的 Key 返回 403 →「未订阅 OpenCode Go」；Claude Code 应答 `rate_limits_available:false`（API Key / Bedrock / Vertex 登录，配额窗口本就不适用）→「当前登录方式不含订阅额度（API Key / Bedrock / Vertex）」；本机检测到产品但尚无数据 →「暂未读取到订阅配额数据」；本机未安装/未登录 →「未检测到本机安装或登录」。`limit_reached` 与 `allowed` 都缺失时 `empty_reason` 保持 `None`（`RateLimitEmptyReason`）；CLI 桥只在 CLI 报告 `emptyReason` 时透传该字段（缺失/`null` 是当前快照的正常路径，未知取值丢弃，均保持 `None`），本地日志与缓存不填该字段，因此前端不会替任何来源断言「已用满」。
