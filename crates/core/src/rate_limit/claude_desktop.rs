@@ -73,7 +73,10 @@ fn locations(env: &DiscoveryEnvironment) -> Vec<Location> {
             let Some(suffix) = package_suffix(&name) else {
                 continue;
             };
-            if !entry.file_type().is_ok_and(|t| t.is_dir()) {
+            // Follow links: `DirEntry::file_type` does not, and users who are
+            // short on C: often move these large directories to another
+            // drive with `mklink /J`, leaving a junction at exactly this level.
+            if !entry.path().is_dir() {
                 continue;
             }
             let path = if current {
@@ -455,18 +458,65 @@ mod tests {
             let target = current(dir.path(), SUFFIX);
             write_record(&target, 28.0, SystemTime::now());
             let link = packaged(dir.path(), SUFFIX);
-            std::fs::create_dir_all(link.parent().unwrap()).unwrap();
-            #[cfg(unix)]
-            let linked = std::os::unix::fs::symlink(&target, &link);
-            #[cfg(windows)]
-            let linked = std::os::windows::fs::symlink_dir(&target, &link);
-            if linked.is_err() {
-                // Creating a link can need a privilege the runner lacks.
-                eprintln!("skipped: could not create a directory link");
-                return;
-            }
+            link_dir(&target, &link);
             assert_eq!(data_dirs(&env).len(), 2);
             assert_eq!(five_hour(&read(&env, NOW).unwrap()), 28.0);
+        }
+
+        /// The `claude_<suffix>` / `Claude_<suffix>` directory itself is the
+        /// link (the data was moved to another drive with `mklink /J`).
+        #[test]
+        fn package_directory_that_is_itself_a_link_is_found() {
+            // `%LOCALAPPDATA%\Claude-Data\claude_<suffix>` → another drive.
+            let moved_data = tempfile::tempdir().unwrap();
+            let data_env = env(moved_data.path());
+            let target = moved_data.path().join("D-drive").join("claude-data");
+            write_record(&target, 28.0, SystemTime::now());
+            let link = current(moved_data.path(), SUFFIX);
+            link_dir(&target, &link);
+            assert_eq!(data_dirs(&data_env), vec![link]);
+            assert_eq!(five_hour(&read(&data_env, NOW).unwrap()), 28.0);
+
+            // `%LOCALAPPDATA%\Packages\Claude_<suffix>` → another drive.
+            let moved_package = tempfile::tempdir().unwrap();
+            let package_env = env(moved_package.path());
+            let target = moved_package.path().join("D-drive").join("package");
+            write_record(
+                &target.join("LocalCache/Roaming/Claude"),
+                28.0,
+                SystemTime::now(),
+            );
+            let link = moved_package
+                .path()
+                .join("Local/Packages")
+                .join(format!("Claude_{SUFFIX}"));
+            link_dir(&target, &link);
+            assert_eq!(
+                data_dirs(&package_env),
+                vec![packaged(moved_package.path(), SUFFIX)]
+            );
+            assert_eq!(five_hour(&read(&package_env, NOW).unwrap()), 28.0);
+        }
+
+        /// A directory link at `link` pointing to `target`. On Windows this is
+        /// a junction, which needs neither administrator rights nor Developer
+        /// Mode, so a failure here is a real failure, never a skip.
+        fn link_dir(target: &Path, link: &Path) {
+            std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(target, link).expect("create a directory symlink");
+            #[cfg(windows)]
+            {
+                let status = std::process::Command::new("cmd")
+                    .args(["/C", "mklink", "/J"])
+                    .arg(link)
+                    .arg(target)
+                    .stdout(std::process::Stdio::null())
+                    .status()
+                    .expect("run mklink /J");
+                assert!(status.success(), "mklink /J failed");
+            }
+            assert!(link.is_dir(), "the link must resolve to a directory");
         }
 
         #[test]
