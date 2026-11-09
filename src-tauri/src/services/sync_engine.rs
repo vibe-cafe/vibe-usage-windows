@@ -255,20 +255,9 @@ async fn run_cli_sync(app: &AppHandle) -> Result<String, String> {
     let stdout_pipe = child.stdout.take();
     let stderr_pipe = child.stderr.take();
 
-    // Read pipes concurrently with waiting so the child never blocks on a
-    // full pipe buffer.
-    let io_task = async {
-        use tokio::io::AsyncReadExt;
-        let mut out = String::new();
-        let mut err = String::new();
-        if let Some(mut p) = stdout_pipe {
-            let _ = p.read_to_string(&mut out).await;
-        }
-        if let Some(mut p) = stderr_pipe {
-            let _ = p.read_to_string(&mut err).await;
-        }
-        (out, err)
-    };
+    // Read both pipes concurrently with waiting so the child never blocks on
+    // a full pipe buffer.
+    let io_task = read_both(stdout_pipe, stderr_pipe);
 
     let combined = tokio::select! {
         res = async {
@@ -307,6 +296,33 @@ async fn run_cli_sync(app: &AppHandle) -> Result<String, String> {
             ))
         }
     }
+}
+
+/// Drain stdout and stderr at the same time. Reading stdout to EOF before
+/// touching stderr deadlocks as soon as the CLI writes more warnings than the
+/// stderr pipe holds (small on Windows): the CLI blocks on that write, never
+/// closes stdout, and the run ends as a 120-second "同步超时".
+async fn read_both<O, E>(stdout: Option<O>, stderr: Option<E>) -> (String, String)
+where
+    O: tokio::io::AsyncRead + Unpin,
+    E: tokio::io::AsyncRead + Unpin,
+{
+    use tokio::io::AsyncReadExt;
+    let out = async move {
+        let mut text = String::new();
+        if let Some(mut pipe) = stdout {
+            let _ = pipe.read_to_string(&mut text).await;
+        }
+        text
+    };
+    let err = async move {
+        let mut text = String::new();
+        if let Some(mut pipe) = stderr {
+            let _ = pipe.read_to_string(&mut text).await;
+        }
+        text
+    };
+    tokio::join!(out, err)
 }
 
 /// Pick the most informative line from CLI output. stderr carries non-fatal
@@ -376,7 +392,7 @@ fn write_sync_log(app: &AppHandle, status: &std::process::ExitStatus, stdout: &s
 
 #[cfg(test)]
 mod tests {
-    use super::run_with_follow_up;
+    use super::{read_both, run_with_follow_up};
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Arc;
     use tokio::sync::{Mutex, Notify};
@@ -512,5 +528,31 @@ mod tests {
         .await;
         assert_eq!(runs.load(Ordering::SeqCst), 1);
         assert!(!pending.load(Ordering::SeqCst));
+    }
+
+    /// A CLI that writes far more to stderr than a pipe holds, and only then
+    /// to stdout, must still be read to the end (the old code read stdout to
+    /// EOF first and deadlocked until the 120-second timeout).
+    #[tokio::test]
+    async fn heavy_stderr_output_does_not_block_reading_stdout() {
+        use tokio::io::AsyncWriteExt;
+        let (mut stdout_writer, stdout_reader) = tokio::io::duplex(64);
+        let (mut stderr_writer, stderr_reader) = tokio::io::duplex(64);
+        let warnings = "warning: skipped one file\n".repeat(20_000);
+        let expected = warnings.len();
+        let writer = tokio::spawn(async move {
+            stderr_writer.write_all(warnings.as_bytes()).await.unwrap();
+            drop(stderr_writer);
+            stdout_writer.write_all(b"Synced 12 buckets").await.unwrap();
+        });
+        let (stdout, stderr) = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            read_both(Some(stdout_reader), Some(stderr_reader)),
+        )
+        .await
+        .expect("both pipes must drain without waiting for each other");
+        writer.await.unwrap();
+        assert_eq!(stdout, "Synced 12 buckets");
+        assert_eq!(stderr.len(), expected);
     }
 }
