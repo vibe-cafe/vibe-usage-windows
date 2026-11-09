@@ -507,14 +507,22 @@ mod tests {
             std::os::unix::fs::symlink(target, link).expect("create a directory symlink");
             #[cfg(windows)]
             {
-                let status = std::process::Command::new("cmd")
+                // `cmd` reads any argument piece starting with `/` as a switch,
+                // and the test paths are joined with `/`: hand `mklink` plain
+                // backslash paths (the temp root is already absolute).
+                let backslashed = |path: &Path| path.to_string_lossy().replace('/', "\\");
+                let output = std::process::Command::new("cmd")
                     .args(["/C", "mklink", "/J"])
-                    .arg(link)
-                    .arg(target)
-                    .stdout(std::process::Stdio::null())
-                    .status()
+                    .arg(backslashed(link))
+                    .arg(backslashed(target))
+                    .output()
                     .expect("run mklink /J");
-                assert!(status.success(), "mklink /J failed");
+                assert!(
+                    output.status.success(),
+                    "mklink /J failed: {}{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
             }
             assert!(link.is_dir(), "the link must resolve to a directory");
         }
