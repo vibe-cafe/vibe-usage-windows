@@ -48,11 +48,12 @@
 | 七产品订阅配额目录与任意数量选择 | Codex / Claude 原生适配；Kimi / ZCode / Grok / OpenCode Go 使用版本化 typed CLI bridge（OpenCode Go 的凭据读取由内置 CLI 负责：2.x 凭据表 → 1.x `auth.json` 回退）；Cursor 独立显示待接入 |
 | `RateLimitCardView`：`QuotaTabStripView`（整目录图标 Tab：已生效彩色在前、未生效置灰在后、可拖动排序、最右齿轮进设置、已启用但非 ok 加琥珀点）+ 一行两张 240px 卡片横滑，Tab 与横滑双向联动（点 Tab 滑过去、滑动时高亮跟随前缘卡片）；卡片只属于已启用产品，全部关闭时只剩图标行 | `components/RateLimitCard.tsx` + `components/QuotaTabStrip.tsx`：同一模型（HTML5 拖放排序、前缘卡片经滚动位置判定、`quotaTabOrder` 顺序与 `quotaProductOrder` 持久化、齿轮调 `open_settings_window`） |
 | `RateLimitCardView.emptyStateText(for:isDetected:)` / `ProviderRateLimit.EmptyReason` | `lib/quotaProducts.ts:quotaEmptyStateText` + Rust `RateLimitEmptyReason`（`crates/core/src/rate_limit/mod.rs`） |
+| `ProviderRateLimit.Source` / `ProviderRateLimit.LiveFailure`（卡片的实际来源和固定失败原因，一键诊断 1a） | Rust `RateLimitSource` / `RateLimitLiveFailure`（同一组代码，另加 Windows 独有的桌面端记录四种原因和凭据管理器）+ `lib/quotaProducts.ts:quotaFailureText` / `quotaProvenanceText`（文案与显示规则一致，见 `docs/SUBSCRIPTION_QUOTAS.md`「失败原因和来源」） |
 | `RateLimitCardView.ProviderIcon`（官方 28/56px 资产，卡片与设置共用） | `components/ProviderIcon.tsx`（`src/assets/*-icon.png` 为官方资产 @2x=56px，卡片 14px 显示）+ 符号兜底 |
 | ZCode 两区域 Key | BigModel / Z.ai 分开存入 Windows Credential Manager；只向明确选择的区域请求注入 |
 | `RuntimeDetector` | `crates/core/runtime.rs`（Windows 路径 + 捆绑 node 兜底） |
 | `CodexRateLimitReader` | `crates/core/rate_limit/codex.rs` |
-| `ClaudeUsageProbe`（Claude Code stdio `get_usage` 探测）+ `ClaudeUsageCache` | `src-tauri/src/services/claude_usage.rs`（探测参数与请求体与 macOS 逐项一致，见 `docs/SUBSCRIPTION_QUOTAS.md`「Claude 探测约束」）+ `crates/core/rate_limit/claude_desktop.rs`（Desktop 记录，Windows 独有：`%APPDATA%\Claude`、MSIX 包的 `Packages\Claude_<后缀>\LocalCache\Roaming\Claude` 和 2026-11 起的 `%LOCALAPPDATA%\Claude-Data\claude_<后缀>`，同一包后缀的新旧目录算一份安装，见 `docs/SUBSCRIPTION_QUOTAS.md`） |
+| `ClaudeUsageProbe`（Claude Code stdio `get_usage` 探测）+ `ClaudeUsageCache` | `src-tauri/src/services/claude_usage.rs`（探测参数与请求体与 macOS 逐项一致，见 `docs/SUBSCRIPTION_QUOTAS.md`「Claude 探测约束」）+ `crates/core/claude_code.rs`（候选程序：与 `discoverBinaries` 一样查 PATH，npm 的 `claude.cmd` 解析到它调用的 `claude.exe` / `cli.js`，不经 cmd.exe；macOS 最后还会试 Claude Desktop 自带的 Claude Code，Windows 尚无此项）+ `crates/core/rate_limit/claude_desktop.rs`（Desktop 记录，Windows 独有：`%APPDATA%\Claude`、MSIX 包的 `Packages\Claude_<后缀>\LocalCache\Roaming\Claude` 和 2026-11 起的 `%LOCALAPPDATA%\Claude-Data\claude_<后缀>`，同一包后缀的新旧目录算一份安装，见 `docs/SUBSCRIPTION_QUOTAS.md`） |
 | 旧 `StatuslineHook` | `crates/core/statusline_hook.rs` 仅用于安全退休本应用可证明归属的旧 hook |
 | `MenuBarController`（NSStatusItem + NSPanel） | `tray.rs` + `panel.rs`（托盘 + 标准主窗口） |
 | Sparkle | `services/updater.rs`（latest.json + SHA-256 + NSIS） |

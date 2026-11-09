@@ -285,11 +285,26 @@ fn application_paths(
 }
 
 fn executable_exists(name: &str, environment: &DiscoveryEnvironment) -> bool {
-    environment.path_directories.iter().any(|directory| {
-        executable_candidates(name, environment)
-            .iter()
-            .any(|candidate| directory.join(candidate).is_file())
-    })
+    !path_executables(name, environment).is_empty()
+}
+
+/// Every PATH match for `name`, in the order a Windows shell tries them: PATH
+/// directory by directory, and inside one directory the bare name first, then
+/// PATHEXT order. Detection and the Claude quota probe share this one rule, so
+/// a command can no longer count as installed yet be invisible to the reader.
+pub fn path_executables(name: &str, environment: &DiscoveryEnvironment) -> Vec<PathBuf> {
+    let candidates = executable_candidates(name, environment);
+    let mut seen = HashSet::new();
+    let mut found = Vec::new();
+    for directory in &environment.path_directories {
+        for candidate in &candidates {
+            let path = directory.join(candidate);
+            if path.is_file() && seen.insert(path.to_string_lossy().to_ascii_lowercase()) {
+                found.push(path);
+            }
+        }
+    }
+    found
 }
 
 fn executable_candidates(name: &str, environment: &DiscoveryEnvironment) -> Vec<String> {

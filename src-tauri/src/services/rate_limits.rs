@@ -84,16 +84,7 @@ pub async fn get_rate_limits(app: &AppHandle, force: bool) -> Vec<ProviderRateLi
                     .unwrap_or_else(|_| {
                         ProviderRateLimit::empty(RateLimitProvider::Codex, RateLimitStatus::NoData)
                     });
-                if fallback.status != RateLimitStatus::NoData {
-                    fallback
-                } else if matches!(error, codex_usage::FetchError::Unauthorized) {
-                    ProviderRateLimit::empty(
-                        RateLimitProvider::Codex,
-                        RateLimitStatus::Unauthorized,
-                    )
-                } else {
-                    fallback
-                }
+                codex_usage::after_live_failure(error, fallback)
             }
         };
         store_snapshot(app, snapshot, generation);
@@ -104,18 +95,13 @@ pub async fn get_rate_limits(app: &AppHandle, force: bool) -> Vec<ProviderRateLi
     {
         let snapshot = match claude_usage::fetch().await {
             Ok(snapshot) => snapshot,
-            Err(error) => {
-                log::debug!("Claude live quota unavailable: {error}");
-                tauri::async_runtime::spawn_blocking(claude_usage::cached_snapshot)
+            Err(failure) => {
+                log::debug!("Claude live quota unavailable: {failure:?}");
+                let cached = tauri::async_runtime::spawn_blocking(claude_usage::cached_snapshot)
                     .await
                     .ok()
-                    .flatten()
-                    .unwrap_or_else(|| {
-                        ProviderRateLimit::empty(
-                            RateLimitProvider::ClaudeCode,
-                            RateLimitStatus::NoData,
-                        )
-                    })
+                    .flatten();
+                claude_usage::after_live_failure(failure, cached)
             }
         };
         store_snapshot(app, snapshot, generation);
@@ -141,11 +127,7 @@ pub async fn get_rate_limits(app: &AppHandle, force: bool) -> Vec<ProviderRateLi
                 log::debug!("CLI quota unavailable: {error}");
                 test_diagnostics::record_failure(cli_providers.clone(), error.diagnostic_code());
                 for provider in cli_providers {
-                    store_snapshot(
-                        app,
-                        ProviderRateLimit::empty(provider, RateLimitStatus::RetryableError),
-                        generation,
-                    );
+                    store_snapshot(app, error.snapshot(provider), generation);
                 }
             }
         }

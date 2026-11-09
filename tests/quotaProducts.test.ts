@@ -5,7 +5,10 @@ import {
   isZCodeConfigured,
   moveQuotaProduct,
   quotaEmptyStateText,
+  quotaFailureText,
   quotaProductStatusText,
+  quotaProvenanceText,
+  quotaRetryableText,
   quotaTabOrder,
   quotaTabShowsWarning,
 } from "../src/lib/quotaProducts";
@@ -198,5 +201,121 @@ describe("empty state reasons", () => {
       quotaEmptyStateText({ provider: "claudeCode", status: { kind: "noData" }, emptyReason: "sessionWithoutPlanLimits" },
         true),
     ).toBe("当前登录方式不含订阅额度（API Key / Bedrock / Vertex）");
+  });
+});
+
+describe("read failure reasons and sources", () => {
+  const claude = (extra: Partial<ProviderRateLimit>): ProviderRateLimit => ({
+    provider: "claudeCode",
+    status: { kind: "noData" },
+    ...extra,
+  });
+
+  it("states the Claude probe's own reason instead of a neutral empty line", () => {
+    const missing = claude({ liveFailure: { code: "claudeBinaryNotFound" } });
+    // Detected by a leftover ~/.claude but no program: the read says why.
+    expect(quotaEmptyStateText(missing, true, false, "Claude")).toBe("未找到 Claude Code 程序");
+    expect(quotaEmptyStateText(missing, true, false, "Claude")).not.toBe("暂未读取到订阅配额数据");
+    expect(quotaProvenanceText(missing, "Claude")).toBeNull();
+  });
+
+  it("names the failure and the channel on a retryable card", () => {
+    const timedOut = claude({
+      status: { kind: "retryableError" },
+      source: "live",
+      liveFailure: { code: "claudeTimedOut" },
+    });
+    expect(quotaRetryableText(timedOut, "Claude")).toBe("Claude 配额读取超时");
+    expect(quotaProvenanceText(timedOut, "Claude")).toBe("来源：实时读取");
+    // A retryable card from an older backend keeps the old wording.
+    expect(quotaRetryableText({ provider: "grok", status: { kind: "retryableError" } }, "Grok")).toBe(
+      "暂时无法读取订阅配额",
+    );
+  });
+
+  it("says where shown numbers came from only after the live read failed", () => {
+    const cached = claude({
+      status: { kind: "ok" },
+      source: "cache",
+      liveFailure: { code: "claudeNoResponse" },
+    });
+    expect(quotaProvenanceText(cached, "Claude")).toBe("来源：缓存 · Claude 没有响应配额请求");
+    // A successful live card stays quiet, as on macOS.
+    expect(quotaProvenanceText(claude({ status: { kind: "ok" }, source: "live" }), "Claude")).toBeNull();
+    // The CLI answering from its cache.
+    expect(
+      quotaProvenanceText(
+        { provider: "grok", status: { kind: "ok" }, source: "cache", liveFailure: { code: "cliReportedFailure" } },
+        "Grok",
+      ),
+    ).toBe("来源：缓存 · 实时读取失败");
+    // Codex session JSONL after the endpoint failed.
+    expect(
+      quotaProvenanceText(
+        {
+          provider: "codex",
+          status: { kind: "ok" },
+          source: "localLog",
+          liveFailure: { code: "endpointHttpStatus", status: 502 },
+        },
+        "Codex",
+      ),
+    ).toBe("来源：本地日志 · Codex 配额接口返回错误 502");
+  });
+
+  it("splits the Claude Desktop record into its specific reasons", () => {
+    const label = "Claude 桌面额度记录 · 非本机独占用量";
+    const cases: Array<[string, string]> = [
+      ["desktopRecordStale", "Claude 桌面端记录已过期"],
+      ["desktopMultipleInstalls", "装了多份 Claude 桌面端，账号不明确"],
+      ["desktopMixedOrganizations", "Claude 桌面端记录涉及多个组织，账号不明确"],
+      ["desktopRecordUnreadable", "Claude 桌面端记录无法解析"],
+    ];
+    for (const [code, text] of cases) {
+      const snapshot = claude({
+        sourceLabel: label,
+        source: "desktopRecord",
+        liveFailure: { code: code as "desktopRecordStale" },
+      });
+      expect(quotaEmptyStateText(snapshot, true, false, "Claude")).toBe(text);
+      expect(quotaProvenanceText(snapshot, "Claude")).toBe(label);
+    }
+    // An older backend's Desktop snapshot without a reason keeps the old line.
+    expect(quotaEmptyStateText(claude({ sourceLabel: label }), true)).toBe(
+      "桌面额度记录缺失、过期或账号不明确",
+    );
+  });
+
+  it("lets a definitive emptyReason outrank any failure annotation", () => {
+    expect(
+      quotaEmptyStateText(
+        claude({ emptyReason: "sessionWithoutPlanLimits", liveFailure: { code: "claudeNoWindows" } }),
+        true,
+      ),
+    ).toBe("当前登录方式不含订阅额度（API Key / Bedrock / Vertex）");
+  });
+
+  it("uses the product name for endpoint and credential reasons", () => {
+    expect(quotaFailureText({ code: "credentialsNotFound" }, "Codex")).toBe("未找到 Codex 登录信息");
+    expect(quotaFailureText({ code: "endpointTimedOut" }, "Codex")).toBe("Codex 配额接口请求超时");
+    expect(quotaFailureText({ code: "endpointUnreachable" }, "Codex")).toBe("Codex 配额接口连接失败");
+    expect(quotaFailureText({ code: "cliTimedOut" }, "Kimi Code")).toBe("配额 CLI 读取超时");
+    expect(quotaFailureText({ code: "credentialStoreUnavailable" }, "ZCode")).toBe(
+      "无法读取 Windows 凭据管理器",
+    );
+  });
+
+  it("never echoes anything but the fixed wording", () => {
+    const unknown = { code: "somethingNew" } as unknown as { code: "cliFailed" };
+    expect(quotaFailureText(unknown, "Grok")).toBe("暂时无法读取订阅配额");
+  });
+
+  it("keeps the re-login card free of extra lines", () => {
+    expect(
+      quotaProvenanceText(
+        { provider: "codex", status: { kind: "unauthorized" }, source: "live", liveFailure: { code: "credentialsRejected" } },
+        "Codex",
+      ),
+    ).toBeNull();
   });
 });

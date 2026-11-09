@@ -4,13 +4,16 @@
 
 use chrono::DateTime;
 use serde_json::{json, Value};
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::OnceLock;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use vibe_core::claude_code::ClaudeLaunch;
+use vibe_core::quota_product::DiscoveryEnvironment;
 use vibe_core::{
-    ProviderRateLimit, RateLimitEmptyReason, RateLimitProvider, RateLimitStatus, RateLimitWindow,
+    ProviderRateLimit, RateLimitEmptyReason, RateLimitLiveFailure, RateLimitProvider,
+    RateLimitSource, RateLimitStatus, RateLimitWindow,
 };
 
 const CANDIDATE_TIMEOUT: Duration = Duration::from_secs(8);
@@ -62,22 +65,48 @@ fn usage_request() -> Value {
     })
 }
 
-pub async fn fetch() -> Result<ProviderRateLimit, String> {
+/// The app's bundled `node.exe`, used to run a JavaScript shim entry only when
+/// neither the shim's directory nor PATH has a Node (see
+/// `vibe_core::claude_code::discover_with_fallback_node`).
+static BUNDLED_NODE: OnceLock<Option<PathBuf>> = OnceLock::new();
+
+/// Called once at startup with `sync_engine::bundled_node`.
+pub fn set_bundled_node(path: Option<PathBuf>) {
+    let _ = BUNDLED_NODE.set(path);
+}
+
+/// Desktop record first, then a live Claude Code read; the order is unchanged.
+/// The error is the fixed reason of the last candidate tried (as on macOS);
+/// the child's stderr and launch-error text are never kept.
+pub async fn fetch() -> Result<ProviderRateLimit, RateLimitLiveFailure> {
+    let environment = DiscoveryEnvironment::live();
     // Desktop observations are local-only and must not be confused with a
     // separately configured CLI account. No Claude process is started here.
-    if let Some(snapshot) = vibe_core::rate_limit::claude_desktop::read(
-        &vibe_core::quota_product::DiscoveryEnvironment::live(), now_epoch(),
-    ) { return Ok(snapshot); }
-    let candidates = discover_binaries();
-    if candidates.is_empty() {
-        return Err("未找到 Claude Code".into());
+    if let Some(snapshot) =
+        vibe_core::rate_limit::claude_desktop::read(&environment, now_epoch())
+    {
+        return Ok(snapshot);
     }
-    let mut last_error = "Claude 未返回订阅配额".to_string();
+    let override_bin = std::env::var_os("VIBE_USAGE_CLAUDE_BIN")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from);
+    let candidates = vibe_core::claude_code::discover_with_fallback_node(
+        &environment,
+        override_bin,
+        BUNDLED_NODE.get().and_then(Option::as_deref),
+    );
+    if candidates.is_empty() {
+        return Err(RateLimitLiveFailure::ClaudeBinaryNotFound);
+    }
+    let mut last_error = RateLimitLiveFailure::ClaudeNoResponse;
     for candidate in candidates.into_iter().take(3) {
         match run_probe(&candidate).await {
             Ok(snapshot) => return Ok(snapshot),
             Err(error) => {
-                log::debug!("Claude quota probe {} failed: {error}", candidate.display());
+                log::debug!(
+                    "Claude quota probe {} failed: {error:?}",
+                    candidate.program.display()
+                );
                 last_error = error;
             }
         }
@@ -89,45 +118,41 @@ pub fn cached_snapshot() -> Option<ProviderRateLimit> {
     cached_snapshot_from(&claude_config_file(), now_epoch())
 }
 
-fn discover_binaries() -> Vec<PathBuf> {
-    let mut candidates = Vec::new();
-    if let Some(path) = std::env::var_os("VIBE_USAGE_CLAUDE_BIN") {
-        candidates.push(PathBuf::from(path));
+/// What the card shows after the live read failed: Claude Code's own cache
+/// when it has a usable entry, annotated with why live failed; otherwise the
+/// failure itself. No program at all is not something a retry fixes, so it
+/// stays an empty state; every other failure is retryable, as on macOS.
+pub fn after_live_failure(
+    failure: RateLimitLiveFailure,
+    cached: Option<ProviderRateLimit>,
+) -> ProviderRateLimit {
+    if let Some(mut snapshot) = cached {
+        snapshot.live_failure = Some(failure);
+        return snapshot;
     }
-    if let Some(home) = dirs::home_dir() {
-        candidates.push(home.join(".local").join("bin").join("claude.exe"));
-        candidates.push(home.join(".claude").join("local").join("claude.exe"));
-    }
-    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
-        candidates.push(
-            PathBuf::from(local)
-                .join("Programs")
-                .join("Claude Code")
-                .join("claude.exe"),
+    if failure == RateLimitLiveFailure::ClaudeBinaryNotFound {
+        return ProviderRateLimit::failed(
+            RateLimitProvider::ClaudeCode,
+            RateLimitStatus::NoData,
+            None,
+            failure,
         );
     }
-
-    // Native installs may add claude.exe to PATH. `where.exe` is invoked with
-    // a constant argument; shell parsing is never involved.
-    let mut where_cmd = std::process::Command::new("where.exe");
-    where_cmd.arg("claude.exe");
-    crate::process_utils::hide_command_window(&mut where_cmd);
-    if let Ok(output) = where_cmd.output() {
-        for line in String::from_utf8_lossy(&output.stdout).lines() {
-            candidates.push(PathBuf::from(line.trim()));
-        }
-    }
-
-    let mut seen = HashSet::new();
-    candidates
-        .into_iter()
-        .filter(|path| path.is_file())
-        .filter(|path| seen.insert(path.to_string_lossy().to_ascii_lowercase()))
-        .collect()
+    ProviderRateLimit::failed(
+        RateLimitProvider::ClaudeCode,
+        RateLimitStatus::RetryableError,
+        Some(RateLimitSource::Live),
+        failure,
+    )
 }
 
-async fn run_probe(candidate: &Path) -> Result<ProviderRateLimit, String> {
-    let mut command = tokio::process::Command::new(candidate);
+async fn run_probe(candidate: &ClaudeLaunch) -> Result<ProviderRateLimit, RateLimitLiveFailure> {
+    // An npm shim resolved to a JavaScript entry runs as `node <entry> ...`,
+    // never through cmd.exe (see `vibe_core::claude_code`).
+    let mut command = tokio::process::Command::new(&candidate.program);
+    if let Some(script) = &candidate.script {
+        command.arg(script);
+    }
     command.args(PROBE_ARGS);
     command
         .stdin(Stdio::piped())
@@ -146,9 +171,15 @@ async fn run_probe(candidate: &Path) -> Result<ProviderRateLimit, String> {
     crate::process_utils::hide_tokio_command_window(&mut command);
 
     let (mut child, _process_guard) = crate::process_lifecycle::spawn(&mut command)
-        .map_err(|e| format!("无法启动 Claude: {e}"))?;
-    let stdin = child.stdin.take().ok_or("无法连接 Claude stdin")?;
-    let stdout = child.stdout.take().ok_or("无法连接 Claude stdout")?;
+        .map_err(|_| RateLimitLiveFailure::ClaudeLaunchFailed)?;
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or(RateLimitLiveFailure::ClaudeLaunchFailed)?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or(RateLimitLiveFailure::ClaudeLaunchFailed)?;
     let result = tokio::time::timeout(CANDIDATE_TIMEOUT, exchange(stdin, stdout)).await;
     let payload = match result {
         Ok(Ok(payload)) => payload,
@@ -158,7 +189,7 @@ async fn run_probe(candidate: &Path) -> Result<ProviderRateLimit, String> {
         }
         Err(_) => {
             crate::process_utils::kill_child_tree(&mut child);
-            return Err("Claude 配额读取超时".into());
+            return Err(RateLimitLiveFailure::ClaudeTimedOut);
         }
     };
 
@@ -174,21 +205,26 @@ async fn run_probe(candidate: &Path) -> Result<ProviderRateLimit, String> {
         return Ok(snapshot);
     }
     crate::process_utils::kill_child_tree(&mut child);
-    Err("Claude 未返回可用配额".into())
+    Err(RateLimitLiveFailure::ClaudeNoWindows)
 }
 
+/// Every way the exchange can end without a payload is "no response": the
+/// child stopped reading, closed stdout, or answered without success. Which
+/// one exactly lives only in its stderr, which is never read.
 async fn exchange(
     mut stdin: tokio::process::ChildStdin,
     stdout: tokio::process::ChildStdout,
-) -> Result<Value, String> {
+) -> Result<Value, RateLimitLiveFailure> {
+    const NO_RESPONSE: RateLimitLiveFailure = RateLimitLiveFailure::ClaudeNoResponse;
     send(
         &mut stdin,
         &json!({"type":"control_request","request_id":"vibe-init","request":{"subtype":"initialize"}}),
     )
-    .await?;
+    .await
+    .map_err(|_| NO_RESPONSE)?;
     let mut lines = BufReader::new(stdout).lines();
     let mut sent_usage = false;
-    while let Some(line) = lines.next_line().await.map_err(|e| e.to_string())? {
+    while let Some(line) = lines.next_line().await.map_err(|_| NO_RESPONSE)? {
         let Ok(object) = serde_json::from_str::<Value>(&line) else {
             continue;
         };
@@ -201,22 +237,21 @@ async fn exchange(
         match response.get("request_id").and_then(Value::as_str) {
             Some("vibe-init") if !sent_usage => {
                 sent_usage = true;
-                send(&mut stdin, &usage_request()).await?;
+                send(&mut stdin, &usage_request())
+                    .await
+                    .map_err(|_| NO_RESPONSE)?;
             }
             Some("vibe-usage") => {
-                stdin.shutdown().await.map_err(|e| e.to_string())?;
+                stdin.shutdown().await.map_err(|_| NO_RESPONSE)?;
                 if response.get("subtype").and_then(Value::as_str) != Some("success") {
-                    return Err("Claude 配额请求失败".into());
+                    return Err(NO_RESPONSE);
                 }
-                return response
-                    .get("response")
-                    .cloned()
-                    .ok_or_else(|| "Claude 配额响应为空".into());
+                return response.get("response").cloned().ok_or(NO_RESPONSE);
             }
             _ => {}
         }
     }
-    Err("Claude 进程未返回配额".into())
+    Err(NO_RESPONSE)
 }
 
 async fn send(stdin: &mut tokio::process::ChildStdin, value: &Value) -> Result<(), String> {
@@ -240,6 +275,7 @@ fn snapshot_from_payload(root: &Value, now: f64) -> Option<ProviderRateLimit> {
         let mut snapshot =
             ProviderRateLimit::empty(RateLimitProvider::ClaudeCode, RateLimitStatus::NoData);
         snapshot.empty_reason = Some(RateLimitEmptyReason::SessionWithoutPlanLimits);
+        snapshot.source = Some(RateLimitSource::Live);
         return Some(snapshot);
     }
     parse_payload(root, now)
@@ -265,6 +301,8 @@ fn parse_payload(root: &Value, now: f64) -> Option<ProviderRateLimit> {
         data_as_of: Some(now),
         fetched_at: Some(now),
         source_label: None,
+        source: Some(RateLimitSource::Live),
+        live_failure: None,
         five_hour_not_enforced: false,
         reset_credits_count: None,
         // A JSONL/cache snapshot cannot tell "used up" from "nothing here".
@@ -325,6 +363,8 @@ fn cached_snapshot_from(path: &Path, now: f64) -> Option<ProviderRateLimit> {
         data_as_of: Some(fetched_at),
         fetched_at: Some(fetched_at),
         source_label: None,
+        source: Some(RateLimitSource::Cache),
+        live_failure: None,
         five_hour_not_enforced: false,
         reset_credits_count: None,
         // A JSONL/cache snapshot cannot tell "used up" from "nothing here".
@@ -525,5 +565,126 @@ mod tests {
         });
         std::fs::write(&file, value.to_string()).unwrap();
         assert!(cached_snapshot_from(&file, now).is_none());
+    }
+
+    #[test]
+    fn live_failure_keeps_the_cache_and_says_why_live_failed() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join(".claude.json");
+        let now = 1_800_000_000.0;
+        let value = json!({
+            "cachedUsageUtilization": {
+                "fetchedAtMs": (now - 60.0) * 1000.0,
+                "utilization": {"seven_day": {"utilization": 47, "resets_at": "2030-01-05T00:00:00Z"}}
+            }
+        });
+        std::fs::write(&file, value.to_string()).unwrap();
+        let cached = cached_snapshot_from(&file, now).unwrap();
+        assert_eq!(cached.source, Some(RateLimitSource::Cache));
+
+        let shown = after_live_failure(RateLimitLiveFailure::ClaudeTimedOut, Some(cached));
+        assert_eq!(shown.status, RateLimitStatus::Ok);
+        assert_eq!(shown.source, Some(RateLimitSource::Cache));
+        assert_eq!(shown.live_failure, Some(RateLimitLiveFailure::ClaudeTimedOut));
+        assert_eq!(shown.seven_day.unwrap().utilization, 47.0);
+    }
+
+    #[test]
+    fn live_failure_without_cache_is_retryable_except_for_a_missing_program() {
+        for failure in [
+            RateLimitLiveFailure::ClaudeLaunchFailed,
+            RateLimitLiveFailure::ClaudeTimedOut,
+            RateLimitLiveFailure::ClaudeNoResponse,
+            RateLimitLiveFailure::ClaudeNoWindows,
+        ] {
+            let shown = after_live_failure(failure, None);
+            assert_eq!(shown.status, RateLimitStatus::RetryableError);
+            assert_eq!(shown.source, Some(RateLimitSource::Live));
+            assert_eq!(shown.live_failure, Some(failure));
+        }
+        let missing = after_live_failure(RateLimitLiveFailure::ClaudeBinaryNotFound, None);
+        assert_eq!(missing.status, RateLimitStatus::NoData);
+        assert_eq!(missing.source, None);
+        assert_eq!(
+            missing.live_failure,
+            Some(RateLimitLiveFailure::ClaudeBinaryNotFound)
+        );
+    }
+
+    #[test]
+    fn live_answers_are_marked_live() {
+        let payload = json!({
+            "rate_limits":{"five_hour":{"utilization":14,"resets_at":"2030-01-01T01:00:00Z"}}
+        });
+        let snapshot = snapshot_from_payload(&payload, 1_800_000_000.0).unwrap();
+        assert_eq!(snapshot.source, Some(RateLimitSource::Live));
+        assert_eq!(snapshot.live_failure, None);
+        let not_applicable =
+            snapshot_from_payload(&json!({"rate_limits_available": false}), 1_800_000_000.0)
+                .unwrap();
+        assert_eq!(not_applicable.source, Some(RateLimitSource::Live));
+        // Answered, but no usable window: the probe reports "no windows".
+        assert!(snapshot_from_payload(&json!({"rate_limits": null}), 1_800_000_000.0).is_none());
+    }
+
+    /// The coordinator stores whole snapshots: a cache fallback replaces the
+    /// live numbers together with its `source` and `liveFailure`, and the next
+    /// live success replaces all three again — no annotation outlives the
+    /// read that produced it.
+    #[test]
+    fn coordinator_replaces_numbers_source_and_failure_together() {
+        let now = 1_800_000_000.0;
+        let live = |five_hour: f64| {
+            snapshot_from_payload(
+                &json!({
+                    "subscription_type": "pro",
+                    "rate_limits": {"five_hour": {"utilization": five_hour, "resets_at": "2030-01-01T01:00:00Z"}}
+                }),
+                now,
+            )
+            .unwrap()
+        };
+        let mut cache = crate::state::RateLimitCache::default();
+        let generation = cache.zcode_generation();
+        let shown = |cache: &crate::state::RateLimitCache| {
+            cache.snapshots[&RateLimitProvider::ClaudeCode].0.clone()
+        };
+
+        cache.store(live(14.0), generation);
+        let first = shown(&cache);
+        assert_eq!(first.source, Some(RateLimitSource::Live));
+        assert_eq!(first.live_failure, None);
+        assert_eq!(first.five_hour.unwrap().utilization, 14.0);
+
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join(".claude.json");
+        std::fs::write(
+            &file,
+            json!({"cachedUsageUtilization": {
+                "fetchedAtMs": (now - 600.0) * 1000.0,
+                "utilization": {"seven_day": {"utilization": 47, "resets_at": "2030-01-05T00:00:00Z"}}
+            }})
+            .to_string(),
+        )
+        .unwrap();
+        let fallback = after_live_failure(
+            RateLimitLiveFailure::ClaudeTimedOut,
+            cached_snapshot_from(&file, now),
+        );
+        cache.store(fallback, generation);
+        let second = shown(&cache);
+        assert_eq!(second.source, Some(RateLimitSource::Cache));
+        assert_eq!(second.live_failure, Some(RateLimitLiveFailure::ClaudeTimedOut));
+        assert!(second.five_hour.is_none(), "the live 5h number must not linger");
+        assert_eq!(second.seven_day.unwrap().utilization, 47.0);
+        assert_eq!(second.plan_label, None);
+
+        cache.store(live(20.0), generation);
+        let third = shown(&cache);
+        assert_eq!(third.source, Some(RateLimitSource::Live));
+        assert_eq!(third.live_failure, None, "a good read clears the failure");
+        assert_eq!(third.five_hour.unwrap().utilization, 20.0);
+        assert!(third.seven_day.is_none(), "the cached 7d number must not linger");
+        assert_eq!(third.plan_label.as_deref(), Some("Pro"));
     }
 }
