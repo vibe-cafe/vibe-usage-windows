@@ -1,0 +1,228 @@
+{
+  "account": {
+    "keyConfigured": true,
+    "lastSyncKey": "undetermined"
+  },
+  "app": {
+    "build": "release",
+    "version": "0.7.5"
+  },
+  "claude": {
+    "candidates": [
+      {
+        "origin": {
+          "kind": "localBin"
+        },
+        "version": "2.1.282",
+        "via": "direct"
+      },
+      {
+        "origin": {
+          "extension": "cmd",
+          "kind": "path",
+          "position": 3
+        },
+        "version": "2.1.319",
+        "via": "shimBinary"
+      }
+    ],
+    "configDirSet": true,
+    "lastProbe": {
+      "at": 1794205860000,
+      "attempts": [
+        {
+          "exit": {
+            "kind": "endedByApp"
+          },
+          "failure": {
+            "code": "claudeTimedOut"
+          },
+          "initializeMs": 900,
+          "origin": {
+            "kind": "localBin"
+          },
+          "via": "direct"
+        },
+        {
+          "answer": {
+            "error": true,
+            "fiveHour": false,
+            "plan": true,
+            "rateLimitsAvailable": true,
+            "sevenDay": false
+          },
+          "exit": {
+            "code": 1,
+            "kind": "exited"
+          },
+          "failure": {
+            "code": "claudeNoWindows"
+          },
+          "getUsageMs": 2300,
+          "initializeMs": 1200,
+          "origin": {
+            "extension": "cmd",
+            "kind": "path",
+            "position": 3
+          },
+          "via": "shimBinary"
+        }
+      ],
+      "candidatesFound": 2,
+      "desktop": {
+        "kind": "noRecord"
+      }
+    },
+    "pathMatches": [
+      "claude.exe",
+      "claude",
+      "claude.cmd"
+    ],
+    "selected": true,
+    "settings": {
+      "env": {
+        "names": [
+          "CLAUDE_CODE_USE_BEDROCK"
+        ],
+        "other": 0
+      },
+      "kind": "read"
+    },
+    "userVariables": {
+      "names": [
+        "ANTHROPIC_BASE_URL"
+      ],
+      "other": 0
+    }
+  },
+  "cli": {
+    "cachedVersion": "0.14.9",
+    "launcherPresent": true
+  },
+  "deviceTag": "7c2e",
+  "generatedAt": 1794205920000,
+  "network": {
+    "autoConfigScript": true,
+    "systemProxy": "loopback",
+    "systemProxyPassedToSync": true,
+    "variables": [
+      {
+        "app": false,
+        "name": "HTTPS_PROXY",
+        "system": false,
+        "user": true
+      },
+      {
+        "app": false,
+        "name": "HTTP_PROXY",
+        "system": false,
+        "user": false
+      },
+      {
+        "app": false,
+        "name": "ALL_PROXY",
+        "system": true,
+        "user": false
+      }
+    ]
+  },
+  "quotas": [
+    {
+      "dataAsOf": 1794204120.0,
+      "liveFailure": {
+        "code": "claudeTimedOut"
+      },
+      "meterCount": 1,
+      "provider": "claudeCode",
+      "source": "cache",
+      "status": "ok"
+    },
+    {
+      "dataAsOf": 1794204120.0,
+      "liveFailure": {
+        "code": "endpointHttpStatus",
+        "status": 502
+      },
+      "meterCount": 0,
+      "provider": "codex",
+      "source": "live",
+      "status": "noData"
+    },
+    {
+      "dataAsOf": 1794204120.0,
+      "emptyReason": "notEntitled",
+      "meterCount": 0,
+      "provider": "opencode-go",
+      "status": "noData"
+    }
+  ],
+  "runtime": {
+    "kind": "bundledNode",
+    "version": "22.23.1"
+  },
+  "scheduler": {
+    "lastSuccessAt": 1794202920000,
+    "running": true,
+    "syncing": false
+  },
+  "schemaVersion": 1,
+  "syncs": [
+    {
+      "durationMs": 21000,
+      "outcome": "cliStartupFailed",
+      "reason": {
+        "code": "launcher",
+        "stage": "network"
+      },
+      "startedAt": 1794205320000,
+      "trigger": "scheduled"
+    },
+    {
+      "durationMs": 120000,
+      "outcome": "timedOut",
+      "startedAt": 1794204720000,
+      "trigger": "manual"
+    },
+    {
+      "durationMs": 3000,
+      "outcome": "failed",
+      "reason": {
+        "code": "cliExit",
+        "exitCode": 3
+      },
+      "startedAt": 1794204120000,
+      "trigger": "scheduled"
+    },
+    {
+      "durationMs": 2000,
+      "outcome": "failed",
+      "reason": {
+        "code": "serverStatus",
+        "status": 502
+      },
+      "startedAt": 1794203520000,
+      "trigger": "scheduled"
+    },
+    {
+      "durationMs": 1500,
+      "outcome": "failed",
+      "reason": {
+        "code": "keyRejected"
+      },
+      "startedAt": 1794203220000,
+      "trigger": "manual"
+    },
+    {
+      "durationMs": 18000,
+      "outcome": "success",
+      "startedAt": 1794202920000,
+      "trigger": "scheduled"
+    }
+  ],
+  "system": {
+    "architecture": "x86_64",
+    "build": 22631,
+    "displayVersion": "23H2",
+    "windowsRelease": 11
+  }
+}

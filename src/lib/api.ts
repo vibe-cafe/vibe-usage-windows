@@ -2,6 +2,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
+import type { DiagnosticsReport } from "./diagnostics";
 import {
   AppSettings,
   AppStatus,
@@ -65,6 +66,9 @@ export const api = {
   quitApp: () => invoke<void>("quit_app"),
   exportTestDiagnostics: (destination: string) =>
     invoke<void>("export_test_diagnostics", { destination }),
+
+  /** 「复制诊断信息」: whitelisted typed fields only; laid out by lib/diagnostics. */
+  collectDiagnostics: () => invoke<DiagnosticsReport>("collect_diagnostics"),
 
   // Updates -----------------------------------------------------------------------
   checkForUpdate: () => invoke<UpdateInfo | null>("check_for_update"),

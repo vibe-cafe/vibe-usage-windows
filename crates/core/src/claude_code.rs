@@ -15,6 +15,7 @@
 //! bin\claude.exe` directly; older releases ran `cli.js` with Node.
 
 use crate::quota_product::{path_executables, DiscoveryEnvironment};
+use serde::Serialize;
 use std::collections::HashSet;
 use std::fs::File;
 use std::io::Read;
@@ -32,6 +33,66 @@ pub struct ClaudeLaunch {
     /// JavaScript entry handed to `program` (Node) ahead of the probe
     /// arguments; `None` when `program` is Claude Code itself.
     pub script: Option<PathBuf>,
+    /// Where the candidate was found, as a fixed template for diagnostics.
+    pub origin: LaunchOrigin,
+    /// How it is started.
+    pub via: LaunchVia,
+}
+
+/// Where a candidate came from, as one of our fixed templates. Diagnostics
+/// show this instead of the path, so no directory name ever leaves the app.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum LaunchOrigin {
+    /// `VIBE_USAGE_CLAUDE_BIN`.
+    Override,
+    /// `~\.local\bin\claude.exe` (Anthropic's native installer).
+    LocalBin,
+    /// `~\.claude\local\claude.exe`.
+    ClaudeLocal,
+    /// `%LOCALAPPDATA%\Programs\Claude Code\claude.exe`.
+    LocalPrograms,
+    /// The `position`-th `claude.*` match on PATH (1-based, shell order).
+    Path {
+        position: usize,
+        extension: PathExtension,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PathExtension {
+    Exe,
+    Cmd,
+    Bat,
+}
+
+impl PathExtension {
+    fn of(path: &Path) -> Option<Self> {
+        match extension(path).as_str() {
+            "exe" => Some(Self::Exe),
+            "cmd" => Some(Self::Cmd),
+            "bat" => Some(Self::Bat),
+            _ => None,
+        }
+    }
+}
+
+/// How a candidate is started.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LaunchVia {
+    /// The found file is Claude Code itself.
+    Direct,
+    /// A shim resolved to the native `claude.exe` it execs.
+    ShimBinary,
+    /// A shim resolved to a JavaScript entry run with Node.
+    ShimScript,
+}
+
+struct Target {
+    program: PathBuf,
+    script: Option<PathBuf>,
 }
 
 /// Candidate launches in preference order: the explicit override, the native
@@ -51,26 +112,80 @@ pub fn discover_with_fallback_node(
     override_bin: Option<PathBuf>,
     fallback_node: Option<&Path>,
 ) -> Vec<ClaudeLaunch> {
-    let mut paths = Vec::new();
-    paths.extend(override_bin);
-    paths.push(env.home.join(".local").join("bin").join("claude.exe"));
-    paths.push(env.home.join(".claude").join("local").join("claude.exe"));
+    let mut sources = Vec::new();
+    sources.extend(override_bin.map(|path| (path, LaunchOrigin::Override)));
+    sources.push((
+        env.home.join(".local").join("bin").join("claude.exe"),
+        LaunchOrigin::LocalBin,
+    ));
+    sources.push((
+        env.home.join(".claude").join("local").join("claude.exe"),
+        LaunchOrigin::ClaudeLocal,
+    ));
     if let Some(local) = &env.local_app_data {
-        paths.push(
+        sources.push((
             local
                 .join("Programs")
                 .join("Claude Code")
                 .join("claude.exe"),
-        );
+            LaunchOrigin::LocalPrograms,
+        ));
     }
-    paths.extend(path_executables("claude", env));
+    for (index, path) in path_executables("claude", env).into_iter().enumerate() {
+        if let Some(extension) = PathExtension::of(&path) {
+            let origin = LaunchOrigin::Path {
+                position: index + 1,
+                extension,
+            };
+            sources.push((path, origin));
+        }
+    }
 
     let mut seen = HashSet::new();
-    paths
+    sources
         .into_iter()
-        .filter(|path| path.is_file())
-        .filter_map(|path| launch_for(&path, env, fallback_node, 0))
+        .filter(|(path, _)| path.is_file())
+        .filter_map(|(path, origin)| {
+            let target = launch_for(&path, env, fallback_node, 0)?;
+            let via = match (&target.script, PathExtension::of(&path)) {
+                (Some(_), _) => LaunchVia::ShimScript,
+                (None, Some(PathExtension::Cmd | PathExtension::Bat)) => LaunchVia::ShimBinary,
+                (None, _) => LaunchVia::Direct,
+            };
+            Some(ClaudeLaunch {
+                program: target.program,
+                script: target.script,
+                origin,
+                via,
+            })
+        })
         .filter(|launch| seen.insert(identity(launch)))
+        .collect()
+}
+
+/// File names of every `claude.*` match on PATH (lower-cased, shell order),
+/// for the diagnostics count. Only `claude` plus a short alphanumeric
+/// extension is reported; anything else is folded into `"other"`.
+pub fn path_match_names(env: &DiscoveryEnvironment) -> Vec<String> {
+    path_executables("claude", env)
+        .iter()
+        .map(|path| {
+            let name = path
+                .file_name()
+                .map(|value| value.to_string_lossy().to_ascii_lowercase())
+                .unwrap_or_default();
+            let plain = name == "claude"
+                || name.strip_prefix("claude.").is_some_and(|ext| {
+                    !ext.is_empty()
+                        && ext.len() <= 8
+                        && ext.bytes().all(|b| b.is_ascii_alphanumeric())
+                });
+            if plain {
+                name
+            } else {
+                "other".into()
+            }
+        })
         .collect()
 }
 
@@ -90,9 +205,9 @@ fn launch_for(
     env: &DiscoveryEnvironment,
     fallback_node: Option<&Path>,
     depth: usize,
-) -> Option<ClaudeLaunch> {
+) -> Option<Target> {
     match extension(path).as_str() {
-        "exe" => Some(ClaudeLaunch {
+        "exe" => Some(Target {
             program: path.to_path_buf(),
             script: None,
         }),
@@ -108,7 +223,7 @@ fn resolve_shim(
     env: &DiscoveryEnvironment,
     fallback_node: Option<&Path>,
     depth: usize,
-) -> Option<ClaudeLaunch> {
+) -> Option<Target> {
     let mut bytes = Vec::new();
     File::open(shim)
         .ok()?
@@ -128,7 +243,7 @@ fn resolve_shim(
         return None;
     }
     match extension(&target).as_str() {
-        "js" | "cjs" | "mjs" => Some(ClaudeLaunch {
+        "js" | "cjs" | "mjs" => Some(Target {
             program: node_for_shim(directory, env, fallback_node)?,
             script: Some(target),
         }),
@@ -215,6 +330,11 @@ mod tests {
         launches.iter().map(identity).collect()
     }
 
+    fn key(program: PathBuf, script: Option<PathBuf>) -> (String, Option<String>) {
+        let lower = |path: &Path| path.to_string_lossy().to_ascii_lowercase();
+        (lower(&program), script.as_deref().map(lower))
+    }
+
     fn write(path: &Path, contents: &str) {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, contents).unwrap();
@@ -250,11 +370,11 @@ mod tests {
         let prefix = npm_prefix(root.path(), NPM_NATIVE_SHIM, "bin/claude.exe");
         let env = environment(root.path(), vec![prefix.clone()]);
         assert_eq!(
-            discover(&env, None),
-            vec![ClaudeLaunch {
-                program: claude_package(&prefix).join("bin").join("claude.exe"),
-                script: None,
-            }]
+            identities(discover(&env, None)),
+            vec![key(
+                claude_package(&prefix).join("bin").join("claude.exe"),
+                None
+            )]
         );
     }
 
@@ -282,20 +402,14 @@ mod tests {
         let script = claude_package(&prefix).join("cli.js");
         assert_eq!(
             identities(discover(&env, None)),
-            identities(vec![ClaudeLaunch {
-                program: nodejs.join("node.exe"),
-                script: Some(script.clone()),
-            }])
+            vec![key(nodejs.join("node.exe"), Some(script.clone()))]
         );
 
         // A node.exe beside the shim wins, exactly like the shim's IF EXIST.
         write(&prefix.join("node.exe"), "");
         assert_eq!(
             identities(discover(&env, None)),
-            identities(vec![ClaudeLaunch {
-                program: prefix.join("node.exe"),
-                script: Some(script),
-            }])
+            vec![key(prefix.join("node.exe"), Some(script))]
         );
     }
 
@@ -321,11 +435,12 @@ mod tests {
         // No node beside the shim or on PATH (fnm outside a hooked shell).
         let env = environment(root.path(), vec![prefix.clone()]);
         assert_eq!(
+            discover_with_fallback_node(&env, None, Some(&bundled))[0].via,
+            LaunchVia::ShimScript
+        );
+        assert_eq!(
             identities(discover_with_fallback_node(&env, None, Some(&bundled))),
-            identities(vec![ClaudeLaunch {
-                program: bundled.clone(),
-                script: Some(script.clone()),
-            }])
+            vec![key(bundled.clone(), Some(script.clone()))]
         );
 
         // The user's own Node still wins when PATH has one.
@@ -334,10 +449,7 @@ mod tests {
         let env = environment(root.path(), vec![prefix, nodejs.clone()]);
         assert_eq!(
             identities(discover_with_fallback_node(&env, None, Some(&bundled))),
-            identities(vec![ClaudeLaunch {
-                program: nodejs.join("node.exe"),
-                script: Some(script),
-            }])
+            vec![key(nodejs.join("node.exe"), Some(script))]
         );
     }
 
@@ -359,10 +471,7 @@ mod tests {
         let env = environment(root.path(), vec![pnpm, nodejs.clone()]);
         assert_eq!(
             identities(discover(&env, None)),
-            identities(vec![ClaudeLaunch {
-                program: nodejs.join("node.exe"),
-                script: Some(script),
-            }])
+            vec![key(nodejs.join("node.exe"), Some(script))]
         );
     }
 
@@ -465,5 +574,63 @@ mod tests {
             Some("node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe")
         );
         assert_eq!(shim_target("@node cli.js %*"), None);
+    }
+
+    #[test]
+    fn candidates_carry_fixed_templates_instead_of_paths() {
+        let root = tempfile::tempdir().unwrap();
+        let native_dir = root.path().join("home").join(".local").join("bin");
+        write(&native_dir.join("claude.exe"), "");
+        let prefix = npm_prefix(root.path(), NPM_NATIVE_SHIM, "bin/claude.exe");
+        let nodejs = root.path().join("nodejs");
+        let pnpm = root.path().join("Local").join("pnpm");
+        write(&pnpm.join("claude.cmd"), PNPM_SHIM);
+        write(
+            &pnpm
+                .join("global/5/node_modules/@anthropic-ai/claude-code")
+                .join("cli.js"),
+            "",
+        );
+        write(&nodejs.join("node.exe"), "");
+        let env = environment(root.path(), vec![native_dir, prefix, pnpm, nodejs]);
+        let found = discover(&env, None);
+        let shapes: Vec<_> = found.iter().map(|l| (l.origin, l.via)).collect();
+        // PATH order: native claude.exe (1), npm's claude (2, POSIX, skipped),
+        // claude.cmd (3), then pnpm's claude.cmd (4).
+        assert_eq!(
+            shapes,
+            vec![
+                (LaunchOrigin::LocalBin, LaunchVia::Direct),
+                (
+                    LaunchOrigin::Path {
+                        position: 3,
+                        extension: PathExtension::Cmd
+                    },
+                    LaunchVia::ShimBinary
+                ),
+                (
+                    LaunchOrigin::Path {
+                        position: 4,
+                        extension: PathExtension::Cmd
+                    },
+                    LaunchVia::ShimScript
+                ),
+            ]
+        );
+        assert_eq!(
+            path_match_names(&env),
+            vec!["claude.exe", "claude", "claude.cmd", "claude.cmd"]
+        );
+        let json =
+            serde_json::to_string(&found.iter().map(|l| l.origin).collect::<Vec<_>>()).unwrap();
+        assert!(!json.contains(&*root.path().to_string_lossy()));
+        assert_eq!(
+            serde_json::to_value(LaunchOrigin::Path {
+                position: 3,
+                extension: PathExtension::Cmd
+            })
+            .unwrap(),
+            serde_json::json!({"kind": "path", "position": 3, "extension": "cmd"})
+        );
     }
 }

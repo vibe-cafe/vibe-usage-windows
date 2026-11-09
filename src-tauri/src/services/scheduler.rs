@@ -1,5 +1,6 @@
 //! Adaptive sync: every minute while visible, every thirty minutes in the tray.
 
+use crate::services::sync_history::SyncTrigger;
 use crate::state::AppCtx;
 use std::time::Duration;
 use tauri::{AppHandle, Manager};
@@ -34,7 +35,7 @@ pub fn start(app: AppHandle) {
 
     let app2 = app.clone();
     let handle = tauri::async_runtime::spawn(async move {
-        crate::services::sync_engine::run_sync(app2.clone()).await;
+        crate::services::sync_engine::run_sync(app2.clone(), SyncTrigger::Scheduled).await;
         let mut last_attempt = now_ms();
         loop {
             tokio::time::sleep(SCHEDULER_TICK).await;
@@ -53,7 +54,7 @@ pub fn start(app: AppHandle) {
             if now < previous
                 || sync_due(Duration::from_millis(now.saturating_sub(previous)), active)
             {
-                crate::services::sync_engine::run_sync(app2.clone()).await;
+                crate::services::sync_engine::run_sync(app2.clone(), SyncTrigger::Scheduled).await;
                 last_attempt = now_ms();
             }
         }

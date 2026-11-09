@@ -127,8 +127,16 @@ pub async fn set_manual_key(app: AppHandle, api_key: String) -> Result<(), Strin
 #[tauri::command]
 pub fn trigger_sync(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
-        sync_engine::run_sync(app).await;
+        sync_engine::run_sync(app, crate::services::sync_history::SyncTrigger::Manual).await;
     });
+}
+
+/// 「复制诊断信息」: whitelisted, typed fields only (see `services::diagnostics`).
+#[tauri::command]
+pub async fn collect_diagnostics(
+    app: AppHandle,
+) -> crate::services::diagnostics::DiagnosticsReport {
+    crate::services::diagnostics::collect(&app).await
 }
 
 #[tauri::command]
@@ -368,6 +376,10 @@ pub fn reset_config(app: AppHandle) -> Result<(), String> {
     scheduler::stop(&app);
     let ctx = app.state::<AppCtx>();
     ctx.config.reset().map_err(|e| e.to_string())?;
+    // The app's own sync history goes with the configuration it describes.
+    if let Some(dir) = ctx.settings_path.parent() {
+        let _ = std::fs::remove_file(crate::services::sync_history::path_in(dir));
+    }
     *ctx.tray_stats.lock().unwrap() = None;
     crate::tray::update_tray(&app);
     Ok(())
