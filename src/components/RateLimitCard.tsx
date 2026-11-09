@@ -15,6 +15,8 @@ import {
   canonicalQuotaMeters,
   providerLabel,
   quotaEmptyStateText,
+  quotaProvenanceText,
+  quotaRetryableText,
 } from "../lib/quotaProducts";
 import { elapsedPercent, utilizationColor } from "../lib/aggregate";
 import { formatPercent, formatTimeUntil } from "../lib/formatters";
@@ -221,6 +223,8 @@ function meterWindow(meter: RateLimitMeter): RateLimitWindow {
 
 function ProviderCard({ snapshot }: { snapshot: ProviderRateLimit }) {
   const state = useAppState();
+  const name = providerLabel(snapshot.provider, state.quotaProducts);
+  const provenance = quotaProvenanceText(snapshot, name);
   const plan = snapshot.planLabel?.toLowerCase();
   const expectsFiveHour =
     snapshot.provider === "codex" &&
@@ -256,9 +260,7 @@ function ProviderCard({ snapshot }: { snapshot: ProviderRateLimit }) {
     <div className="flex h-full min-w-0 flex-col gap-2.5 rounded-card border border-card-border bg-card px-3 py-[11px]">
       <div className="flex items-center gap-1.5">
         <ProviderIcon provider={snapshot.provider} />
-        <span className="truncate text-[13px] font-semibold text-white">
-          {providerLabel(snapshot.provider, state.quotaProducts)}
-        </span>
+        <span className="truncate text-[13px] font-semibold text-white">{name}</span>
         <div className="grow" />
         {state.isRefreshingRateLimits && <div className="spinner h-3 w-3 shrink-0" />}
         {snapshot.planLabel && (
@@ -280,10 +282,10 @@ function ProviderCard({ snapshot }: { snapshot: ProviderRateLimit }) {
         <QuietText text={emptyStateText(snapshot, state)} />
       )}
       {snapshot.status.kind === "unauthorized" && (
-        <MessageContent text={unauthorizedText(snapshot.provider, state.settings.zCodeQuotaRegion, providerLabel(snapshot.provider, state.quotaProducts))} />
+        <MessageContent text={unauthorizedText(snapshot.provider, state.settings.zCodeQuotaRegion, name)} />
       )}
       {snapshot.status.kind === "retryableError" && (
-        <MessageContent text="暂时无法读取订阅配额" />
+        <MessageContent text={quotaRetryableText(snapshot, name)} />
       )}
       {snapshot.status.kind === "error" && <MessageContent text={snapshot.status.message} />}
       {snapshot.status.kind === "ok" && foldedMeterCount > 0 && (
@@ -298,7 +300,7 @@ function ProviderCard({ snapshot }: { snapshot: ProviderRateLimit }) {
           {expanded ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
         </button>
       )}
-      {snapshot.sourceLabel && <div className="text-[10px] text-neutral-400">{snapshot.sourceLabel}</div>}
+      {provenance && <div className="text-[10px] text-neutral-400">{provenance}</div>}
       {snapshot.status.kind === "ok" && <FreshnessNote snapshot={snapshot} />}
     </div>
   );

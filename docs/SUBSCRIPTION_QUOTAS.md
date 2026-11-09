@@ -10,13 +10,14 @@
 
 - `crates/core/src/quota_product.rs`：应用侧产品目录，集中维护名称、可用性、CLI 路由、常规目录和命令检测。Windows 应用安装位置在同一模块适配。
 - `commands.rs`：启动时初始化一次默认选择，后续产品查询不写设置；处理选择、区域和用户输入的凭据。
-- `rate_limits.rs`：刷新调度和短期内存缓存。Codex/Claude 保留原读取实现（Claude 原生探测的 `rate_limits_available:false` 直接给出 `sessionWithoutPlanLimits` 空态原因），其他已接入产品通过 `quota_cli.rs` 使用固定 CLI 的 JSON 协议；CLI 结果里的可选 `emptyReason` 会映射到 `RateLimitEmptyReason`，缺失或未知取值保持 `None`（向前兼容）。
+- `rate_limits.rs`：刷新调度和短期内存缓存。Codex/Claude 保留原读取实现（Claude 原生探测的 `rate_limits_available:false` 直接给出 `sessionWithoutPlanLimits` 空态原因），其他已接入产品通过 `quota_cli.rs` 使用固定 CLI 的 JSON 协议；CLI 结果里的可选 `emptyReason` 会映射到 `RateLimitEmptyReason`，缺失或未知取值保持 `None`（向前兼容）。每张卡片的快照另带 `source`（实际来源）和 `liveFailure`（固定失败原因），见下文「失败原因和来源（不放原文）」。
 - 前端从目录获取产品名称，使用共享卡片展示配额；官方图标资产（七家，@2x）由 `src/assets/` 提供，卡片与设置页共用 `src/components/ProviderIcon.tsx`。类型定义保留编译期检查，产品特有的登录提示仍由 UI 处理。
 
 ## Claude 探测约束（与 macOS 逐项一致）
 
 `src-tauri/src/services/claude_usage.rs` 启动 Claude Code 的参数与 macOS `ClaudeUsageProbe.processArguments` 相同，单元测试锁定：
 
+- 查找程序与「已检测」用同一条规则（`crates/core/src/claude_code.rs`，2026-11-09 起）：依次是 `VIBE_USAGE_CLAUDE_BIN`、`~\.local\bin\claude.exe`、`~\.claude\local\claude.exe`、`%LOCALAPPDATA%\Programs\Claude Code\claude.exe`，再按 PATH 目录顺序、目录内按 PATHEXT 顺序找 `claude.*`（与 `quota_product::path_executables` 共用）。以前读取时只找 `claude.exe`，而 npm 安装只在 PATH 上放 `claude.cmd`，结果是「已检测」却永远读不到；macOS `discoverBinaries` 一直会查 PATH。`.cmd` / `.bat` 不经 `cmd.exe` 运行（探测参数里的 JSON 会被 cmd 改写），而是把 npm / pnpm / Yarn 生成的 shim 当文本读，取最后一个以 `%dp0%` 或 `%~dp0` 开头的带引号路径：是 `.exe` 就直接启动（npm 版 Claude Code 2.1.x 的 `bin\claude.exe` 即此类），是 `.js` 就用 shim 同目录的 `node.exe`、否则 PATH 上第一个 `node.exe` 运行（与 shim 自己的选择一致，不用 App 内置的 Node），指向另一个 `.cmd` 时最多再跟一层。解析不了的 shim、无扩展名的 POSIX `claude`、`.ps1` 都跳过。去重后最多试 3 个候选，卡片显示最后一个候选的原因（与 macOS 一致）。
 - 必须带 `--print`。Claude Code 2.1.246 起，`--input-format stream-json` 缺 `--print` 会直接报错退出，探测在 `initialize` 之前就失败（vibe-usage-app#35；Windows 到 #25 才补上）。
 - 必须带进程内 `--settings '{"env":{"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC":""}}'`。只从子进程环境里删掉这个变量不够：Claude Code 启动后会重新读 `~/.claude/settings.json` 的 `env`，变量一旦生效，订阅账号的 `get_usage` 会回 `rate_limits: null`。值必须是空字符串，不能写 `"0"`；不写盘，也不传 `--bare`。
 - `get_usage` 请求必须带 `skip_behaviors: true`（2026-11-06 经维护者按架构审批门批准）。不带时，Claude Code 会先扫描最近 7 天的本地对话记录，为 `/usage` 生成消耗分析，扫完才回答。卡片不使用这部分，而重度用户的这次扫描可能超过单个程序 8 秒的预算（#25）。配额与套餐字段在两种情况下来自同一路径。
@@ -26,9 +27,22 @@
 
 ## 空态判定（不猜）
 
-卡片的空态文案只复述数据源真正报告过的内容：刷新在途 →「正在读取订阅配额…」；Codex 实时用量接口的 `allowed:false` / `limit_reached:true` →「本期订阅配额已用满 · 等待额度重置」；同一接口应答但没有生效窗口 →「当前没有生效的额度窗口」；OpenCode Go 用量接口对没有 Go 订阅的 Key 返回 403 →「未订阅 OpenCode Go」；Claude Code 应答 `rate_limits_available:false`（API Key / Bedrock / Vertex 登录，配额窗口本就不适用）→「当前登录方式不含订阅额度（API Key / Bedrock / Vertex）」；本机检测到产品但尚无数据 →「暂未读取到订阅配额数据」；本机未安装/未登录 →「未检测到本机安装或登录」。`limit_reached` 与 `allowed` 都缺失时 `empty_reason` 保持 `None`（`RateLimitEmptyReason`）；CLI 桥只在 CLI 报告 `emptyReason` 时透传该字段（缺失/`null` 是当前快照的正常路径，未知取值丢弃，均保持 `None`），本地日志与缓存不填该字段，因此前端不会替任何来源断言「已用满」。
+卡片的空态文案只复述数据源真正报告过的内容：刷新在途 →「正在读取订阅配额…」；Codex 实时用量接口的 `allowed:false` / `limit_reached:true` →「本期订阅配额已用满 · 等待额度重置」；同一接口应答但没有生效窗口 →「当前没有生效的额度窗口」；OpenCode Go 用量接口对没有 Go 订阅的 Key 返回 403 →「未订阅 OpenCode Go」；Claude Code 应答 `rate_limits_available:false`（API Key / Bedrock / Vertex 登录，配额窗口本就不适用）→「当前登录方式不含订阅额度（API Key / Bedrock / Vertex）」；读取本身得出了失败原因 → 直接显示该固定原因（见下一节，如「未找到 Claude Code 程序」「Claude 桌面端记录已过期」）；本机检测到产品、没有原因也尚无数据 →「暂未读取到订阅配额数据」；本机未安装/未登录 →「未检测到本机安装或登录」。`limit_reached` 与 `allowed` 都缺失时 `empty_reason` 保持 `None`（`RateLimitEmptyReason`）；CLI 桥只在 CLI 报告 `emptyReason` 时透传该字段（缺失/`null` 是当前快照的正常路径，未知取值丢弃，均保持 `None`），本地日志与缓存不填该字段，因此前端不会替任何来源断言「已用满」。
 
 CLI 是独立版本的依赖，其协议与 discovery 实现继续留在固定快照中。应用 discovery 包含 Windows 安装位置等平台规则，不能把它与 CLI 的跨平台 discovery 当成完全等价。本次发版把内置快照升级到 0.13.0（OpenCode Go 的配额适配器因此可用，凭据读取由 CLI 负责：2.x 凭据表 → 1.x `auth.json` 回退）；CLI 0.13.1 起 OpenCode Go 的 403 会带机器可读的 `emptyReason: notEntitled`，该版本发布后再随下次 vendor 升一次快照，应用无需改动（桥接已按可选字段解析）。当前快照的 OpenCode Go 适配器在 403 时只返回 `no_data`（不带 `emptyReason`），所以「未订阅 OpenCode Go」要等 CLI 产出该字段后才会出现；应用侧已按可选字段实现，届时无需再改。
+
+## 失败原因和来源（不放原文）
+
+2026-11-09 起（一键诊断方案 1a），读取已经得出的失败原因不再只写进看不到的 `log::debug!`，而是作为固定代码带到卡片上。代码与 macOS `ProviderRateLimit.LiveFailure` 共用，文案在 `src/lib/quotaProducts.ts:quotaFailureText`，与 macOS 卡片一致。只传分类，不传任何原文：Claude Code 的 stderr、启动错误文本、HTTP 响应正文、CLI 的 `message` 都不保留。
+
+- Claude 实时读取：未找到 Claude Code 程序 / Claude 启动失败 / Claude 配额读取超时 / Claude 没有响应配额请求（进程退出、关闭输出或应答不成功）/ Claude 没有返回额度窗口（应答了，但 `rate_limits` 为空或没有可用窗口）。
+- Claude 桌面端记录（仅 Windows，原先统一显示「桌面额度记录缺失、过期或账号不明确」）：Claude 桌面端记录已过期（最新样本超过 24 小时）/ 装了多份 Claude 桌面端，账号不明确（包后缀不同，或普通安装与 MSIX 包同时有记录；同一个包的新旧目录不算）/ Claude 桌面端记录含多个账号，账号不明确（同一份记录里 `org` 不一致，例如在桌面端换过账号）/ Claude 桌面端记录无法解析（读不了、超过 2 MB、格式或版本不符、窗口值非法、时间戳在未来）。
+- Codex 实时接口：未找到 Codex 登录信息 / Codex 登录已失效 / Codex 配额接口请求超时 / Codex 配额接口连接失败 / Codex 配额接口返回错误 {状态码} / Codex 配额接口返回了无法识别的数据。
+- 配额 CLI 整体失败：未找到 Node.js 或 Bun / 配额 CLI 读取超时 / 配额 CLI 运行失败 / 配额 CLI 返回了无法识别的数据 / 配额 CLI 协议版本不兼容 / 配额 CLI 没有返回这个产品。ZCode 读不了 Windows 凭据管理器时是「无法读取 Windows 凭据管理器」。CLI 单个产品以 `source: "cache"` 作答，说明它的实时读取已失败；具体原因只在 `message` 原文里，卡片只说「实时读取失败」。
+
+来源 `source` 的取值：实时读取（Claude Code 探测、Codex 接口、CLI 的 `live`）/ 缓存（`~/.claude.json` 的 `cachedUsageUtilization`、CLI 的 `cache`）/ Claude 桌面端记录 / 本地日志（Codex 会话 JSONL、CLI 的 `local`）。
+
+显示规则与 macOS 相同：实时读取成功时卡片不加说明行（维护者 2026-10-24 定过：每张卡挂一行说明太吵）；实时读取失败、但仍显示缓存或本地日志里的数值时，下面加一行小字「来源：<来源> · <原因>」；可重试卡片第一行是原因，第二行小字「来源：实时读取」，右侧是重试按钮；空态有原因时直接显示原因；需要重新登录的卡片文案不变；Claude 桌面端记录保留原有的小字「Claude 桌面额度记录 · 非本机独占用量」。Claude 实时读取失败且没有缓存时，卡片状态从「无数据」改为「可重试」（与 macOS 一致）；只有「未找到 Claude Code 程序」仍是空态，因为重试改变不了它。数据源先后顺序不变：桌面端记录 → 实时读取 → 缓存。
 
 ## 缓存和失败处理
 

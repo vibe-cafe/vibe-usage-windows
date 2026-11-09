@@ -94,11 +94,83 @@ pub enum RateLimitEmptyReason {
     SessionWithoutPlanLimits,
 }
 
+/// Which kind of channel produced what the card shows. Mirrors macOS
+/// `ProviderRateLimit.Source`; absent means the producer did not say.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RateLimitSource {
+    /// This refresh's live read: the Claude Code probe, the Codex endpoint, or
+    /// the CLI reporting `source: "live"`.
+    Live,
+    /// A stored earlier result: Claude Code's `cachedUsageUtilization`, or the
+    /// CLI's own quota cache.
+    Cache,
+    /// Claude Desktop's `plan-usage-history.json` samples.
+    DesktopRecord,
+    /// A local log: Codex session JSONL, or the CLI reporting `source: "local"`.
+    LocalLog,
+}
+
+/// Why the preferred read did not produce the card's numbers, as one of our
+/// own fixed reasons (codes shared with macOS `ProviderRateLimit.LiveFailure`,
+/// plus the Windows-only Claude Desktop record and Credential Manager cases).
+///
+/// Only the classification travels: never a child process's stderr, an HTTP
+/// body, or the CLI's free-text `message`, any of which can carry paths,
+/// account names or credentials. A snapshot from a successful live read has
+/// none, so the annotation clears itself on the next good refresh.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "code", rename_all = "camelCase")]
+pub enum RateLimitLiveFailure {
+    // Claude Code probe
+    ClaudeBinaryNotFound,
+    ClaudeLaunchFailed,
+    ClaudeTimedOut,
+    /// The process exited, closed stdout, or answered without success.
+    ClaudeNoResponse,
+    /// Answered, but `rate_limits` held no usable 5h/7d window.
+    ClaudeNoWindows,
+    // Claude Desktop `plan-usage-history.json` (Windows only)
+    /// The newest sample is older than the record's 24-hour limit.
+    DesktopRecordStale,
+    /// More than one Claude Desktop installation keeps a record.
+    DesktopMultipleInstalls,
+    /// One record holds samples from more than one account.
+    DesktopMixedAccounts,
+    /// The record could not be read or did not have the expected shape.
+    DesktopRecordUnreadable,
+    // Native HTTP provider (Codex)
+    CredentialsNotFound,
+    CredentialsRejected,
+    EndpointTimedOut,
+    EndpointUnreachable,
+    EndpointHttpStatus { status: u16 },
+    EndpointUnrecognized,
+    // App-held credentials (ZCode key in Windows Credential Manager)
+    CredentialStoreUnavailable,
+    // Shared quota CLI
+    CliRuntimeMissing,
+    CliTimedOut,
+    CliFailed,
+    CliUnrecognizedOutput,
+    CliSchemaMismatch,
+    CliNoResult,
+    /// The CLI answered from its cache after its live read failed; the reason
+    /// exists only as free text, which is never displayed.
+    CliReportedFailure,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderRateLimit {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_label: Option<String>,
+    /// Channel that produced the shown numbers or, for an empty or retryable
+    /// card, the channel whose failure the card reports.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<RateLimitSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live_failure: Option<RateLimitLiveFailure>,
     pub provider: RateLimitProvider,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub meters: Vec<RateLimitMeter>,
@@ -133,11 +205,27 @@ impl ProviderRateLimit {
             data_as_of: None,
             fetched_at: None,
             source_label: None,
+            source: None,
+            live_failure: None,
             five_hour_not_enforced: false,
             reset_credits_count: None,
             empty_reason: None,
             status,
         }
+    }
+
+    /// An empty card that reports why the read failed and which channel it
+    /// tried, never a guess at the reason.
+    pub fn failed(
+        provider: RateLimitProvider,
+        status: RateLimitStatus,
+        source: Option<RateLimitSource>,
+        failure: RateLimitLiveFailure,
+    ) -> Self {
+        let mut snapshot = Self::empty(provider, status);
+        snapshot.source = source;
+        snapshot.live_failure = Some(failure);
+        snapshot
     }
 }
 

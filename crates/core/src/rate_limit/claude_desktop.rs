@@ -1,6 +1,9 @@
 //! Read-only Claude Desktop quota observations. No credentials, prompts,
 //! network requests, subprocesses, or writes to Claude.
-use super::{ProviderRateLimit, RateLimitMeter, RateLimitProvider, RateLimitStatus};
+use super::{
+    ProviderRateLimit, RateLimitLiveFailure, RateLimitMeter, RateLimitProvider, RateLimitSource,
+    RateLimitStatus,
+};
 use crate::quota_product::DiscoveryEnvironment;
 use serde_json::Value;
 use std::collections::{BTreeMap, HashSet};
@@ -9,6 +12,7 @@ use std::{fs::File, io::Read, path::PathBuf};
 const MAX_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_AGE: f64 = 24.0 * 3600.0;
 const RECORD: &str = "plan-usage-history.json";
+const SOURCE_LABEL: &str = "Claude 桌面额度记录 · 非本机独占用量";
 
 /// One place a Claude Desktop installation keeps `plan-usage-history.json`.
 struct Location {
@@ -134,55 +138,92 @@ fn record_files(env: &DiscoveryEnvironment) -> Vec<PathBuf> {
     newest.into_values().map(|(_, file)| file).collect()
 }
 
-/// Some(noData) means Desktop history exists but is stale or ambiguous.
-/// Do not silently replace this with a different Claude Code account.
+/// `Some` whenever a Desktop record exists. A record that cannot be used is
+/// `Some(noData)` carrying the specific reason (stale, several installations,
+/// several accounts, unreadable); several installations means different
+/// packages or installers, never one package's old and current directory. It is never silently replaced by a
+/// separately configured Claude Code account.
 pub fn read(env: &DiscoveryEnvironment, now: f64) -> Option<ProviderRateLimit> {
     let paths = record_files(env);
     if paths.is_empty() {
         return None;
     }
-    let mut empty =
-        ProviderRateLimit::empty(RateLimitProvider::ClaudeCode, RateLimitStatus::NoData);
-    empty.source_label = Some("Claude 桌面额度记录 · 非本机独占用量".into());
-    // Multiple installations may have different accounts. No guessing.
+    // Different installations may have different accounts. No guessing.
     if paths.len() != 1 {
-        return Some(empty);
+        return Some(unusable(RateLimitLiveFailure::DesktopMultipleInstalls));
     }
     let result = (|| {
-        let file = File::open(&paths[0]).ok()?;
+        let file =
+            File::open(&paths[0]).map_err(|_| RateLimitLiveFailure::DesktopRecordUnreadable)?;
         let mut bytes = Vec::new();
-        file.take(MAX_BYTES + 1).read_to_end(&mut bytes).ok()?;
+        file.take(MAX_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|_| RateLimitLiveFailure::DesktopRecordUnreadable)?;
         if bytes.len() as u64 > MAX_BYTES {
-            return None;
+            return Err(RateLimitLiveFailure::DesktopRecordUnreadable);
         }
         parse(&bytes, now)
     })();
-    Some(result.unwrap_or(empty))
+    Some(result.unwrap_or_else(unusable))
 }
 
-pub fn parse(bytes: &[u8], now: f64) -> Option<ProviderRateLimit> {
-    let root: Value = serde_json::from_slice(bytes).ok()?;
-    if root.get("version")?.as_u64()? != 2 {
-        return None;
+fn unusable(reason: RateLimitLiveFailure) -> ProviderRateLimit {
+    let mut empty = ProviderRateLimit::failed(
+        RateLimitProvider::ClaudeCode,
+        RateLimitStatus::NoData,
+        Some(RateLimitSource::DesktopRecord),
+        reason,
+    );
+    empty.source_label = Some(SOURCE_LABEL.into());
+    empty
+}
+
+/// Decode one record. The error is the fixed reason the card shows; the
+/// record's own contents never leave this function.
+pub fn parse(bytes: &[u8], now: f64) -> Result<ProviderRateLimit, RateLimitLiveFailure> {
+    use RateLimitLiveFailure::{
+        DesktopMixedAccounts as MixedAccounts, DesktopRecordStale as Stale,
+        DesktopRecordUnreadable as Unreadable,
+    };
+    let root: Value = serde_json::from_slice(bytes).map_err(|_| Unreadable)?;
+    if root.get("version").and_then(Value::as_u64) != Some(2) {
+        return Err(Unreadable);
     }
-    let samples = root.get("samples")?.as_array()?;
+    let samples = root
+        .get("samples")
+        .and_then(Value::as_array)
+        .ok_or(Unreadable)?;
     let mut org: Option<&str> = None;
     for sample in samples {
-        let candidate = sample.get("org")?.as_str().filter(|s| !s.is_empty())?;
+        let candidate = sample
+            .get("org")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .ok_or(Unreadable)?;
         if org.is_some_and(|previous| previous != candidate) {
-            return None;
+            return Err(MixedAccounts);
         }
         org = Some(candidate);
     }
     let latest = samples
         .iter()
         .filter_map(|s| Some((s.get("t")?.as_f64()?, s)))
-        .max_by(|a, b| a.0.total_cmp(&b.0))?;
+        .max_by(|a, b| a.0.total_cmp(&b.0))
+        .ok_or(Unreadable)?;
     let as_of = latest.0 / 1000.0;
-    if !now.is_finite() || !(0.0..=MAX_AGE).contains(&(now - as_of)) {
-        return None;
+    // A sample from the future (clock moved back) is not trustworthy either,
+    // but it is not "old": only an over-age record is called stale.
+    if !now.is_finite() || now - as_of < 0.0 {
+        return Err(Unreadable);
     }
-    let usage = latest.1.get("u")?.as_object()?;
+    if now - as_of > MAX_AGE {
+        return Err(Stale);
+    }
+    let usage = latest
+        .1
+        .get("u")
+        .and_then(Value::as_object)
+        .ok_or(Unreadable)?;
     let mut meters = vec![];
     for (key, label) in [
         ("fh", "5h"),
@@ -199,9 +240,9 @@ pub fn parse(bytes: &[u8], now: f64) -> Option<ProviderRateLimit> {
         let Some(value) = usage.get(key).filter(|v| !v.is_null()) else {
             continue;
         };
-        let utilization = value.as_f64()?;
+        let utilization = value.as_f64().ok_or(Unreadable)?;
         if !(0.0..=100.0).contains(&utilization) {
-            return None;
+            return Err(Unreadable);
         }
         meters.push(RateLimitMeter {
             id: format!("desktop-{key}"),
@@ -212,21 +253,22 @@ pub fn parse(bytes: &[u8], now: f64) -> Option<ProviderRateLimit> {
         });
     }
     if meters.is_empty() {
-        return None;
+        return Err(Unreadable);
     }
     let mut snapshot = ProviderRateLimit::empty(RateLimitProvider::ClaudeCode, RateLimitStatus::Ok);
     snapshot.meters = meters;
     snapshot.data_as_of = Some(as_of);
     snapshot.fetched_at = Some(now);
+    snapshot.source = Some(RateLimitSource::DesktopRecord);
     snapshot.source_label = Some(
         if now - as_of > 900.0 {
             "Claude 桌面历史额度 · 非实时 · 非本机独占用量"
         } else {
-            "Claude 桌面额度记录 · 非本机独占用量"
+            SOURCE_LABEL
         }
         .into(),
     );
-    Some(snapshot)
+    Ok(snapshot)
 }
 
 #[cfg(test)]
@@ -237,7 +279,7 @@ mod tests {
     fn sample(at: f64, org: &str, n: f64) -> Value {
         json!({"t":at*1000.0,"org":org,"u":{"fh":n,"sd":13}})
     }
-    fn decode(samples: Vec<Value>) -> Option<ProviderRateLimit> {
+    fn decode(samples: Vec<Value>) -> Result<ProviderRateLimit, RateLimitLiveFailure> {
         parse(
             &serde_json::to_vec(&json!({"version":2,"samples":samples})).unwrap(),
             NOW,
@@ -264,24 +306,42 @@ mod tests {
         assert!(s.source_label.unwrap().contains("非实时"));
     }
     #[test]
-    fn stale_future_invalid_and_cross_account_records_are_rejected() {
-        for values in [
-            vec![sample(NOW - MAX_AGE - 1.0, "one", 28.0)],
-            vec![sample(NOW + 1.0, "one", 28.0)],
-            vec![sample(NOW, "one", -1.0)],
-            vec![sample(NOW, "one", 101.0)],
-            vec![sample(NOW, "one", 28.0), sample(NOW - 1.0, "two", 70.0)],
-            vec![],
+    fn stale_future_invalid_and_cross_account_records_are_rejected_with_their_reason() {
+        use RateLimitLiveFailure::{
+            DesktopMixedAccounts, DesktopRecordStale, DesktopRecordUnreadable,
+        };
+        for (values, reason) in [
+            (
+                vec![sample(NOW - MAX_AGE - 1.0, "one", 28.0)],
+                DesktopRecordStale,
+            ),
+            (
+                vec![sample(NOW + 1.0, "one", 28.0)],
+                DesktopRecordUnreadable,
+            ),
+            (vec![sample(NOW, "one", -1.0)], DesktopRecordUnreadable),
+            (vec![sample(NOW, "one", 101.0)], DesktopRecordUnreadable),
+            (
+                vec![sample(NOW, "one", 28.0), sample(NOW - 1.0, "two", 70.0)],
+                DesktopMixedAccounts,
+            ),
+            (vec![], DesktopRecordUnreadable),
         ] {
-            assert!(decode(values).is_none());
+            assert_eq!(decode(values).unwrap_err(), reason);
         }
-        assert!(parse(b"broken", NOW).is_none());
-        assert!(parse(br#"{"version":1,"samples":[]}"#, NOW).is_none());
-        assert!(decode(vec![
-            sample(NOW - 10.0, "one", 28.0),
-            json!({"t":NOW*1000.0,"org":"one","u":{}})
-        ])
-        .is_none());
+        assert_eq!(parse(b"broken", NOW).unwrap_err(), DesktopRecordUnreadable);
+        assert_eq!(
+            parse(br#"{"version":1,"samples":[]}"#, NOW).unwrap_err(),
+            DesktopRecordUnreadable
+        );
+        assert_eq!(
+            decode(vec![
+                sample(NOW - 10.0, "one", 28.0),
+                json!({"t":NOW*1000.0,"org":"one","u":{}})
+            ])
+            .unwrap_err(),
+            DesktopRecordUnreadable
+        );
     }
     #[test]
     fn null_window_is_skipped_without_discarding_the_others() {
@@ -309,11 +369,11 @@ mod tests {
         assert!(decode(vec![
             json!({"t":NOW*1000.0,"org":"one","u":{"fh":null,"sd":null}})
         ])
-        .is_none());
+        .is_err());
         assert!(decode(vec![
             json!({"t":NOW*1000.0,"org":"one","u":{"fh":"12","sd":13}})
         ])
-        .is_none());
+        .is_err());
     }
     #[test]
     fn packaged_directory_is_detected_and_source_file_is_unchanged() {
@@ -335,15 +395,90 @@ mod tests {
             windows: true,
         };
         assert_eq!(data_dirs(&env), vec![desktop]);
-        assert_eq!(read(&env, NOW).unwrap().meters[0].utilization, 28.0);
+        let live = read(&env, NOW).unwrap();
+        assert_eq!(live.meters[0].utilization, 28.0);
+        assert_eq!(live.source, Some(RateLimitSource::DesktopRecord));
+        assert_eq!(live.live_failure, None);
         assert_eq!(std::fs::read(&file).unwrap(), bytes);
+        let stale = read(&env, NOW + MAX_AGE + 1.0).unwrap();
+        assert_eq!(stale.status, RateLimitStatus::NoData);
+        assert_eq!(stale.source, Some(RateLimitSource::DesktopRecord));
         assert_eq!(
-            read(&env, NOW + MAX_AGE + 1.0).unwrap().status,
-            RateLimitStatus::NoData
+            stale.live_failure,
+            Some(RateLimitLiveFailure::DesktopRecordStale)
         );
         assert!(crate::quota_product::discover_with(&env)
             .iter()
             .any(|p| p.provider == RateLimitProvider::ClaudeCode && p.is_detected));
+    }
+
+    fn desktop_env(root: &std::path::Path) -> DiscoveryEnvironment {
+        DiscoveryEnvironment {
+            home: root.into(),
+            path_directories: vec![],
+            path_extensions: vec![],
+            app_data: Some(root.join("Roaming")),
+            local_app_data: Some(root.join("Local")),
+            program_files: vec![],
+            windows: true,
+        }
+    }
+
+    #[test]
+    fn several_installations_report_an_ambiguous_account_not_a_guess() {
+        let dir = tempfile::tempdir().unwrap();
+        let env = desktop_env(dir.path());
+        let record =
+            serde_json::to_vec(&json!({"version":2,"samples":[sample(NOW,"one",28.0)]})).unwrap();
+        for directory in [
+            dir.path().join("Roaming/Claude"),
+            dir.path()
+                .join("Local/Packages/Claude_abc123/LocalCache/Roaming/Claude"),
+        ] {
+            std::fs::create_dir_all(&directory).unwrap();
+            std::fs::write(directory.join("plan-usage-history.json"), &record).unwrap();
+        }
+        let snapshot = read(&env, NOW).unwrap();
+        assert_eq!(snapshot.status, RateLimitStatus::NoData);
+        assert!(snapshot.meters.is_empty());
+        assert_eq!(
+            snapshot.live_failure,
+            Some(RateLimitLiveFailure::DesktopMultipleInstalls)
+        );
+        assert_eq!(snapshot.source_label.as_deref(), Some(SOURCE_LABEL));
+    }
+
+    #[test]
+    fn unreadable_record_and_missing_record_stay_distinct() {
+        let dir = tempfile::tempdir().unwrap();
+        let env = desktop_env(dir.path());
+        // No Desktop directory at all: Desktop is not a source here.
+        assert!(read(&env, NOW).is_none());
+        let directory = dir.path().join("Roaming/Claude");
+        std::fs::create_dir_all(&directory).unwrap();
+        // A Desktop directory without a record is still "no Desktop source".
+        assert!(read(&env, NOW).is_none());
+        std::fs::write(directory.join("plan-usage-history.json"), b"{not json").unwrap();
+        assert_eq!(
+            read(&env, NOW).unwrap().live_failure,
+            Some(RateLimitLiveFailure::DesktopRecordUnreadable)
+        );
+    }
+
+    #[test]
+    fn failure_codes_serialize_as_tagged_objects_for_the_frontend() {
+        assert_eq!(
+            serde_json::to_value(RateLimitLiveFailure::DesktopMultipleInstalls).unwrap(),
+            json!({"code": "desktopMultipleInstalls"})
+        );
+        assert_eq!(
+            serde_json::to_value(RateLimitLiveFailure::EndpointHttpStatus { status: 502 }).unwrap(),
+            json!({"code": "endpointHttpStatus", "status": 502})
+        );
+        assert_eq!(
+            serde_json::to_value(RateLimitSource::DesktopRecord).unwrap(),
+            json!("desktopRecord")
+        );
     }
 
     mod locations {
@@ -441,6 +576,10 @@ mod tests {
             let snapshot = read(&env(dir.path()), NOW).unwrap();
             assert_eq!(snapshot.status, RateLimitStatus::NoData);
             assert!(snapshot.meters.is_empty());
+            assert_eq!(
+                snapshot.live_failure,
+                Some(RateLimitLiveFailure::DesktopMultipleInstalls)
+            );
 
             let dir = tempfile::tempdir().unwrap();
             write_record(&dir.path().join("Roaming/Claude"), 10.0, now);

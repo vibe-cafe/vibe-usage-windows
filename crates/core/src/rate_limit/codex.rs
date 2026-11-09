@@ -5,7 +5,10 @@
 //! non-null `rate_limits` object. Windows are mapped by `window_minutes`
 //! (300 → 5h, 10080 → 7d), never by slot name.
 
-use super::{now_epoch, ProviderRateLimit, RateLimitProvider, RateLimitStatus, RateLimitWindow};
+use super::{
+    now_epoch, ProviderRateLimit, RateLimitProvider, RateLimitSource, RateLimitStatus,
+    RateLimitWindow,
+};
 use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -42,6 +45,9 @@ pub fn read_from(sessions_dir: &Path, now: f64) -> ProviderRateLimit {
             data_as_of: None,
             fetched_at: None,
             source_label: None,
+            // Session JSONL is Codex's own log; the live endpoint is preferred.
+            source: Some(RateLimitSource::LocalLog),
+            live_failure: None,
             five_hour_not_enforced: false,
             reset_credits_count: None,
             empty_reason: None,

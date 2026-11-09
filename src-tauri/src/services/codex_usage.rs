@@ -5,18 +5,48 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use vibe_core::{
-    ProviderRateLimit, RateLimitEmptyReason, RateLimitProvider, RateLimitStatus, RateLimitWindow,
+    ProviderRateLimit, RateLimitEmptyReason, RateLimitLiveFailure, RateLimitProvider,
+    RateLimitSource, RateLimitStatus, RateLimitWindow,
 };
 
 const DEFAULT_BASE: &str = "https://chatgpt.com/backend-api";
 const MAX_ATTEMPTS: usize = 3;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FetchError {
     NotLoggedIn,
     Unauthorized,
-    Transient,
+    /// The request (after retries) ran out of time.
+    TimedOut,
+    /// The request (after retries) could not reach the endpoint.
+    Unreachable,
+    /// Any status other than 200 / 401; only the number is kept, never the body.
+    HttpStatus(u16),
     BadResponse,
+}
+
+impl FetchError {
+    /// The card's fixed reason (codes shared with macOS `LiveFailure`).
+    pub fn live_failure(self) -> RateLimitLiveFailure {
+        match self {
+            Self::NotLoggedIn => RateLimitLiveFailure::CredentialsNotFound,
+            Self::Unauthorized => RateLimitLiveFailure::CredentialsRejected,
+            Self::TimedOut => RateLimitLiveFailure::EndpointTimedOut,
+            Self::Unreachable => RateLimitLiveFailure::EndpointUnreachable,
+            Self::HttpStatus(status) => RateLimitLiveFailure::EndpointHttpStatus { status },
+            Self::BadResponse => RateLimitLiveFailure::EndpointUnrecognized,
+        }
+    }
+
+    /// reqwest failures split only into "timed out" and "could not connect";
+    /// the error's own description is not kept.
+    fn transport(error: &reqwest::Error) -> Self {
+        if error.is_timeout() {
+            Self::TimedOut
+        } else {
+            Self::Unreachable
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -42,9 +72,32 @@ pub async fn fetch(http: &Client) -> Result<ProviderRateLimit, FetchError> {
         return Err(FetchError::Unauthorized);
     }
     if response.0 != StatusCode::OK {
-        return Err(FetchError::BadResponse);
+        return Err(FetchError::HttpStatus(response.0.as_u16()));
     }
     parse_usage_response(&response.1, now_epoch()).ok_or(FetchError::BadResponse)
+}
+
+/// What the Codex card shows after the live endpoint failed. Session JSONL
+/// numbers still win when there are any, annotated with why live failed;
+/// otherwise a rejected login keeps its re-login card and every other failure
+/// becomes the empty state's stated reason instead of a neutral "no data".
+pub fn after_live_failure(error: FetchError, fallback: ProviderRateLimit) -> ProviderRateLimit {
+    if fallback.status != RateLimitStatus::NoData {
+        let mut snapshot = fallback;
+        snapshot.live_failure = Some(error.live_failure());
+        return snapshot;
+    }
+    let status = if error == FetchError::Unauthorized {
+        RateLimitStatus::Unauthorized
+    } else {
+        RateLimitStatus::NoData
+    };
+    ProviderRateLimit::failed(
+        RateLimitProvider::Codex,
+        status,
+        Some(RateLimitSource::Live),
+        error.live_failure(),
+    )
 }
 
 async fn send(
@@ -73,15 +126,18 @@ async fn send(
                 if retryable && attempt + 1 < MAX_ATTEMPTS {
                     continue;
                 }
-                let bytes = response.bytes().await.map_err(|_| FetchError::Transient)?;
+                let bytes = response
+                    .bytes()
+                    .await
+                    .map_err(|error| FetchError::transport(&error))?;
                 let value = serde_json::from_slice::<Value>(&bytes).unwrap_or(Value::Null);
                 return Ok((status, value));
             }
             Err(_) if attempt + 1 < MAX_ATTEMPTS => continue,
-            Err(_) => return Err(FetchError::Transient),
+            Err(error) => return Err(FetchError::transport(&error)),
         }
     }
-    Err(FetchError::Transient)
+    Err(FetchError::Unreachable)
 }
 
 fn codex_home() -> PathBuf {
@@ -233,6 +289,8 @@ fn parse_usage_response(root: &Value, now: f64) -> Option<ProviderRateLimit> {
         provider: RateLimitProvider::Codex,
         meters: Vec::new(),
         source_label: None,
+        source: Some(RateLimitSource::Live),
+        live_failure: None,
         five_hour_not_enforced: five_hour.is_none(),
         five_hour,
         seven_day,
@@ -360,5 +418,39 @@ mod tests {
     fn a_missing_rate_limit_key_is_not_an_explained_empty_answer() {
         let value = json!({"plan_type":"pro"});
         assert!(parse_usage_response(&value, 1000.0).is_none());
+    }
+
+    #[test]
+    fn live_failure_annotates_session_log_numbers_and_names_the_empty_state() {
+        let mut log = ProviderRateLimit::empty(RateLimitProvider::Codex, RateLimitStatus::Ok);
+        log.source = Some(RateLimitSource::LocalLog);
+        let shown = after_live_failure(FetchError::TimedOut, log);
+        assert_eq!(shown.status, RateLimitStatus::Ok);
+        assert_eq!(shown.source, Some(RateLimitSource::LocalLog));
+        assert_eq!(shown.live_failure, Some(RateLimitLiveFailure::EndpointTimedOut));
+
+        let empty = || ProviderRateLimit::empty(RateLimitProvider::Codex, RateLimitStatus::NoData);
+        let missing = after_live_failure(FetchError::NotLoggedIn, empty());
+        assert_eq!(missing.status, RateLimitStatus::NoData);
+        assert_eq!(
+            missing.live_failure,
+            Some(RateLimitLiveFailure::CredentialsNotFound)
+        );
+        let rejected = after_live_failure(FetchError::Unauthorized, empty());
+        assert_eq!(rejected.status, RateLimitStatus::Unauthorized);
+        assert_eq!(
+            after_live_failure(FetchError::HttpStatus(502), empty()).live_failure,
+            Some(RateLimitLiveFailure::EndpointHttpStatus { status: 502 })
+        );
+    }
+
+    #[test]
+    fn a_live_answer_is_marked_live_without_a_failure() {
+        let payload = json!({
+            "rate_limit":{"primary_window":{"used_percent":26,"limit_window_seconds":18000,"reset_after_seconds":60}}
+        });
+        let snapshot = parse_usage_response(&payload, 1000.0).unwrap();
+        assert_eq!(snapshot.source, Some(RateLimitSource::Live));
+        assert_eq!(snapshot.live_failure, None);
     }
 }

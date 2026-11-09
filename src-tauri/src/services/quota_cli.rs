@@ -9,7 +9,8 @@ use std::time::Duration;
 use tauri::AppHandle;
 use vibe_core::quota_product::{cli_id, cli_provider, ZCodeQuotaRegion};
 use vibe_core::{
-    ProviderRateLimit, RateLimitEmptyReason, RateLimitMeter, RateLimitProvider, RateLimitStatus,
+    ProviderRateLimit, RateLimitEmptyReason, RateLimitLiveFailure, RateLimitMeter,
+    RateLimitProvider, RateLimitSource, RateLimitStatus,
 };
 
 const SCHEMA_VERSION: u32 = 1;
@@ -41,6 +42,30 @@ impl FetchError {
             Self::UnknownProduct => "unknown_product",
             Self::ProductMismatch => "quota_product_mismatch",
         }
+    }
+
+    /// The card's fixed reason (codes shared with macOS `LiveFailure`). The
+    /// process's own output is never part of it.
+    pub const fn live_failure(self) -> RateLimitLiveFailure {
+        match self {
+            Self::CredentialStore => RateLimitLiveFailure::CredentialStoreUnavailable,
+            Self::RuntimeUnavailable => RateLimitLiveFailure::CliRuntimeMissing,
+            Self::Timeout => RateLimitLiveFailure::CliTimedOut,
+            Self::Launch | Self::ProcessFailure => RateLimitLiveFailure::CliFailed,
+            Self::InvalidJson | Self::UnknownProduct => RateLimitLiveFailure::CliUnrecognizedOutput,
+            Self::UnsupportedSchema => RateLimitLiveFailure::CliSchemaMismatch,
+            Self::ProductMismatch => RateLimitLiveFailure::CliNoResult,
+        }
+    }
+
+    /// Every requested product's card after the whole CLI call failed.
+    pub fn snapshot(self, provider: RateLimitProvider) -> ProviderRateLimit {
+        ProviderRateLimit::failed(
+            provider,
+            RateLimitStatus::RetryableError,
+            Some(RateLimitSource::Live),
+            self.live_failure(),
+        )
     }
 }
 
@@ -80,6 +105,9 @@ struct Product {
     /// Optional in the CLI contract: a snapshot that predates the field (or a
     /// source that cannot say) simply omits it.
     empty_reason: Option<String>,
+    /// `live` / `local` / `cache` in the CLI contract.
+    #[serde(default)]
+    source: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -165,10 +193,7 @@ fn isolate_credential_failure(
             (
                 providers,
                 None,
-                vec![ProviderRateLimit::empty(
-                    RateLimitProvider::ZCode,
-                    RateLimitStatus::RetryableError,
-                )],
+                vec![FetchError::CredentialStore.snapshot(RateLimitProvider::ZCode)],
             )
         }
     }
@@ -231,8 +256,25 @@ fn map_product(product: Product) -> Result<ProviderRateLimit, FetchError> {
         five_hour_not_enforced: false,
         reset_credits_count: None,
         empty_reason: product.empty_reason.as_deref().and_then(empty_reason),
+        source: product.source.as_deref().and_then(source),
+        // The CLI answers from its cache only after its live read reported a
+        // retryable error, so a cached answer is itself the statement that
+        // live failed. The specific reason exists only in `message`, which is
+        // free text and never kept.
+        live_failure: (product.source.as_deref() == Some("cache"))
+            .then_some(RateLimitLiveFailure::CliReportedFailure),
         status,
     })
+}
+
+/// The CLI's `source` field. Unknown values stay `None` rather than guessed.
+fn source(raw: &str) -> Option<RateLimitSource> {
+    match raw {
+        "live" => Some(RateLimitSource::Live),
+        "cache" => Some(RateLimitSource::Cache),
+        "local" => Some(RateLimitSource::LocalLog),
+        _ => None,
+    }
 }
 
 /// The CLI may name why a product answered without a window. Absent/null means
@@ -309,6 +351,10 @@ mod tests {
         assert_eq!(failures.len(), 1);
         assert_eq!(failures[0].provider, RateLimitProvider::ZCode);
         assert_eq!(failures[0].status, RateLimitStatus::RetryableError);
+        assert_eq!(
+            failures[0].live_failure,
+            Some(RateLimitLiveFailure::CredentialStoreUnavailable)
+        );
     }
 
     #[test]
@@ -375,5 +421,67 @@ mod tests {
         .unwrap();
         assert_eq!(snapshots[0].status, RateLimitStatus::Unauthorized);
         assert!(!format!("{snapshots:?}").contains("must-not-survive"));
+    }
+
+    #[test]
+    fn cli_source_is_mapped_and_a_cached_answer_says_live_failed() {
+        let snapshot = |source: &str| {
+            decode(
+                format!(
+                    r#"{{"schemaVersion":1,"products":[{{"id":"grok","status":"ok","meters":[{{"id":"m","label":"7d","utilization":30}}],"fetchedAt":"2026-09-08T02:00:00Z","source":"{source}","message":"ECONNRESET C:\\Users\\someone must-not-survive"}}]}}"#
+                )
+                .as_bytes(),
+                &[RateLimitProvider::Grok],
+            )
+            .unwrap()
+            .remove(0)
+        };
+        let live = snapshot("live");
+        assert_eq!(live.source, Some(RateLimitSource::Live));
+        assert_eq!(live.live_failure, None);
+        assert_eq!(snapshot("local").source, Some(RateLimitSource::LocalLog));
+        let cached = snapshot("cache");
+        assert_eq!(cached.status, RateLimitStatus::Ok);
+        assert_eq!(cached.source, Some(RateLimitSource::Cache));
+        assert_eq!(
+            cached.live_failure,
+            Some(RateLimitLiveFailure::CliReportedFailure)
+        );
+        assert!(!format!("{cached:?}").contains("must-not-survive"));
+        assert_eq!(snapshot("somethingNew").source, None);
+    }
+
+    #[test]
+    fn whole_call_failures_become_fixed_retryable_reasons() {
+        for (error, failure) in [
+            (
+                FetchError::RuntimeUnavailable,
+                RateLimitLiveFailure::CliRuntimeMissing,
+            ),
+            (FetchError::Timeout, RateLimitLiveFailure::CliTimedOut),
+            (FetchError::Launch, RateLimitLiveFailure::CliFailed),
+            (FetchError::ProcessFailure, RateLimitLiveFailure::CliFailed),
+            (
+                FetchError::InvalidJson,
+                RateLimitLiveFailure::CliUnrecognizedOutput,
+            ),
+            (
+                FetchError::UnknownProduct,
+                RateLimitLiveFailure::CliUnrecognizedOutput,
+            ),
+            (
+                FetchError::UnsupportedSchema,
+                RateLimitLiveFailure::CliSchemaMismatch,
+            ),
+            (
+                FetchError::ProductMismatch,
+                RateLimitLiveFailure::CliNoResult,
+            ),
+        ] {
+            let snapshot = error.snapshot(RateLimitProvider::KimiCode);
+            assert_eq!(snapshot.status, RateLimitStatus::RetryableError);
+            assert_eq!(snapshot.source, Some(RateLimitSource::Live));
+            assert_eq!(snapshot.live_failure, Some(failure));
+        }
     }
 }

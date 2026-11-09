@@ -1,8 +1,10 @@
 import {
   ProviderRateLimit,
   QuotaProduct,
+  RateLimitLiveFailure,
   RateLimitMeter,
   RateLimitProvider,
+  RateLimitSource,
   ZCodeCredentialStatus,
   ZCodeQuotaRegion,
 } from "./types";
@@ -125,11 +127,88 @@ export function compactQuotaStatus(status: string): string {
 }
 
 /**
+ * Fixed wording for each failure code. The same sentences as the macOS card
+ * (RateLimitCardView) so a screenshot from either platform reads the same; the
+ * Claude Desktop record and Credential Manager lines exist only on Windows.
+ * An unknown code (a newer backend) falls back to a neutral sentence.
+ */
+export function quotaFailureText(failure: RateLimitLiveFailure, providerName: string): string {
+  switch (failure.code) {
+    case "claudeBinaryNotFound":
+      return "未找到 Claude Code 程序";
+    case "claudeLaunchFailed":
+      return "Claude 启动失败";
+    case "claudeTimedOut":
+      return "Claude 配额读取超时";
+    case "claudeNoResponse":
+      return "Claude 没有响应配额请求";
+    case "claudeNoWindows":
+      return "Claude 没有返回额度窗口";
+    case "desktopRecordStale":
+      return "Claude 桌面端记录已过期";
+    case "desktopMultipleInstalls":
+      return "装了多份 Claude 桌面端，账号不明确";
+    case "desktopMixedAccounts":
+      return "Claude 桌面端记录含多个账号，账号不明确";
+    case "desktopRecordUnreadable":
+      return "Claude 桌面端记录无法解析";
+    case "credentialsNotFound":
+      return `未找到 ${providerName} 登录信息`;
+    case "credentialsRejected":
+      return `${providerName} 登录已失效`;
+    case "endpointTimedOut":
+      return `${providerName} 配额接口请求超时`;
+    case "endpointUnreachable":
+      return `${providerName} 配额接口连接失败`;
+    case "endpointHttpStatus":
+      return failure.status != null
+        ? `${providerName} 配额接口返回错误 ${failure.status}`
+        : `${providerName} 配额接口返回错误`;
+    case "endpointUnrecognized":
+      return `${providerName} 配额接口返回了无法识别的数据`;
+    case "credentialStoreUnavailable":
+      return "无法读取 Windows 凭据管理器";
+    case "cliRuntimeMissing":
+      return "未找到 Node.js 或 Bun";
+    case "cliTimedOut":
+      return "配额 CLI 读取超时";
+    case "cliFailed":
+      return "配额 CLI 运行失败";
+    case "cliUnrecognizedOutput":
+      return "配额 CLI 返回了无法识别的数据";
+    case "cliSchemaMismatch":
+      return "配额 CLI 协议版本不兼容";
+    case "cliNoResult":
+      return "配额 CLI 没有返回这个产品";
+    case "cliReportedFailure":
+      return "实时读取失败";
+    default:
+      return "暂时无法读取订阅配额";
+  }
+}
+
+export function quotaSourceText(source: RateLimitSource): string {
+  switch (source) {
+    case "live":
+      return "实时读取";
+    case "cache":
+      return "缓存";
+    case "desktopRecord":
+      return "Claude 桌面端记录";
+    case "localLog":
+      return "本地日志";
+    default:
+      return String(source);
+  }
+}
+
+/**
  * Status line for an enabled product whose card has no meters to draw. Only
- * ever states what the data channel actually reported: the live Codex
- * endpoint's own verdict (`emptyReason`), local detection, or — when neither
- * exists — that nothing has been read yet. Never invents 「已用满」 for a source
- * that cannot tell, and never says 「未检测到」 while a refresh is still in flight.
+ * ever states what the data channel actually reported: the source's own
+ * verdict (`emptyReason`), the read's own fixed failure reason, local
+ * detection, or — when none exists — that nothing has been read yet. Never
+ * invents 「已用满」 for a source that cannot tell, and never says 「未检测到」
+ * while a refresh is still in flight.
  */
 export function quotaEmptyStateText(
   snapshot: ProviderRateLimit,
@@ -138,7 +217,7 @@ export function quotaEmptyStateText(
   providerName?: string,
 ): string {
   if (isRefreshing) return "正在读取订阅配额…";
-  if (snapshot.sourceLabel && snapshot.status.kind === "noData") return "桌面额度记录缺失、过期或账号不明确";
+  const name = providerName ?? snapshot.provider;
   switch (snapshot.emptyReason) {
     case "limitReached":
       return "本期订阅配额已用满 · 等待额度重置";
@@ -147,11 +226,45 @@ export function quotaEmptyStateText(
     case "notEntitled":
       // The account answered; it simply has no subscription. Name the product
       // so the line is actionable instead of looking like a broken read.
-      return `未订阅 ${providerName ?? snapshot.provider}`;
+      return `未订阅 ${name}`;
     case "sessionWithoutPlanLimits":
       return "当前登录方式不含订阅额度（API Key / Bedrock / Vertex）";
+  }
+  if (snapshot.liveFailure) return quotaFailureText(snapshot.liveFailure, name);
+  // A Desktop record from an older backend that did not name its reason.
+  if (snapshot.sourceLabel) return "桌面额度记录缺失、过期或账号不明确";
+  return isDetected ? "暂未读取到订阅配额数据" : "未检测到本机安装或登录";
+}
+
+/** First line of a retryable card: the fixed reason when the read named one. */
+export function quotaRetryableText(snapshot: ProviderRateLimit, providerName: string): string {
+  return snapshot.liveFailure
+    ? quotaFailureText(snapshot.liveFailure, providerName)
+    : "暂时无法读取订阅配额";
+}
+
+/**
+ * The small line under a card. Mirrors the macOS rule: a successful live read
+ * stays quiet; numbers shown after live failed say where they came from and
+ * why; a retryable card names the channel that failed; Claude Desktop keeps
+ * its own fixed label. Re-login cards and empty states add nothing here.
+ */
+export function quotaProvenanceText(
+  snapshot: ProviderRateLimit,
+  providerName: string,
+): string | null {
+  if (snapshot.sourceLabel) return snapshot.sourceLabel;
+  if (!snapshot.source) return null;
+  const source = `来源：${quotaSourceText(snapshot.source)}`;
+  switch (snapshot.status.kind) {
+    case "ok":
+      return snapshot.liveFailure
+        ? `${source} · ${quotaFailureText(snapshot.liveFailure, providerName)}`
+        : null;
+    case "retryableError":
+      return source;
     default:
-      return isDetected ? "暂未读取到订阅配额数据" : "未检测到本机安装或登录";
+      return null;
   }
 }
 

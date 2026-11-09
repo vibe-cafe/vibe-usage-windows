@@ -319,8 +319,55 @@ export type RateLimitEmptyReason =
    */
   | "sessionWithoutPlanLimits";
 
+/**
+ * Which kind of channel produced the card (mirrors RateLimit.swift's Source):
+ * this refresh's live read, a stored earlier result, Claude Desktop's own
+ * record, or a local log (Codex session JSONL, the CLI's `source: "local"`).
+ */
+export type RateLimitSource = "live" | "cache" | "desktopRecord" | "localLog";
+
+/**
+ * Why the preferred read did not produce the card's numbers, as one of our own
+ * fixed codes (shared with RateLimit.swift's LiveFailure, plus the Windows-only
+ * Claude Desktop record and Credential Manager cases). Never third-party text.
+ */
+export type RateLimitLiveFailureCode =
+  | "claudeBinaryNotFound"
+  | "claudeLaunchFailed"
+  | "claudeTimedOut"
+  | "claudeNoResponse"
+  | "claudeNoWindows"
+  | "desktopRecordStale"
+  | "desktopMultipleInstalls"
+  | "desktopMixedAccounts"
+  | "desktopRecordUnreadable"
+  | "credentialsNotFound"
+  | "credentialsRejected"
+  | "endpointTimedOut"
+  | "endpointUnreachable"
+  | "endpointHttpStatus"
+  | "endpointUnrecognized"
+  | "credentialStoreUnavailable"
+  | "cliRuntimeMissing"
+  | "cliTimedOut"
+  | "cliFailed"
+  | "cliUnrecognizedOutput"
+  | "cliSchemaMismatch"
+  | "cliNoResult"
+  | "cliReportedFailure";
+
+export interface RateLimitLiveFailure {
+  code: RateLimitLiveFailureCode;
+  /** HTTP status number, only for `endpointHttpStatus`. */
+  status?: number;
+}
+
 export interface ProviderRateLimit {
   sourceLabel?: string | null;
+  /** Channel behind the numbers, or behind the failure an empty card reports. */
+  source?: RateLimitSource | null;
+  /** Absent means the preferred read succeeded (or the producer did not say). */
+  liveFailure?: RateLimitLiveFailure | null;
   provider: RateLimitProvider;
   /** Absent/null means "the source did not say" — never render a verdict. */
   emptyReason?: RateLimitEmptyReason | null;
