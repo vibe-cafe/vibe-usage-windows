@@ -39,6 +39,18 @@ pub struct ClaudeLaunch {
 /// Duplicates (the native installer's directory is usually on PATH too) are
 /// dropped; entries that cannot be launched without a shell are skipped.
 pub fn discover(env: &DiscoveryEnvironment, override_bin: Option<PathBuf>) -> Vec<ClaudeLaunch> {
+    discover_with_fallback_node(env, override_bin, None)
+}
+
+/// [`discover`], with a Node to run a JavaScript shim entry when neither the
+/// shim's directory nor PATH has one. The app passes its bundled runtime: a
+/// Node manager such as fnm puts `node` on PATH only inside the shells it
+/// hooks, so an app started at login would otherwise drop the candidate.
+pub fn discover_with_fallback_node(
+    env: &DiscoveryEnvironment,
+    override_bin: Option<PathBuf>,
+    fallback_node: Option<&Path>,
+) -> Vec<ClaudeLaunch> {
     let mut paths = Vec::new();
     paths.extend(override_bin);
     paths.push(env.home.join(".local").join("bin").join("claude.exe"));
@@ -57,7 +69,7 @@ pub fn discover(env: &DiscoveryEnvironment, override_bin: Option<PathBuf>) -> Ve
     paths
         .into_iter()
         .filter(|path| path.is_file())
-        .filter_map(|path| launch_for(&path, env, 0))
+        .filter_map(|path| launch_for(&path, env, fallback_node, 0))
         .filter(|launch| seen.insert(identity(launch)))
         .collect()
 }
@@ -73,20 +85,30 @@ fn extension(path: &Path) -> String {
         .unwrap_or_default()
 }
 
-fn launch_for(path: &Path, env: &DiscoveryEnvironment, depth: usize) -> Option<ClaudeLaunch> {
+fn launch_for(
+    path: &Path,
+    env: &DiscoveryEnvironment,
+    fallback_node: Option<&Path>,
+    depth: usize,
+) -> Option<ClaudeLaunch> {
     match extension(path).as_str() {
         "exe" => Some(ClaudeLaunch {
             program: path.to_path_buf(),
             script: None,
         }),
-        "cmd" | "bat" if depth < MAX_SHIM_DEPTH => resolve_shim(path, env, depth),
+        "cmd" | "bat" if depth < MAX_SHIM_DEPTH => resolve_shim(path, env, fallback_node, depth),
         // The extensionless POSIX shim, `.ps1`, and anything else need a shell.
         _ => None,
     }
 }
 
 /// Follow one npm / pnpm / Yarn generated shim to what it starts.
-fn resolve_shim(shim: &Path, env: &DiscoveryEnvironment, depth: usize) -> Option<ClaudeLaunch> {
+fn resolve_shim(
+    shim: &Path,
+    env: &DiscoveryEnvironment,
+    fallback_node: Option<&Path>,
+    depth: usize,
+) -> Option<ClaudeLaunch> {
     let mut bytes = Vec::new();
     File::open(shim)
         .ok()?
@@ -107,10 +129,10 @@ fn resolve_shim(shim: &Path, env: &DiscoveryEnvironment, depth: usize) -> Option
     }
     match extension(&target).as_str() {
         "js" | "cjs" | "mjs" => Some(ClaudeLaunch {
-            program: node_for_shim(directory, env)?,
+            program: node_for_shim(directory, env, fallback_node)?,
             script: Some(target),
         }),
-        _ => launch_for(&target, env, depth + 1),
+        _ => launch_for(&target, env, fallback_node, depth + 1),
     }
 }
 
@@ -136,10 +158,15 @@ fn shim_target(text: &str) -> Option<String> {
     found
 }
 
-/// The Node the shim itself would use: a `node.exe` beside the shim, else the
-/// first `node.exe` on PATH. Never the app's bundled runtime, so the probe
-/// runs Claude Code exactly as the user's own `claude` command does.
-fn node_for_shim(directory: &Path, env: &DiscoveryEnvironment) -> Option<PathBuf> {
+/// The Node the shim itself would use — a `node.exe` beside the shim, else the
+/// first `node.exe` on PATH — so the probe runs Claude Code the way the user's
+/// own `claude` command does. Only when neither exists does `fallback_node`
+/// (the app's bundled runtime) run the entry instead of dropping it.
+fn node_for_shim(
+    directory: &Path,
+    env: &DiscoveryEnvironment,
+    fallback_node: Option<&Path>,
+) -> Option<PathBuf> {
     let local = directory.join("node.exe");
     if local.is_file() {
         return Some(local);
@@ -147,6 +174,11 @@ fn node_for_shim(directory: &Path, env: &DiscoveryEnvironment) -> Option<PathBuf
     path_executables("node", env)
         .into_iter()
         .find(|path| extension(path) == "exe")
+        .or_else(|| {
+            fallback_node
+                .filter(|node| node.is_file())
+                .map(Path::to_path_buf)
+        })
 }
 
 #[cfg(test)]
@@ -273,6 +305,40 @@ mod tests {
         let prefix = npm_prefix(root.path(), NPM_NODE_SHIM, "cli.js");
         let env = environment(root.path(), vec![prefix]);
         assert!(discover(&env, None).is_empty());
+        // A fallback that is not actually there does not help either.
+        let missing = root.path().join("bundled").join("node.exe");
+        assert!(discover_with_fallback_node(&env, None, Some(&missing)).is_empty());
+    }
+
+    #[test]
+    fn bundled_node_runs_a_script_shim_only_when_no_other_node_exists() {
+        let root = tempfile::tempdir().unwrap();
+        let prefix = npm_prefix(root.path(), NPM_NODE_SHIM, "cli.js");
+        let bundled = root.path().join("app").join("node").join("node.exe");
+        write(&bundled, "");
+        let script = claude_package(&prefix).join("cli.js");
+
+        // No node beside the shim or on PATH (fnm outside a hooked shell).
+        let env = environment(root.path(), vec![prefix.clone()]);
+        assert_eq!(
+            identities(discover_with_fallback_node(&env, None, Some(&bundled))),
+            identities(vec![ClaudeLaunch {
+                program: bundled.clone(),
+                script: Some(script.clone()),
+            }])
+        );
+
+        // The user's own Node still wins when PATH has one.
+        let nodejs = root.path().join("nodejs");
+        write(&nodejs.join("node.exe"), "");
+        let env = environment(root.path(), vec![prefix, nodejs.clone()]);
+        assert_eq!(
+            identities(discover_with_fallback_node(&env, None, Some(&bundled))),
+            identities(vec![ClaudeLaunch {
+                program: nodejs.join("node.exe"),
+                script: Some(script),
+            }])
+        );
     }
 
     #[test]

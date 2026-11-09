@@ -339,7 +339,7 @@ export type RateLimitLiveFailureCode =
   | "claudeNoWindows"
   | "desktopRecordStale"
   | "desktopMultipleInstalls"
-  | "desktopMixedAccounts"
+  | "desktopMixedOrganizations"
   | "desktopRecordUnreadable"
   | "credentialsNotFound"
   | "credentialsRejected"

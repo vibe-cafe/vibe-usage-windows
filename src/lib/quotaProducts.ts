@@ -148,8 +148,8 @@ export function quotaFailureText(failure: RateLimitLiveFailure, providerName: st
       return "Claude 桌面端记录已过期";
     case "desktopMultipleInstalls":
       return "装了多份 Claude 桌面端，账号不明确";
-    case "desktopMixedAccounts":
-      return "Claude 桌面端记录含多个账号，账号不明确";
+    case "desktopMixedOrganizations":
+      return "Claude 桌面端记录涉及多个组织，账号不明确";
     case "desktopRecordUnreadable":
       return "Claude 桌面端记录无法解析";
     case "credentialsNotFound":

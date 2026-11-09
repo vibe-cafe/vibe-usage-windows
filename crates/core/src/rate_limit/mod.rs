@@ -135,8 +135,11 @@ pub enum RateLimitLiveFailure {
     DesktopRecordStale,
     /// More than one Claude Desktop installation keeps a record.
     DesktopMultipleInstalls,
-    /// One record holds samples from more than one account.
-    DesktopMixedAccounts,
+    /// One record holds samples from more than one organization (`org`).
+    /// That alone does not prove a second account — one account switching
+    /// between a personal and a Team organization looks the same — so the
+    /// reason states only what the record shows.
+    DesktopMixedOrganizations,
     /// The record could not be read or did not have the expected shape.
     DesktopRecordUnreadable,
     // Native HTTP provider (Codex)

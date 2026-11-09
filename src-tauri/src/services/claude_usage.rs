@@ -6,6 +6,7 @@ use chrono::DateTime;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::OnceLock;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use vibe_core::claude_code::ClaudeLaunch;
@@ -64,6 +65,16 @@ fn usage_request() -> Value {
     })
 }
 
+/// The app's bundled `node.exe`, used to run a JavaScript shim entry only when
+/// neither the shim's directory nor PATH has a Node (see
+/// `vibe_core::claude_code::discover_with_fallback_node`).
+static BUNDLED_NODE: OnceLock<Option<PathBuf>> = OnceLock::new();
+
+/// Called once at startup with `sync_engine::bundled_node`.
+pub fn set_bundled_node(path: Option<PathBuf>) {
+    let _ = BUNDLED_NODE.set(path);
+}
+
 /// Desktop record first, then a live Claude Code read; the order is unchanged.
 /// The error is the fixed reason of the last candidate tried (as on macOS);
 /// the child's stderr and launch-error text are never kept.
@@ -79,7 +90,11 @@ pub async fn fetch() -> Result<ProviderRateLimit, RateLimitLiveFailure> {
     let override_bin = std::env::var_os("VIBE_USAGE_CLAUDE_BIN")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from);
-    let candidates = vibe_core::claude_code::discover(&environment, override_bin);
+    let candidates = vibe_core::claude_code::discover_with_fallback_node(
+        &environment,
+        override_bin,
+        BUNDLED_NODE.get().and_then(Option::as_deref),
+    );
     if candidates.is_empty() {
         return Err(RateLimitLiveFailure::ClaudeBinaryNotFound);
     }
@@ -610,5 +625,66 @@ mod tests {
         assert_eq!(not_applicable.source, Some(RateLimitSource::Live));
         // Answered, but no usable window: the probe reports "no windows".
         assert!(snapshot_from_payload(&json!({"rate_limits": null}), 1_800_000_000.0).is_none());
+    }
+
+    /// The coordinator stores whole snapshots: a cache fallback replaces the
+    /// live numbers together with its `source` and `liveFailure`, and the next
+    /// live success replaces all three again — no annotation outlives the
+    /// read that produced it.
+    #[test]
+    fn coordinator_replaces_numbers_source_and_failure_together() {
+        let now = 1_800_000_000.0;
+        let live = |five_hour: f64| {
+            snapshot_from_payload(
+                &json!({
+                    "subscription_type": "pro",
+                    "rate_limits": {"five_hour": {"utilization": five_hour, "resets_at": "2030-01-01T01:00:00Z"}}
+                }),
+                now,
+            )
+            .unwrap()
+        };
+        let mut cache = crate::state::RateLimitCache::default();
+        let generation = cache.zcode_generation();
+        let shown = |cache: &crate::state::RateLimitCache| {
+            cache.snapshots[&RateLimitProvider::ClaudeCode].0.clone()
+        };
+
+        cache.store(live(14.0), generation);
+        let first = shown(&cache);
+        assert_eq!(first.source, Some(RateLimitSource::Live));
+        assert_eq!(first.live_failure, None);
+        assert_eq!(first.five_hour.unwrap().utilization, 14.0);
+
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join(".claude.json");
+        std::fs::write(
+            &file,
+            json!({"cachedUsageUtilization": {
+                "fetchedAtMs": (now - 600.0) * 1000.0,
+                "utilization": {"seven_day": {"utilization": 47, "resets_at": "2030-01-05T00:00:00Z"}}
+            }})
+            .to_string(),
+        )
+        .unwrap();
+        let fallback = after_live_failure(
+            RateLimitLiveFailure::ClaudeTimedOut,
+            cached_snapshot_from(&file, now),
+        );
+        cache.store(fallback, generation);
+        let second = shown(&cache);
+        assert_eq!(second.source, Some(RateLimitSource::Cache));
+        assert_eq!(second.live_failure, Some(RateLimitLiveFailure::ClaudeTimedOut));
+        assert!(second.five_hour.is_none(), "the live 5h number must not linger");
+        assert_eq!(second.seven_day.unwrap().utilization, 47.0);
+        assert_eq!(second.plan_label, None);
+
+        cache.store(live(20.0), generation);
+        let third = shown(&cache);
+        assert_eq!(third.source, Some(RateLimitSource::Live));
+        assert_eq!(third.live_failure, None, "a good read clears the failure");
+        assert_eq!(third.five_hour.unwrap().utilization, 20.0);
+        assert!(third.seven_day.is_none(), "the cached 7d number must not linger");
+        assert_eq!(third.plan_label.as_deref(), Some("Pro"));
     }
 }

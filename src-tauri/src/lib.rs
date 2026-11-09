@@ -32,6 +32,9 @@ pub fn run() {
         }))
         .setup(|app| {
             tray::create_tray(app.handle())?;
+            services::claude_usage::set_bundled_node(services::sync_engine::bundled_node(
+                app.handle(),
+            ));
 
             let handle = app.handle().clone();
             {

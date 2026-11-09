@@ -268,7 +268,7 @@ describe("read failure reasons and sources", () => {
     const cases: Array<[string, string]> = [
       ["desktopRecordStale", "Claude 桌面端记录已过期"],
       ["desktopMultipleInstalls", "装了多份 Claude 桌面端，账号不明确"],
-      ["desktopMixedAccounts", "Claude 桌面端记录含多个账号，账号不明确"],
+      ["desktopMixedOrganizations", "Claude 桌面端记录涉及多个组织，账号不明确"],
       ["desktopRecordUnreadable", "Claude 桌面端记录无法解析"],
     ];
     for (const [code, text] of cases) {

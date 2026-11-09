@@ -182,7 +182,7 @@ fn unusable(reason: RateLimitLiveFailure) -> ProviderRateLimit {
 /// record's own contents never leave this function.
 pub fn parse(bytes: &[u8], now: f64) -> Result<ProviderRateLimit, RateLimitLiveFailure> {
     use RateLimitLiveFailure::{
-        DesktopMixedAccounts as MixedAccounts, DesktopRecordStale as Stale,
+        DesktopMixedOrganizations as MixedOrganizations, DesktopRecordStale as Stale,
         DesktopRecordUnreadable as Unreadable,
     };
     let root: Value = serde_json::from_slice(bytes).map_err(|_| Unreadable)?;
@@ -201,7 +201,7 @@ pub fn parse(bytes: &[u8], now: f64) -> Result<ProviderRateLimit, RateLimitLiveF
             .filter(|s| !s.is_empty())
             .ok_or(Unreadable)?;
         if org.is_some_and(|previous| previous != candidate) {
-            return Err(MixedAccounts);
+            return Err(MixedOrganizations);
         }
         org = Some(candidate);
     }
@@ -306,9 +306,9 @@ mod tests {
         assert!(s.source_label.unwrap().contains("非实时"));
     }
     #[test]
-    fn stale_future_invalid_and_cross_account_records_are_rejected_with_their_reason() {
+    fn stale_future_invalid_and_mixed_organization_records_are_rejected_with_their_reason() {
         use RateLimitLiveFailure::{
-            DesktopMixedAccounts, DesktopRecordStale, DesktopRecordUnreadable,
+            DesktopMixedOrganizations, DesktopRecordStale, DesktopRecordUnreadable,
         };
         for (values, reason) in [
             (
@@ -323,7 +323,7 @@ mod tests {
             (vec![sample(NOW, "one", 101.0)], DesktopRecordUnreadable),
             (
                 vec![sample(NOW, "one", 28.0), sample(NOW - 1.0, "two", 70.0)],
-                DesktopMixedAccounts,
+                DesktopMixedOrganizations,
             ),
             (vec![], DesktopRecordUnreadable),
         ] {
