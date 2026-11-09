@@ -52,7 +52,7 @@
 | ZCode 两区域 Key | BigModel / Z.ai 分开存入 Windows Credential Manager；只向明确选择的区域请求注入 |
 | `RuntimeDetector` | `crates/core/runtime.rs`（Windows 路径 + 捆绑 node 兜底） |
 | `CodexRateLimitReader` | `crates/core/rate_limit/codex.rs` |
-| `ClaudeUsageProbe`（Claude Code stdio `get_usage` 探测）+ `ClaudeUsageCache` | `src-tauri/src/services/claude_usage.rs`（探测参数与请求体与 macOS 逐项一致，见 `docs/SUBSCRIPTION_QUOTAS.md`「Claude 探测约束」）+ `crates/core/rate_limit/claude_desktop.rs`（Desktop 记录） |
+| `ClaudeUsageProbe`（Claude Code stdio `get_usage` 探测）+ `ClaudeUsageCache` | `src-tauri/src/services/claude_usage.rs`（探测参数与请求体与 macOS 逐项一致，见 `docs/SUBSCRIPTION_QUOTAS.md`「Claude 探测约束」）+ `crates/core/rate_limit/claude_desktop.rs`（Desktop 记录，Windows 独有：`%APPDATA%\Claude`、MSIX 包的 `Packages\Claude_<后缀>\LocalCache\Roaming\Claude` 和 2026-11 起的 `%LOCALAPPDATA%\Claude-Data\claude_<后缀>`，同一包后缀的新旧目录算一份安装，见 `docs/SUBSCRIPTION_QUOTAS.md`） |
 | 旧 `StatuslineHook` | `crates/core/statusline_hook.rs` 仅用于安全退休本应用可证明归属的旧 hook |
 | `MenuBarController`（NSStatusItem + NSPanel） | `tray.rs` + `panel.rs`（托盘 + 标准主窗口） |
 | Sparkle | `services/updater.rs`（latest.json + SHA-256 + NSIS） |
