@@ -20,6 +20,7 @@ import {
 } from "./lib/types";
 import { formatRelativeTime } from "./lib/formatters";
 import { compactQuotaStatus, isZCodeConfigured, quotaProductStatusText } from "./lib/quotaProducts";
+import { buildDiagnosticsText, copyText } from "./lib/diagnostics";
 import { ProviderIcon } from "./components/ProviderIcon";
 
 export function SettingsApp() {
@@ -43,6 +44,10 @@ export function SettingsApp() {
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [updateMessage, setUpdateMessage] = useState<string | null>(null);
   const [diagnosticMessage, setDiagnosticMessage] = useState<string | null>(null);
+  const [reportBusy, setReportBusy] = useState(false);
+  const [reportMessage, setReportMessage] = useState<string | null>(null);
+  const [reportText, setReportText] = useState<string | null>(null);
+  const [reportExpanded, setReportExpanded] = useState(false);
   const [extraRoots, setExtraRoots] = useState<ExtraRoots>({});
   const [extraRootsBusy, setExtraRootsBusy] = useState(false);
   const [extraRootsError, setExtraRootsError] = useState<string | null>(null);
@@ -263,6 +268,27 @@ export function SettingsApp() {
       setDiagnosticMessage("诊断日志已导出");
     } catch (err) {
       setDiagnosticMessage(`导出失败：${formatInvokeError(err)}`);
+    }
+  };
+
+  const copyDiagnosticsReport = async () => {
+    setReportBusy(true);
+    setReportMessage(null);
+    try {
+      const report = await api.collectDiagnostics();
+      const text = buildDiagnosticsText(report, quotaProducts);
+      setReportText(text);
+      try {
+        await copyText(text);
+        setReportMessage("已复制，可以直接贴到群里");
+      } catch {
+        setReportMessage("复制失败，请展开后手动复制");
+        setReportExpanded(true);
+      }
+    } catch (err) {
+      setReportMessage(`收集失败：${formatInvokeError(err)}`);
+    } finally {
+      setReportBusy(false);
     }
   };
 
@@ -613,6 +639,35 @@ export function SettingsApp() {
               ) : null}
             </div>
           </Row>
+          <Row label="诊断信息">
+            <div className="flex min-w-0 items-center gap-2">
+              {reportMessage && (
+                <span className="min-w-0 truncate text-[11px] text-neutral-400" title={reportMessage}>
+                  {reportMessage}
+                </span>
+              )}
+              {reportText && (
+                <button
+                  className="shrink-0 text-[11px] text-neutral-400 underline-offset-2 hover:underline"
+                  aria-expanded={reportExpanded}
+                  onClick={() => setReportExpanded((value) => !value)}
+                >
+                  {reportExpanded ? "收起" : "查看全文"}
+                </button>
+              )}
+              <SmallButton disabled={reportBusy} onClick={() => void copyDiagnosticsReport()}>
+                {reportBusy ? "收集中…" : "复制诊断信息"}
+              </SmallButton>
+            </div>
+          </Row>
+          {reportText && reportExpanded && (
+            <pre
+              className="mx-3 mb-2.5 max-h-56 select-text overflow-auto whitespace-pre-wrap break-all rounded-md px-2.5 py-2 font-mono text-[10px] leading-relaxed"
+              style={{ background: "#1C1C1E", color: "#B0B0B0" }}
+            >
+              {reportText}
+            </pre>
+          )}
         </Section>
 
         {/* 危险操作 */}

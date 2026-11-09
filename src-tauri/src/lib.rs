@@ -98,6 +98,7 @@ pub fn run() {
             commands::hide_panel,
             commands::quit_app,
             commands::export_test_diagnostics,
+            commands::collect_diagnostics,
             commands::update_tray_stats,
             commands::check_for_update,
             commands::install_update,

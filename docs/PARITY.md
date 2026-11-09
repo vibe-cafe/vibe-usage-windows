@@ -55,6 +55,7 @@
 | `CodexRateLimitReader` | `crates/core/rate_limit/codex.rs` |
 | `ClaudeUsageProbe`（Claude Code stdio `get_usage` 探测）+ `ClaudeUsageCache` | `src-tauri/src/services/claude_usage.rs`（探测参数与请求体与 macOS 逐项一致，见 `docs/SUBSCRIPTION_QUOTAS.md`「Claude 探测约束」）+ `crates/core/claude_code.rs`（候选程序：与 `discoverBinaries` 一样查 PATH，npm 的 `claude.cmd` 解析到它调用的 `claude.exe` / `cli.js`，不经 cmd.exe；macOS 最后还会试 Claude Desktop 自带的 Claude Code，Windows 尚无此项）+ `crates/core/rate_limit/claude_desktop.rs`（Desktop 记录，Windows 独有：`%APPDATA%\Claude`、MSIX 包的 `Packages\Claude_<后缀>\LocalCache\Roaming\Claude` 和 2026-11 起的 `%LOCALAPPDATA%\Claude-Data\claude_<后缀>`，同一包后缀的新旧目录算一份安装，见 `docs/SUBSCRIPTION_QUOTAS.md`） |
 | 旧 `StatuslineHook` | `crates/core/statusline_hook.rs` 仅用于安全退休本应用可证明归属的旧 hook |
+| 设置「关于」→「诊断信息」：「复制诊断信息」最小本机摘要 + App 本机保留最近 10 次同步摘要（一键诊断 1b；维护者 2026-11-09 在架构审批门批准方案修订二：「可以开工，你派活吧。 1、2、3我都同意。」） | `services/diagnostics.rs`（白名单结构化字段）+ `services/sync_history.rs`（`sync-history.json`）+ `lib/diagnostics.ts`（排版与兜底过滤）；字段、脱敏和存放位置见 `docs/DIAGNOSTICS.md`。macOS 同一功能由 vibe-usage-app 按同一方案实现 |
 | `MenuBarController`（NSStatusItem + NSPanel） | `tray.rs` + `panel.rs`（托盘 + 标准主窗口） |
 | Sparkle | `services/updater.rs`（latest.json + SHA-256 + NSIS） |
 | `SMAppService`（登录项） | `auto-launch` crate（HKCU Run 注册表键） |
@@ -90,6 +91,7 @@
 | `%USERPROFILE%\.vibe-usage\claude-rate-limits.json` | 旧版本 statusline 留下的抓取文件；当前版本不再读取（`crates/core/rate_limit/claude.rs` 的旧解析器已无调用方），也不安装 statusline |
 | `%USERPROFILE%\.codex\sessions\` | Codex 配额读取（只读） |
 | `%APPDATA%\ai.vibecafe.vibe-usage.windows\settings.json` | 应用设置（对应 macOS UserDefaults） |
+| `%APPDATA%\ai.vibecafe.vibe-usage.windows\sync-history.json` | App 自己的最近 10 次同步摘要（只有类型化字段，见 `docs/DIAGNOSTICS.md`）；「重置配置」时删除 |
 
 ## 验收清单
 

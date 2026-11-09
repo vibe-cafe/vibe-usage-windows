@@ -6,6 +6,7 @@
 //! bundled: a pinned copy rots silently and freezes users out of every CLI fix,
 //! which is the policy the macOS app already follows (`@latest` only).
 use crate::process_utils;
+use crate::services::sync_history::{self, SyncOutcome, SyncReason, SyncRecord, SyncTrigger};
 use crate::state::{AppCtx, SyncState, SyncStatus};
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -43,6 +44,23 @@ fn probe_node_version(path: &std::path::Path) -> Option<(u32, u32, u32)> {
 
 pub fn detect_runtime(app: &AppHandle) -> Option<Runtime> {
     runtime::detect(bundled_node(app), probe_node_version)
+}
+
+/// The runtime's version number for diagnostics (`22.23.1`), nothing else.
+pub fn runtime_version(rt: &Runtime) -> Option<String> {
+    if rt.kind != RuntimeKind::Bun {
+        return probe_node_version(&rt.path).map(|(a, b, c)| format!("{a}.{b}.{c}"));
+    }
+    let mut cmd = std::process::Command::new(&rt.path);
+    cmd.arg("--version").stdout(Stdio::piped()).stderr(Stdio::null()).stdin(Stdio::null());
+    process_utils::hide_command_window(&mut cmd);
+    let out = crate::process_lifecycle::output_sync(&mut cmd).ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let version = text.trim();
+    (!version.is_empty()
+        && version.len() <= 20
+        && version.split('.').all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit())))
+    .then(|| version.to_string())
 }
 
 /// The node path used for the Claude statusline wrapper command. Falls back
@@ -192,10 +210,13 @@ pub async fn run_with_follow_up<F, Fut>(
     }
 }
 
-/// Run one sync. Concurrent calls queue a follow-up instead of being dropped.
-pub async fn run_sync(app: AppHandle) {
+/// Run one sync. Concurrent calls queue a follow-up instead of being dropped;
+/// the follow-up is recorded with the trigger of the latest request.
+pub async fn run_sync(app: AppHandle, trigger: SyncTrigger) {
     let work_app = app.clone();
     let ctx = app.state::<AppCtx>();
+    ctx.sync_requested_manually
+        .store(trigger == SyncTrigger::Manual, Ordering::SeqCst);
     run_with_follow_up(&ctx.sync_running, &ctx.sync_pending, move || {
         let app = work_app.clone();
         async move {
@@ -217,9 +238,30 @@ async fn run_sync_once(app: AppHandle) {
         s.message = None;
     });
 
-    let result = run_cli_sync(&app).await;
+    let trigger = if ctx.sync_requested_manually.load(Ordering::SeqCst) {
+        SyncTrigger::Manual
+    } else {
+        SyncTrigger::Scheduled
+    };
+    let started_at = now_ms();
+    let started = std::time::Instant::now();
+    let run = run_cli_sync(&app).await;
+    // Every outcome is recorded, including the timeout and a CLI that never
+    // started, which only the app can see.
+    if let Some(dir) = ctx.settings_path.parent() {
+        sync_history::append(
+            &sync_history::path_in(dir),
+            SyncRecord {
+                started_at,
+                trigger,
+                outcome: run.outcome,
+                duration_ms: started.elapsed().as_millis() as u64,
+                reason: run.reason,
+            },
+        );
+    }
 
-    match result {
+    match run.message {
         Ok(message) => {
             set_state(&app, |s| {
                 s.status = SyncStatus::Success;
@@ -247,11 +289,46 @@ async fn run_sync_once(app: AppHandle) {
     }
 }
 
-async fn run_cli_sync(app: &AppHandle) -> Result<String, String> {
-    let mut cmd = cli_command(app, &["sync"]).map_err(|e| format!("同步失败: {e}"))?;
+/// One CLI run: the status line shown in the UI (unchanged wording) plus the
+/// typed category kept in the app's sync history.
+struct CliRun {
+    message: Result<String, String>,
+    outcome: SyncOutcome,
+    reason: Option<SyncReason>,
+}
 
-    let (mut child, _process_guard) = crate::process_lifecycle::spawn(&mut cmd)
-        .map_err(|e| format!("同步失败: {e}"))?;
+impl CliRun {
+    fn failed(message: String, outcome: SyncOutcome, reason: Option<SyncReason>) -> Self {
+        Self {
+            message: Err(message),
+            outcome,
+            reason,
+        }
+    }
+}
+
+async fn run_cli_sync(app: &AppHandle) -> CliRun {
+    let mut cmd = match cli_command(app, &["sync"]) {
+        Ok(cmd) => cmd,
+        Err(e) => {
+            return CliRun::failed(
+                format!("同步失败: {e}"),
+                SyncOutcome::CliStartupFailed,
+                Some(SyncReason::RuntimeUnavailable),
+            )
+        }
+    };
+
+    let (mut child, _process_guard) = match crate::process_lifecycle::spawn(&mut cmd) {
+        Ok(spawned) => spawned,
+        Err(e) => {
+            return CliRun::failed(
+                format!("同步失败: {e}"),
+                SyncOutcome::CliStartupFailed,
+                Some(SyncReason::SpawnFailed),
+            )
+        }
+    };
     let stdout_pipe = child.stdout.take();
     let stderr_pipe = child.stderr.take();
 
@@ -277,36 +354,50 @@ async fn run_cli_sync(app: &AppHandle) -> Result<String, String> {
         } => res,
         _ = tokio::time::sleep(SYNC_TIMEOUT) => {
             process_utils::kill_child_tree(&mut child);
-            return Err("同步超时".into());
+            return CliRun::failed("同步超时".into(), SyncOutcome::TimedOut, None);
         }
     };
 
     let ((stdout, stderr), status) = combined;
-    let status = status.map_err(|e| format!("同步失败: {e}"))?;
+    let status = match status {
+        Ok(status) => status,
+        Err(e) => {
+            return CliRun::failed(
+                format!("同步失败: {e}"),
+                SyncOutcome::Failed,
+                Some(SyncReason::WaitFailed),
+            )
+        }
+    };
     let stdout = stdout.trim().to_string();
     let stderr = stderr.trim().to_string();
     write_sync_log(app, &status, &stdout, &stderr);
 
     if status.success() {
         // "Synced …" / "No new usage data" both count as success.
-        Ok(if stdout.is_empty() { "同步完成".into() } else { stdout })
-    } else {
-        let all = format!("{stdout}\n{stderr}");
-        if all.contains("Invalid API key") || all.contains("UNAUTHORIZED") {
-            Err("API Key 无效，请重新配置".into())
-        } else {
-            let msg = if stderr.is_empty() { &stdout } else { &stderr };
-            let line = extract_error_line(msg);
-            Err(format!(
-                "同步失败: {}",
-                if line.is_empty() {
-                    format!("Exit code {}", status.code().unwrap_or(-1))
-                } else {
-                    line
-                }
-            ))
-        }
+        return CliRun {
+            message: Ok(if stdout.is_empty() { "同步完成".into() } else { stdout }),
+            outcome: SyncOutcome::Success,
+            reason: None,
+        };
     }
+    let (outcome, reason) = sync_history::classify_exit(status.code(), &stdout, &stderr);
+    let all = format!("{stdout}\n{stderr}");
+    let message = if all.contains("Invalid API key") || all.contains("UNAUTHORIZED") {
+        "API Key 无效，请重新配置".into()
+    } else {
+        let msg = if stderr.is_empty() { &stdout } else { &stderr };
+        let line = extract_error_line(msg);
+        format!(
+            "同步失败: {}",
+            if line.is_empty() {
+                format!("Exit code {}", status.code().unwrap_or(-1))
+            } else {
+                line
+            }
+        )
+    };
+    CliRun::failed(message, outcome, Some(reason))
 }
 
 /// Pick the most informative line from CLI output. stderr carries non-fatal

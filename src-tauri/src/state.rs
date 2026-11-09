@@ -135,6 +135,10 @@ pub struct AppCtx {
     /// Set when a sync is requested while one is already running so the
     /// in-flight run drains a follow-up instead of dropping the request.
     pub sync_pending: AtomicBool,
+    /// Whether the most recent sync request came from the user (立即同步 /
+    /// after a settings change) rather than the scheduler; recorded in the
+    /// app's own sync history.
+    pub sync_requested_manually: AtomicBool,
     pub device_link_task: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
     pub scheduler_task: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
     /// Prevent overlapping UI events from launching duplicate network/probe work.
@@ -194,6 +198,7 @@ impl AppCtx {
             sync_state: Mutex::new(SyncState::default()),
             sync_running: tokio::sync::Mutex::new(()),
             sync_pending: AtomicBool::new(false),
+            sync_requested_manually: AtomicBool::new(false),
             device_link_task: Mutex::new(None),
             scheduler_task: Mutex::new(None),
             rate_limit_refresh: tokio::sync::Mutex::new(()),

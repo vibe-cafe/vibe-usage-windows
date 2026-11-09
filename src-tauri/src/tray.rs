@@ -33,7 +33,11 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
             "sync" => {
                 let app2 = app.clone();
                 tauri::async_runtime::spawn(async move {
-                    crate::services::sync_engine::run_sync(app2).await;
+                    crate::services::sync_engine::run_sync(
+                        app2,
+                        crate::services::sync_history::SyncTrigger::Manual,
+                    )
+                    .await;
                 });
             }
             "settings" => crate::commands::open_settings_impl(app),
