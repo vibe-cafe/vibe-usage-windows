@@ -46,6 +46,7 @@ function report(overrides: Partial<DiagnosticsReport> = {}): DiagnosticsReport {
     network: {
       systemProxy: "loopback",
       systemProxyPassedToSync: true,
+      autoConfigScript: false,
       variables: [
         { name: "HTTPS_PROXY", user: true, system: false, app: false },
         { name: "HTTP_PROXY", user: false, system: false, app: false },
@@ -136,10 +137,10 @@ describe("copyable diagnostics report", () => {
     expect(text).toContain("Claude  正常 · 2 个窗口 · Claude 配额读取超时 · 来源：缓存 · 数据 1800 分钟前");
     expect(text).toContain("Kimi Code  需重新登录");
     expect(text).toContain(
-      "1）~\\.local\\bin\\claude.exe · 2.1.282 · initialize 0.9s · get_usage 超时 · Claude 配额读取超时 · 被 App 结束",
+      "1）~\\.local\\bin\\claude.exe · initialize 0.9s · get_usage 超时 · Claude 配额读取超时 · 被 App 结束",
     );
     expect(text).toContain(
-      "2）PATH 上第 3 个（claude.cmd） → 包内 claude.exe · 2.1.319 · initialize 1.2s · get_usage 2.3s · Claude 没有返回额度窗口 · 退出码 0",
+      "2）PATH 上第 3 个（claude.cmd） → 包内 claude.exe · initialize 1.2s · get_usage 2.3s · Claude 没有返回额度窗口 · 退出码 0",
     );
     expect(text).toContain("回答：rate_limits_available true · 5h 无 · 7d 无 · 套餐 有 · error 有");
     expect(text).toContain("PATH 上的 claude.*：claude.exe ×1、claude ×1、claude.cmd ×1");
@@ -155,7 +156,7 @@ describe("copyable diagnostics report", () => {
       report({
         runtime: null,
         cli: { launcherPresent: true, cachedVersion: null },
-        account: { keyConfigured: true, lastSyncKey: "unfinished" },
+        account: { keyConfigured: true, lastSyncKey: "undetermined" },
         syncs: [
           {
             startedAt: NOW,
@@ -170,7 +171,7 @@ describe("copyable diagnostics report", () => {
     );
     expect(text).toContain("运行环境：未找到 Node.js 或 Bun");
     expect(text).toContain("引导器没有缓存");
-    expect(text).toContain("最近一次同步没有完成，无法判断 Key 是否被拒");
+    expect(text).toContain("最近一次同步无法判断 Key 是否被拒");
     expect(text).toContain("CLI 启动阶段失败（运行环境不可用）");
   });
 
@@ -189,6 +190,7 @@ describe("copyable diagnostics report", () => {
       network: {
         systemProxy: "remote",
         systemProxyPassedToSync: false,
+        autoConfigScript: false,
         variables: [{ name: "http://user:p%40ss@10.0.0.5:8080", user: true, system: false, app: false }],
       },
     });
@@ -228,6 +230,47 @@ describe("copyable diagnostics report", () => {
     expect(scrubbed).toContain("proxy ***");
   });
 
+  it("never pins today's version on a past read", () => {
+    const text = buildDiagnosticsText(report(), products);
+    const history = text.split("\n").filter((line) => /^\s+\d）/.test(line));
+    expect(history.length).toBe(2);
+    for (const line of history) expect(line).not.toMatch(/2\.1\.\d+/);
+    expect(text).toContain("当前候选及版本（复制时查询）：1）~\\.local\\bin\\claude.exe · 2.1.282");
+  });
+
+  it("states the verdict only from the newest sync", () => {
+    const verdict = (lastSyncKey: DiagnosticsReport["account"]["lastSyncKey"]) =>
+      buildDiagnosticsText(report({ account: { keyConfigured: true, lastSyncKey } }), products);
+    expect(verdict("accepted")).toContain("最近一次同步未被服务器拒绝");
+    expect(verdict("rejected")).toContain("最近一次同步被服务器拒绝（Key 无效）");
+    expect(verdict("undetermined")).toContain("最近一次同步无法判断 Key 是否被拒");
+    expect(verdict("noRecord")).toContain("暂无同步记录");
+  });
+
+  it("reports an automatic proxy script without its address", () => {
+    const text = buildDiagnosticsText(
+      report({
+        network: {
+          systemProxy: "none",
+          systemProxyPassedToSync: false,
+          autoConfigScript: true,
+          variables: [],
+        },
+      }),
+      products,
+    );
+    expect(text).toContain("网络：系统代理：无 · 自动代理脚本：有");
+  });
+
+  it("the scrub keeps plain variable names but masks other long strings", () => {
+    const scrubbed = scrubDiagnosticsText(
+      "env CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC · token AbCdEfGhIjKlMnOpQrStUvWxYz0123456789abcdEF",
+    );
+    expect(scrubbed).toContain("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC");
+    expect(scrubbed).not.toContain("AbCdEfGh");
+    expect(scrubbed).toContain("token ***");
+  });
+
   it("explains a Desktop-record read without inventing a probe", () => {
     const text = buildDiagnosticsText(
       report({
@@ -245,7 +288,7 @@ describe("copyable diagnostics report", () => {
       products,
     );
     expect(text).toContain("用了桌面端记录（Claude 桌面端记录已过期），没有启动 Claude Code");
-    expect(text).toContain("当前候选：没有找到 Claude Code 程序");
+    expect(text).toContain("当前候选及版本（复制时查询）：没有找到 Claude Code 程序");
   });
 });
 
@@ -262,8 +305,8 @@ describe("Rust ↔ TypeScript diagnostics contract", () => {
     for (const line of [
       "环境：Windows 11 23H2（build 22631） · x86_64 · App 0.7.5 正式版 · 运行环境：App 内置 Node 22.23.1",
       "CLI：启动脚本正常 · 引导器已缓存 0.14.9",
-      "账号：已配置 Key · 最近一次同步没有完成，无法判断 Key 是否被拒 · 设备标签 7c2e",
-      "网络：系统代理：有（本机地址） · 已传给同步 · 未传给 Claude 配额读取",
+      "账号：已配置 Key · 最近一次同步无法判断 Key 是否被拒 · 设备标签 7c2e",
+      "网络：系统代理：有（本机地址） · 已传给同步 · 未传给 Claude 配额读取 · 自动代理脚本：有",
       "代理变量：HTTPS_PROXY 用户变量有 · HTTP_PROXY 无 · ALL_PROXY 系统变量有",
       "定时 · CLI 启动阶段失败（引导器连不上 npm 源） · 21s",
       "手动 · 超时，2m00s 时被 App 结束",
@@ -274,10 +317,10 @@ describe("Rust ↔ TypeScript diagnostics contract", () => {
       "Claude  正常 · 1 个窗口 · Claude 配额读取超时 · 来源：缓存 · 数据 30 分钟前",
       "Codex  无数据 · Codex 配额接口返回错误 502 · 来源：实时读取",
       "OpenCode Go  无数据 · 未订阅 OpenCode Go",
-      "当前候选：1）~\\.local\\bin\\claude.exe · 2.1.282；2）PATH 上第 3 个（claude.cmd） → 包内 claude.exe · 2.1.319",
-      "桌面端记录：没有 · 找到候选 2 个，试了 2 个",
-      "1）~\\.local\\bin\\claude.exe · 2.1.282 · initialize 0.9s · get_usage 超时 · Claude 配额读取超时 · 被 App 结束",
-      "2）PATH 上第 3 个（claude.cmd） → 包内 claude.exe · 2.1.319 · initialize 1.2s · get_usage 2.3s · Claude 没有返回额度窗口 · 退出码 1 · 回答：rate_limits_available true · 5h 无 · 7d 无 · 套餐 有 · error 有",
+      "当前候选及版本（复制时查询）：1）~\\.local\\bin\\claude.exe · 2.1.282；2）PATH 上第 3 个（claude.cmd） → 包内 claude.exe · 2.1.319",
+      "（不含当时的版本）：桌面端记录：没有 · 找到候选 2 个，试了 2 个",
+      "1）~\\.local\\bin\\claude.exe · initialize 0.9s · get_usage 超时 · Claude 配额读取超时 · 被 App 结束",
+      "2）PATH 上第 3 个（claude.cmd） → 包内 claude.exe · initialize 1.2s · get_usage 2.3s · Claude 没有返回额度窗口 · 退出码 1 · 回答：rate_limits_available true · 5h 无 · 7d 无 · 套餐 有 · error 有",
       "PATH 上的 claude.*：claude.exe ×1、claude ×1、claude.cmd ×1",
       "ANTHROPIC/CLAUDE 开头的用户变量：ANTHROPIC_BASE_URL · settings.json 的 env：CLAUDE_CODE_USE_BEDROCK · CLAUDE_CONFIG_DIR 已设",
     ]) {

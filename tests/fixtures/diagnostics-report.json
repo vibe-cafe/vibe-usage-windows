@@ -1,7 +1,7 @@
 {
   "account": {
     "keyConfigured": true,
-    "lastSyncKey": "unfinished"
+    "lastSyncKey": "undetermined"
   },
   "app": {
     "build": "release",
@@ -102,6 +102,7 @@
   "deviceTag": "7c2e",
   "generatedAt": 1794205920000,
   "network": {
+    "autoConfigScript": true,
     "systemProxy": "loopback",
     "systemProxyPassedToSync": true,
     "variables": [

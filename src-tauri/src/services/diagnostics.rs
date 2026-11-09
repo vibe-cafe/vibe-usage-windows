@@ -124,6 +124,9 @@ pub struct NetworkInfo {
     /// The system proxy is handed to the sync CLI only when the app's own
     /// environment has no `HTTPS_PROXY`; the Claude probe never gets it.
     pub system_proxy_passed_to_sync: bool,
+    /// An automatic proxy script (PAC, 「使用设置脚本」) is configured. Only
+    /// its presence; the address is never read out.
+    pub auto_config_script: bool,
     pub variables: Vec<ProxyVariable>,
 }
 
@@ -291,6 +294,7 @@ fn collect_local(app: &AppHandle) -> DiagnosticsReport {
             system_proxy_passed_to_sync: system_proxy.is_some()
                 && !app_has("HTTPS_PROXY")
                 && !app_has("https_proxy"),
+            auto_config_script: registry::auto_config_script_set(),
             variables: proxy_variables(&user_names, &system_names, app_has),
         },
         scheduler: SchedulerInfo {
@@ -586,6 +590,23 @@ mod registry {
     pub fn system_proxy_enabled() -> bool {
         false
     }
+
+    /// Whether 「使用设置脚本」 has a script address. The value itself is not
+    /// returned.
+    #[cfg(windows)]
+    pub fn auto_config_script_set() -> bool {
+        use winreg::enums::HKEY_CURRENT_USER;
+        use winreg::RegKey;
+        RegKey::predef(HKEY_CURRENT_USER)
+            .open_subkey("Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings")
+            .and_then(|key| key.get_value::<String, _>("AutoConfigURL"))
+            .is_ok_and(|url| !url.trim().is_empty())
+    }
+
+    #[cfg(not(windows))]
+    pub fn auto_config_script_set() -> bool {
+        false
+    }
 }
 
 #[cfg(test)]
@@ -814,6 +835,7 @@ mod tests {
             network: NetworkInfo {
                 system_proxy: proxy_kind(Some("http://user:p%40ss@10.0.0.5:8080"), true),
                 system_proxy_passed_to_sync: true,
+                auto_config_script: false,
                 variables: proxy_variables(&["HTTPS_PROXY".into()], &[], |_| false),
             },
             scheduler: SchedulerInfo {
@@ -896,12 +918,13 @@ mod tests {
             },
             account: AccountInfo {
                 key_configured: true,
-                last_sync_key: KeyVerdict::Unfinished,
+                last_sync_key: KeyVerdict::Undetermined,
             },
             device_tag: Some("7c2e".into()),
             network: NetworkInfo {
                 system_proxy: ProxyKind::Loopback,
                 system_proxy_passed_to_sync: true,
+                auto_config_script: true,
                 variables: proxy_variables(&["HTTPS_PROXY".into()], &["ALL_PROXY".into()], |_| {
                     false
                 }),

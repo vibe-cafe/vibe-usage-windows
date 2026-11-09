@@ -124,12 +124,20 @@ pub fn append(file: &Path, record: SyncRecord) {
     }
 }
 
-/// Category of a finished CLI run that exited non-zero. The output is only
-/// matched against fixed patterns; nothing from it is kept.
+/// The CLI's own fixed hint when the server rejects the key (`src/sync.js`,
+/// printed as `✗ <hint>` or, after a partial upload,
+/// `✗ 部分完成（已上传 …）: <hint>`), plus the older English markers.
+const KEY_REJECTED_MARKERS: [&str; 3] = ["API Key 无效", "Invalid API key", "UNAUTHORIZED"];
+
+/// Category of a finished CLI run that exited non-zero, decided from the
+/// run's final error line (the one the status bar shows, see
+/// `sync_engine::extract_error_line`) — never from a non-fatal tool warning
+/// printed earlier, such as `Cursor usage export skipped (HTTP 429 …)`. The
+/// output is only matched against fixed patterns; nothing from it is kept.
 pub fn classify_exit(
     exit_code: Option<i32>,
-    stdout: &str,
     stderr: &str,
+    final_line: &str,
 ) -> (SyncOutcome, SyncReason) {
     if let Some(rest) = stderr
         .lines()
@@ -143,12 +151,17 @@ pub fn classify_exit(
             },
         );
     }
-    let all = format!("{stdout}\n{stderr}");
-    // The same markers the sync status line already keys on.
-    if all.contains("Invalid API key") || all.contains("UNAUTHORIZED") {
+    if KEY_REJECTED_MARKERS
+        .iter()
+        .any(|marker| final_line.contains(marker))
+    {
         return (SyncOutcome::Failed, SyncReason::KeyRejected);
     }
-    if let Some(status) = http_status(&all) {
+    // A status number counts only from an actual failure line: the CLI's
+    // `✗ …` (or an older `Error: …`). Without one the status bar falls back
+    // to the last line it can find, which may be a tool warning.
+    let is_failure_line = final_line.contains('✗') || final_line.contains("Error:");
+    if let Some(status) = http_status(final_line).filter(|_| is_failure_line) {
         let reason = if matches!(status, 401 | 403) {
             SyncReason::KeyRejected
         } else {
@@ -201,28 +214,26 @@ fn http_status(text: &str) -> Option<u16> {
 pub enum KeyVerdict {
     /// No sync recorded yet.
     NoRecord,
-    /// The newest sync succeeded, or reached the server with a non-auth error.
+    /// The newest sync succeeded.
     Accepted,
     /// The newest sync had its key rejected by the server.
     Rejected,
-    /// The newest sync timed out or the CLI never started: it cannot tell.
-    Unfinished,
-    /// The newest sync failed for a reason that says nothing about the key.
+    /// Anything else — timeout, CLI never started, network failure, a server
+    /// error such as 502, any other failure — says nothing about the key.
     Undetermined,
 }
 
-/// Only the newest record counts. Reaching back past a timeout or a CLI that
-/// never started to an older verdict would point a network problem at the key
-/// (same rule as macOS).
+/// Only the newest record counts, and only success or a rejected key is a
+/// verdict. Reaching back past a timeout or a CLI that never started to an
+/// older result would point a network problem at the key (same rule on
+/// macOS, Windows and the CLI).
 pub fn last_key_verdict(records: &[SyncRecord]) -> KeyVerdict {
     let Some(newest) = records.first() else {
         return KeyVerdict::NoRecord;
     };
     match (newest.outcome, newest.reason) {
         (SyncOutcome::Success, _) => KeyVerdict::Accepted,
-        (SyncOutcome::TimedOut | SyncOutcome::CliStartupFailed, _) => KeyVerdict::Unfinished,
-        (_, Some(SyncReason::KeyRejected)) => KeyVerdict::Rejected,
-        (_, Some(SyncReason::ServerStatus { .. })) => KeyVerdict::Accepted,
+        (SyncOutcome::Failed, Some(SyncReason::KeyRejected)) => KeyVerdict::Rejected,
         _ => KeyVerdict::Undetermined,
     }
 }
@@ -230,6 +241,19 @@ pub fn last_key_verdict(records: &[SyncRecord]) -> KeyVerdict {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Exactly what `sync_engine::run_cli_sync` does with a failed run.
+    fn classify(exit_code: Option<i32>, stdout: &str, stderr: &str) -> (SyncOutcome, SyncReason) {
+        let line = crate::services::sync_engine::extract_error_line(if stderr.is_empty() {
+            stdout
+        } else {
+            stderr
+        });
+        classify_exit(exit_code, stderr, &line)
+    }
+
+    const KEY_HINT: &str = "API Key 无效，请运行 `npx @vibe-cafe/vibe-usage init` 重新配置。";
+    const CURSOR_429: &str = "Cursor usage export skipped (HTTP 429 Too Many Requests)";
 
     fn record(started_at: u64, outcome: SyncOutcome, reason: Option<SyncReason>) -> SyncRecord {
         SyncRecord {
@@ -296,7 +320,7 @@ mod tests {
         ];
         for (stderr, stage) in cases {
             assert_eq!(
-                classify_exit(Some(1), "", stderr),
+                classify(Some(1), "", stderr),
                 (
                     SyncOutcome::CliStartupFailed,
                     SyncReason::Launcher { stage }
@@ -309,11 +333,11 @@ mod tests {
     #[test]
     fn cli_failures_keep_only_a_category_and_a_number() {
         assert_eq!(
-            classify_exit(Some(1), "", "Error: Invalid API key"),
+            classify(Some(1), "", "Error: Invalid API key"),
             (SyncOutcome::Failed, SyncReason::KeyRejected)
         );
         assert_eq!(
-            classify_exit(
+            classify(
                 Some(1),
                 "",
                 "Error: HTTP 401: {\"error\":\"bad key vbu_secret\"}"
@@ -321,7 +345,7 @@ mod tests {
             (SyncOutcome::Failed, SyncReason::KeyRejected)
         );
         assert_eq!(
-            classify_exit(
+            classify(
                 Some(1),
                 "",
                 "Error: HTTP 502: <html>Bad gateway for someone@example.com</html>"
@@ -332,7 +356,7 @@ mod tests {
             )
         );
         assert_eq!(
-            classify_exit(
+            classify(
                 Some(3),
                 "",
                 r"cannot read C:\Users\张 三\.claude\projects\-Users-zhang-Coding-secret\a.jsonl"
@@ -343,11 +367,58 @@ mod tests {
         assert_eq!(http_status("see HTTP 404."), Some(404));
     }
 
+    /// The CLI's real output (`src/sync.js`): `failure()` prints `✗ <msg>` to
+    /// stderr, after a partial upload prefixed with `部分完成（已上传 …）: `.
+    #[test]
+    fn the_cli_key_hint_is_recognized_with_or_without_the_partial_prefix() {
+        for stderr in [
+            format!("✗ {KEY_HINT}"),
+            format!("{CURSOR_429}\n✗ 部分完成（已上传 12 buckets · 3 sessions）: {KEY_HINT}"),
+            format!("\u{1b}[31m✗\u{1b}[39m {KEY_HINT}"),
+        ] {
+            assert_eq!(
+                classify(Some(1), "", &stderr),
+                (SyncOutcome::Failed, SyncReason::KeyRejected),
+                "{stderr}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_tool_warning_earlier_in_the_run_is_not_the_failure_reason() {
+        // Final failure is the upload: its status wins over Cursor's 429.
+        assert_eq!(
+            classify(
+                Some(1),
+                "Synced 0 buckets",
+                &format!("{CURSOR_429}\n✗ 同步失败: HTTP 502: <html>Bad gateway</html>"),
+            ),
+            (
+                SyncOutcome::Failed,
+                SyncReason::ServerStatus { status: 502 }
+            )
+        );
+        // Final failure carries no status: undetermined, never the warning's 429.
+        assert_eq!(
+            classify(
+                Some(1),
+                "",
+                &format!("{CURSOR_429}\n✗ 同步失败: fetch failed")
+            ),
+            (SyncOutcome::Failed, SyncReason::CliExit { exit_code: 1 })
+        );
+        // Only a warning and a crash footer: still not a server status.
+        assert_eq!(
+            classify(Some(1), "", &format!("{CURSOR_429}\nNode.js v22.23.1")),
+            (SyncOutcome::Failed, SyncReason::CliExit { exit_code: 1 })
+        );
+    }
+
     #[test]
     fn stored_records_hold_no_free_text() {
         let dir = tempfile::tempdir().unwrap();
         let file = path_in(dir.path());
-        let (outcome, reason) = classify_exit(
+        let (outcome, reason) = classify(
             Some(1),
             "Synced for 张三 at C:\\Users\\张 三",
             "Error: HTTP 500: token sk-ant-api03-SECRET Bearer eyJhbGciOi.payload.sig",
@@ -385,8 +456,8 @@ mod tests {
         ];
         // The newest run never reached the server: the older key rejection
         // must not be reported as the latest verdict.
-        assert_eq!(last_key_verdict(&records), KeyVerdict::Unfinished);
-        assert_eq!(last_key_verdict(&records[1..]), KeyVerdict::Unfinished);
+        assert_eq!(last_key_verdict(&records), KeyVerdict::Undetermined);
+        assert_eq!(last_key_verdict(&records[1..]), KeyVerdict::Undetermined);
         assert_eq!(last_key_verdict(&records[2..]), KeyVerdict::Rejected);
         assert_eq!(last_key_verdict(&records[3..]), KeyVerdict::Accepted);
         assert_eq!(last_key_verdict(&[]), KeyVerdict::NoRecord);
@@ -396,7 +467,7 @@ mod tests {
                 SyncOutcome::Failed,
                 Some(SyncReason::ServerStatus { status: 502 })
             )]),
-            KeyVerdict::Accepted
+            KeyVerdict::Undetermined
         );
         assert_eq!(
             last_key_verdict(&[record(

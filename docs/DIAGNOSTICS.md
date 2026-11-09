@@ -18,12 +18,12 @@
 |-|-|-|
 | 环境 | Windows 10/11、功能更新名（如 `23H2`）、build 号、架构；App 版本和构建类型；运行环境类型（App 内置 Node / 系统 Node / Bun）及版本号 | 路径 |
 | CLI | 启动脚本在不在；引导器缓存里最高的完整 CLI 版本。本报告不调用 CLI，`doctor --json` 的结果要等 CLI 发布后再并入（方案 2′） | CLI 输出 |
-| 账号 | 是否已配置 Key；只看最新一条同步记录：Key 被拒 / 未被拒 / 同步没有完成（超时或 CLI 没起来）所以无法判断 / 失败但原因与 Key 无关所以无法判断（不会越过最新一条去找更早的结果，口径与 macOS 一致）；4 位设备标签（主机名 SHA-256 的前两个字节） | Key、handle、主机名 |
-| 网络 | 系统代理：无 / 本机地址 / 外部地址 / 已开启但无法识别；有没有传给同步（Claude 配额读取从不传）；`HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` 是否设在用户变量、系统变量、App 自己的环境里 | 代理地址、端口、账号、密码 |
+| 账号 | 是否已配置 Key；只看最新一条同步记录：成功写「未被服务器拒绝」，Key 被拒写「被服务器拒绝（Key 无效）」，其他情况（超时、CLI 没起来、网络失败、服务器错误、其他失败）一律写「无法判断 Key 是否被拒」；不会越过最新一条去找更早的结果，口径与 macOS 和 CLI 一致；4 位设备标签（主机名 SHA-256 的前两个字节） | Key、handle、主机名 |
+| 网络 | 系统代理：无 / 本机地址 / 外部地址 / 已开启但无法识别；是否设了自动代理脚本（PAC，「使用设置脚本」，只看有没有 `AutoConfigURL`，不读地址）；有没有传给同步（Claude 配额读取从不传）；`HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` 是否设在用户变量、系统变量、App 自己的环境里 | 代理地址、端口、账号、密码 |
 | 后台 | App 定时同步是否在运行、是否正在同步、上次成功时间 | |
 | 最近同步 | App 自己的同步记录（见下一节） | 同步输出原文 |
 | 订阅配额 | 每张已开启卡片的状态、1a 的固定原因代码、实际来源、窗口个数、数据新旧 | 数值以外的任何文字；`Error` 状态的 message |
-| Claude 读取明细 | 当前候选程序（固定模板，如 `~\.local\bin\claude.exe`、「PATH 上第 3 个（claude.cmd）→ 包内 claude.exe」）和各自 `--version` 的版本号；最近一次真实读取：桌面端记录用了没有、每个候选 initialize 与 get_usage 的耗时、固定原因、退出码或「被 App 结束」、回答里有没有 `rate_limits_available` / 5h / 7d / 套餐 / error 字段；PATH 上 `claude.*` 的文件名和个数；`ANTHROPIC*` / `CLAUDE*` 用户变量的名字；Claude `settings.json` 里 `env` 的键名；是否设了 `CLAUDE_CONFIG_DIR` | Claude Code 的 stderr 和回答里的值；变量的值；任何目录名 |
+| Claude 读取明细 | 当前候选程序（固定模板，如 `~\.local\bin\claude.exe`、「PATH 上第 3 个（claude.cmd）→ 包内 claude.exe」）和各自 `--version` 的版本号，单独一节，注明是复制时查的；最近一次真实读取（不写版本：读取时没有记版本，Claude Code 又经常自动更新，不能把现在的版本安到过去的读取上）：桌面端记录用了没有、每个候选 initialize 与 get_usage 的耗时、固定原因、退出码或「被 App 结束」、回答里有没有 `rate_limits_available` / 5h / 7d / 套餐 / error 字段；PATH 上 `claude.*` 的文件名和个数；`ANTHROPIC*` / `CLAUDE*` 用户变量的名字；Claude `settings.json` 里 `env` 的键名；是否设了 `CLAUDE_CONFIG_DIR` | Claude Code 的 stderr 和回答里的值；变量的值；任何目录名 |
 
 变量名只在形如 `[A-Z0-9_]`、不超过 64 个字符时列出，最多 20 个；其余只报个数。版本号只保留数字和点。`--version` 只在点按钮时运行，每个候选最多 5 秒；刷新配额时从不运行。
 
@@ -41,6 +41,6 @@
 
 - 超时：120 秒时 App 结束 CLI，CLI 自己来不及写任何东西，所以只有 App 能记录。
 - CLI 启动阶段失败：没有运行环境、进程启动失败，或引导器 `cli-bootstrap.mjs` 失败（stderr 以固定前缀 `vibe-usage launcher:` 开头）。引导器失败再按固定前缀细分为：连不上 npm 源 / npm 源返回错误 / 下载或校验失败 / 安装失败 / 其他。
-- 失败：Key 被服务器拒绝、服务器错误（只记 HTTP 状态码数字）、CLI 退出码。
+- 失败：只按这次运行的最终错误行分类，也就是状态栏本来显示的那一行（CLI 的 `✗ …`），不看前面工具输出的非致命警告（例如 `Cursor usage export skipped (HTTP 429 …)`）。Key 被服务器拒绝：CLI 的固定提示「API Key 无效，请运行 … 重新配置。」（部分上传后前面会加「部分完成（已上传 …）: 」），或旧版的 `Invalid API key` / `UNAUTHORIZED`、HTTP 401/403。服务器错误：失败行里的 HTTP 状态码数字。其余记 CLI 退出码，判断不了 Key。
 
 CLI 的输出只用来匹配固定前缀，从不写入记录。记录不含路径、项目名、Key 和任何原文，写入失败不影响同步本身。「重置配置」时删除这个文件；卸载时勾选删除应用数据也会一起删除。CLI 那份同步记录由 CLI 自己负责（`~/.vibe-usage/sync-history.json`，不在本仓库）。

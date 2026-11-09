@@ -381,13 +381,14 @@ async fn run_cli_sync(app: &AppHandle) -> CliRun {
             reason: None,
         };
     }
-    let (outcome, reason) = sync_history::classify_exit(status.code(), &stdout, &stderr);
+    // The line the status bar shows is the run's final error; the history
+    // classifies that line only, never a tool warning printed earlier.
+    let line = extract_error_line(if stderr.is_empty() { &stdout } else { &stderr });
+    let (outcome, reason) = sync_history::classify_exit(status.code(), &stderr, &line);
     let all = format!("{stdout}\n{stderr}");
     let message = if all.contains("Invalid API key") || all.contains("UNAUTHORIZED") {
         "API Key 无效，请重新配置".into()
     } else {
-        let msg = if stderr.is_empty() { &stdout } else { &stderr };
-        let line = extract_error_line(msg);
         format!(
             "同步失败: {}",
             if line.is_empty() {
@@ -405,7 +406,7 @@ async fn run_cli_sync(app: &AppHandle) -> CliRun {
 /// appends stack frames plus a "Node.js v22.x" footer AFTER the message, so
 /// "last line" alone surfaces the useless footer. Scan from the bottom,
 /// skipping crash-dump noise, and prefer an actual error line.
-fn extract_error_line(msg: &str) -> String {
+pub(crate) fn extract_error_line(msg: &str) -> String {
     let is_noise = |l: &str| {
         l.is_empty()
             || l.starts_with("Node.js v")

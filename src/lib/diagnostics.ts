@@ -100,12 +100,13 @@ export interface DiagnosticsReport {
   cli: { launcherPresent: boolean; cachedVersion?: string | null };
   account: {
     keyConfigured: boolean;
-    lastSyncKey: "noRecord" | "accepted" | "rejected" | "unfinished" | "undetermined";
+    lastSyncKey: "noRecord" | "accepted" | "rejected" | "undetermined";
   };
   deviceTag?: string | null;
   network: {
     systemProxy: "none" | "loopback" | "remote" | "unrecognized";
     systemProxyPassedToSync: boolean;
+    autoConfigScript: boolean;
     variables: Array<{ name: string; user: boolean; system: boolean; app: boolean }>;
   };
   scheduler: { running: boolean; syncing: boolean; lastSuccessAt?: number | null };
@@ -205,9 +206,6 @@ function originText(origin: LaunchOrigin, via: LaunchVia): string {
   return base;
 }
 
-const sameOrigin = (left: LaunchOrigin, right: LaunchOrigin) =>
-  JSON.stringify(left) === JSON.stringify(right);
-
 function names(list: VariableNames | null | undefined): string {
   const shown = (list?.names ?? []).filter((name) => NAME.test(name));
   const hidden = (number(list?.other) ?? 0) + (list?.names ?? []).length - shown.length;
@@ -292,11 +290,9 @@ function quotaStatusText(status: string, meterCount: number, provider: RateLimit
   }
 }
 
-function attemptLine(attempt: ProbeAttempt, index: number, candidates: CandidateNow[]): string {
-  const version = shaped(
-    candidates.find((candidate) => sameOrigin(candidate.origin, attempt.origin))?.version,
-    VERSION,
-  );
+/** One past attempt. No version: it was not recorded at the time, and the
+ *  version queried now may belong to a Claude Code that updated since. */
+function attemptLine(attempt: ProbeAttempt, index: number): string {
   const timedOut = attempt.failure?.code === "claudeTimedOut";
   const steps: string[] = [];
   if (number(attempt.initializeMs) != null) steps.push(`initialize ${seconds(attempt.initializeMs)}`);
@@ -312,7 +308,7 @@ function attemptLine(attempt: ProbeAttempt, index: number, candidates: Candidate
       : attempt.exit.kind === "endedByApp"
         ? "被 App 结束"
         : "未启动";
-  const parts = [originText(attempt.origin, attempt.via), version ?? "版本未知", ...steps, result, exit];
+  const parts = [originText(attempt.origin, attempt.via), ...steps, result, exit];
   const answer = attempt.answer;
   if (answer) {
     const available =
@@ -331,13 +327,13 @@ function claudeLines(report: DiagnosticsReport): string[] {
   const candidates = claude.candidates ?? [];
   lines.push(
     candidates.length
-      ? `    当前候选：${candidates
+      ? `    当前候选及版本（复制时查询）：${candidates
           .map(
             (candidate, index) =>
               `${index + 1}）${originText(candidate.origin, candidate.via)} · ${shaped(candidate.version, VERSION) ?? "版本未知"}`,
           )
           .join("；")}`
-      : "    当前候选：没有找到 Claude Code 程序",
+      : "    当前候选及版本（复制时查询）：没有找到 Claude Code 程序",
   );
   const probe = claude.lastProbe;
   if (!probe) {
@@ -351,8 +347,8 @@ function claudeLines(report: DiagnosticsReport): string[] {
       probe.desktop.kind === "used"
         ? ""
         : ` · 找到候选 ${number(probe.candidatesFound) ?? 0} 个，试了 ${probe.attempts.length} 个`;
-    lines.push(`    上次读取 ${clock(probe.at)}：${desktop}${tried}`);
-    probe.attempts.forEach((attempt, index) => lines.push(attemptLine(attempt, index, candidates)));
+    lines.push(`    上次读取 ${clock(probe.at)}（不含当时的版本）：${desktop}${tried}`);
+    probe.attempts.forEach((attempt, index) => lines.push(attemptLine(attempt, index)));
   }
   const counts = new Map<string, number>();
   for (const match of claude.pathMatches ?? []) {
@@ -406,16 +402,15 @@ export function formatDiagnosticsReport(
   );
 
   const account = report.account;
-  // Only the newest sync counts (same rule as macOS): an older verdict behind
-  // a timeout would point a network problem at the key.
+  // Only the newest sync counts, and only success or a rejected key is a
+  // verdict (same wording on macOS, Windows and the CLI).
   const verdict =
     {
       noRecord: "暂无同步记录",
       accepted: "最近一次同步未被服务器拒绝",
-      rejected: "最近一次同步被服务器拒绝",
-      unfinished: "最近一次同步没有完成，无法判断 Key 是否被拒",
-      undetermined: "最近一次同步失败，无法判断 Key 是否被拒",
-    }[account.lastSyncKey] ?? "无法判断 Key 是否被拒";
+      rejected: "最近一次同步被服务器拒绝（Key 无效）",
+      undetermined: "最近一次同步无法判断 Key 是否被拒",
+    }[account.lastSyncKey] ?? "最近一次同步无法判断 Key 是否被拒";
   const tag = shaped(report.deviceTag, DEVICE_TAG);
   lines.push(
     `账号：${account.keyConfigured ? "已配置 Key" : "未配置 Key"} · ${verdict}${tag ? ` · 设备标签 ${tag}` : ""}`,
@@ -432,7 +427,8 @@ export function formatDiagnosticsReport(
     network.systemProxy === "loopback" || network.systemProxy === "remote"
       ? ` · ${network.systemProxyPassedToSync ? "已传给同步" : "未传给同步（App 环境里已有 HTTPS_PROXY）"} · 未传给 Claude 配额读取`
       : "";
-  lines.push(`网络：${proxy}${handedOn}`);
+  const pac = network.autoConfigScript ? " · 自动代理脚本：有" : "";
+  lines.push(`网络：${proxy}${handedOn}${pac}`);
   const variables = (network.variables ?? []).map((variable) => {
     const name = shaped(variable.name, NAME) ?? "?";
     const where = [
@@ -509,7 +505,9 @@ export function scrubDiagnosticsText(text: string): string {
     .replace(/Bearer\s+\S+/g, "Bearer ***")
     .replace(/eyJ[A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]*)*/g, "***")
     .replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, "***")
-    .replace(/[A-Za-z0-9_\-.=+/]{40,}/g, "***");
+    // Long opaque strings, except plain variable names such as
+    // CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC (exactly 40 characters).
+    .replace(/[A-Za-z0-9_\-.=+/]{40,}/g, (match) => (/^[A-Z0-9_]+$/.test(match) ? match : "***"));
 }
 
 export function buildDiagnosticsText(report: DiagnosticsReport, products: QuotaProduct[]): string {
