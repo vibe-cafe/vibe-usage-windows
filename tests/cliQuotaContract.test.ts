@@ -38,7 +38,9 @@ test("published CLI returns the quota contract without inherited account credent
     for (const id of ["kimi-code", "zcode", "grok"]) {
       expect(discovery.products.find((p: { id: string }) => p.id === id)?.fetchable).toBe(true);
     }
-    expect(discovery.products.find((p: { id: string }) => p.id === "cursor")?.fetchable).toBe(false);
+    // Cursor is deliberately not asserted: the app shows it as 待接入 and never
+    // routes it through the CLI, while the CLI made it fetchable in
+    // vibe-cafe/vibe-usage#128 — its value is not part of this app's contract.
     const quota = invoke("quota", "fetch", "--product", "kimi-code",
       "--product", "zcode", "--product", "grok", "--json");
     expect(quota.schemaVersion).toBe(1);
