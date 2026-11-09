@@ -50,8 +50,14 @@ pub enum LauncherStage {
     Other,
 }
 
+/// `rename_all` renames only the variant tags; `rename_all_fields` makes the
+/// fields camelCase too, so the frontend reads `exitCode`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "code", rename_all = "camelCase")]
+#[serde(
+    tag = "code",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum SyncReason {
     /// No bundled or system runtime, or the launcher script is missing.
     RuntimeUnavailable,
@@ -68,6 +74,8 @@ pub enum SyncReason {
     },
     /// Any other non-zero exit of the CLI.
     CliExit {
+        /// Records written before this field was renamed used `exit_code`.
+        #[serde(alias = "exit_code")]
         exit_code: i32,
     },
     /// Waiting for the process failed.
@@ -187,17 +195,36 @@ fn http_status(text: &str) -> Option<u16> {
     })
 }
 
-/// The most recent record that reached the server, as "was the key
-/// rejected?". `None` when no recent sync got that far.
-pub fn last_server_verdict(records: &[SyncRecord]) -> Option<bool> {
-    records
-        .iter()
-        .find_map(|record| match (record.outcome, record.reason) {
-            (SyncOutcome::Success, _) => Some(false),
-            (_, Some(SyncReason::KeyRejected)) => Some(true),
-            (_, Some(SyncReason::ServerStatus { .. })) => Some(false),
-            _ => None,
-        })
+/// What the newest sync says about the API key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum KeyVerdict {
+    /// No sync recorded yet.
+    NoRecord,
+    /// The newest sync succeeded, or reached the server with a non-auth error.
+    Accepted,
+    /// The newest sync had its key rejected by the server.
+    Rejected,
+    /// The newest sync timed out or the CLI never started: it cannot tell.
+    Unfinished,
+    /// The newest sync failed for a reason that says nothing about the key.
+    Undetermined,
+}
+
+/// Only the newest record counts. Reaching back past a timeout or a CLI that
+/// never started to an older verdict would point a network problem at the key
+/// (same rule as macOS).
+pub fn last_key_verdict(records: &[SyncRecord]) -> KeyVerdict {
+    let Some(newest) = records.first() else {
+        return KeyVerdict::NoRecord;
+    };
+    match (newest.outcome, newest.reason) {
+        (SyncOutcome::Success, _) => KeyVerdict::Accepted,
+        (SyncOutcome::TimedOut | SyncOutcome::CliStartupFailed, _) => KeyVerdict::Unfinished,
+        (_, Some(SyncReason::KeyRejected)) => KeyVerdict::Rejected,
+        (_, Some(SyncReason::ServerStatus { .. })) => KeyVerdict::Accepted,
+        _ => KeyVerdict::Undetermined,
+    }
 }
 
 #[cfg(test)]
@@ -343,21 +370,67 @@ mod tests {
     }
 
     #[test]
-    fn last_server_verdict_skips_runs_that_never_reached_the_server() {
+    fn key_verdict_reads_only_the_newest_record() {
         let records = vec![
-            record(3, SyncOutcome::TimedOut, None),
             record(
-                2,
+                3,
                 SyncOutcome::CliStartupFailed,
                 Some(SyncReason::Launcher {
                     stage: LauncherStage::Network,
                 }),
             ),
+            record(2, SyncOutcome::TimedOut, None),
             record(1, SyncOutcome::Failed, Some(SyncReason::KeyRejected)),
             record(0, SyncOutcome::Success, None),
         ];
-        assert_eq!(last_server_verdict(&records), Some(true));
-        assert_eq!(last_server_verdict(&records[3..]), Some(false));
-        assert_eq!(last_server_verdict(&records[..2]), None);
+        // The newest run never reached the server: the older key rejection
+        // must not be reported as the latest verdict.
+        assert_eq!(last_key_verdict(&records), KeyVerdict::Unfinished);
+        assert_eq!(last_key_verdict(&records[1..]), KeyVerdict::Unfinished);
+        assert_eq!(last_key_verdict(&records[2..]), KeyVerdict::Rejected);
+        assert_eq!(last_key_verdict(&records[3..]), KeyVerdict::Accepted);
+        assert_eq!(last_key_verdict(&[]), KeyVerdict::NoRecord);
+        assert_eq!(
+            last_key_verdict(&[record(
+                0,
+                SyncOutcome::Failed,
+                Some(SyncReason::ServerStatus { status: 502 })
+            )]),
+            KeyVerdict::Accepted
+        );
+        assert_eq!(
+            last_key_verdict(&[record(
+                0,
+                SyncOutcome::Failed,
+                Some(SyncReason::CliExit { exit_code: 3 })
+            )]),
+            KeyVerdict::Undetermined
+        );
+    }
+
+    #[test]
+    fn reasons_serialize_with_camel_case_fields_and_read_old_records() {
+        assert_eq!(
+            serde_json::to_value(SyncReason::CliExit { exit_code: 3 }).unwrap(),
+            serde_json::json!({"code": "cliExit", "exitCode": 3})
+        );
+        assert_eq!(
+            serde_json::to_value(SyncReason::ServerStatus { status: 502 }).unwrap(),
+            serde_json::json!({"code": "serverStatus", "status": 502})
+        );
+        assert_eq!(
+            serde_json::to_value(SyncReason::Launcher {
+                stage: LauncherStage::Network
+            })
+            .unwrap(),
+            serde_json::json!({"code": "launcher", "stage": "network"})
+        );
+        // A record written by the first build of this feature.
+        let old: SyncReason =
+            serde_json::from_value(serde_json::json!({"code": "cliExit", "exit_code": 7})).unwrap();
+        assert_eq!(old, SyncReason::CliExit { exit_code: 7 });
+        let new: SyncReason =
+            serde_json::from_value(serde_json::json!({"code": "cliExit", "exitCode": 7})).unwrap();
+        assert_eq!(new, SyncReason::CliExit { exit_code: 7 });
     }
 }

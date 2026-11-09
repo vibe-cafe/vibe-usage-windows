@@ -17,7 +17,7 @@
 
 use crate::services::claude_usage::{self, CandidateNow, ProbeRecord};
 use crate::services::sync_engine;
-use crate::services::sync_history::{self, SyncRecord};
+use crate::services::sync_history::{self, KeyVerdict, SyncRecord};
 use crate::state::{AppCtx, SyncStatus};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -113,9 +113,8 @@ pub struct CliInfo {
 #[serde(rename_all = "camelCase")]
 pub struct AccountInfo {
     pub key_configured: bool,
-    /// Whether the newest sync that reached the server had its key rejected.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_sync_rejected: Option<bool>,
+    /// What the newest sync says about the key (only the newest record).
+    pub last_sync_key: KeyVerdict,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -284,7 +283,7 @@ fn collect_local(app: &AppHandle) -> DiagnosticsReport {
         },
         account: AccountInfo {
             key_configured: ctx.config.is_configured(),
-            last_sync_rejected: sync_history::last_server_verdict(&syncs),
+            last_sync_key: sync_history::last_key_verdict(&syncs),
         },
         device_tag: gethostname::gethostname().to_str().map(device_tag),
         network: NetworkInfo {
@@ -809,7 +808,7 @@ mod tests {
             },
             account: AccountInfo {
                 key_configured: true,
-                last_sync_rejected: Some(false),
+                last_sync_key: KeyVerdict::Accepted,
             },
             device_tag: Some(device_tag("ZhangSan-PC")),
             network: NetworkInfo {
@@ -843,5 +842,220 @@ mod tests {
             },
         };
         assert_clean(&serde_json::to_string(&report).unwrap());
+    }
+
+    /// One report touching every serialized shape the frontend lays out.
+    fn contract_sample() -> DiagnosticsReport {
+        use crate::services::claude_usage::{
+            AnswerFields, CandidateNow, DesktopStep, ProbeAttempt, ProbeRecord, ProcessExit,
+        };
+        use crate::services::sync_history::{LauncherStage, SyncReason};
+        use vibe_core::claude_code::{LaunchOrigin, LaunchVia, PathExtension};
+        const AT: u64 = 1_794_205_920_000; // 2026-11-09 06:32 UTC
+        let minute = 60_000;
+        let sync = |ago: u64, trigger, outcome, duration_ms, reason| SyncRecord {
+            started_at: AT - ago * minute,
+            trigger,
+            outcome,
+            duration_ms,
+            reason,
+        };
+        let card = |provider, status, source, live_failure, empty_reason, meter_count| QuotaCard {
+            provider,
+            status,
+            source,
+            live_failure,
+            empty_reason,
+            meter_count,
+            data_as_of: Some((AT / 1000) as f64 - 1800.0),
+        };
+        let npm = LaunchOrigin::Path {
+            position: 3,
+            extension: PathExtension::Cmd,
+        };
+        DiagnosticsReport {
+            schema_version: SCHEMA_VERSION,
+            generated_at: AT,
+            app: AppInfo {
+                version: "0.7.5".into(),
+                build: BuildKind::Release,
+            },
+            system: SystemInfo {
+                windows_release: Some(11),
+                display_version: Some("23H2".into()),
+                build: Some(22631),
+                architecture: "x86_64",
+            },
+            runtime: Some(RuntimeInfo {
+                kind: RuntimeName::BundledNode,
+                version: Some("22.23.1".into()),
+            }),
+            cli: CliInfo {
+                launcher_present: true,
+                cached_version: Some("0.14.9".into()),
+            },
+            account: AccountInfo {
+                key_configured: true,
+                last_sync_key: KeyVerdict::Unfinished,
+            },
+            device_tag: Some("7c2e".into()),
+            network: NetworkInfo {
+                system_proxy: ProxyKind::Loopback,
+                system_proxy_passed_to_sync: true,
+                variables: proxy_variables(&["HTTPS_PROXY".into()], &["ALL_PROXY".into()], |_| {
+                    false
+                }),
+            },
+            scheduler: SchedulerInfo {
+                running: true,
+                syncing: false,
+                last_success_at: Some(AT - 50 * minute),
+            },
+            syncs: vec![
+                sync(
+                    10,
+                    SyncTrigger::Scheduled,
+                    SyncOutcome::CliStartupFailed,
+                    21_000,
+                    Some(SyncReason::Launcher {
+                        stage: LauncherStage::Network,
+                    }),
+                ),
+                sync(
+                    20,
+                    SyncTrigger::Manual,
+                    SyncOutcome::TimedOut,
+                    120_000,
+                    None,
+                ),
+                sync(
+                    30,
+                    SyncTrigger::Scheduled,
+                    SyncOutcome::Failed,
+                    3_000,
+                    Some(SyncReason::CliExit { exit_code: 3 }),
+                ),
+                sync(
+                    40,
+                    SyncTrigger::Scheduled,
+                    SyncOutcome::Failed,
+                    2_000,
+                    Some(SyncReason::ServerStatus { status: 502 }),
+                ),
+                sync(
+                    45,
+                    SyncTrigger::Manual,
+                    SyncOutcome::Failed,
+                    1_500,
+                    Some(SyncReason::KeyRejected),
+                ),
+                sync(
+                    50,
+                    SyncTrigger::Scheduled,
+                    SyncOutcome::Success,
+                    18_000,
+                    None,
+                ),
+            ],
+            quotas: vec![
+                card(
+                    RateLimitProvider::ClaudeCode,
+                    "ok",
+                    Some(RateLimitSource::Cache),
+                    Some(RateLimitLiveFailure::ClaudeTimedOut),
+                    None,
+                    1,
+                ),
+                card(
+                    RateLimitProvider::Codex,
+                    "noData",
+                    Some(RateLimitSource::Live),
+                    Some(RateLimitLiveFailure::EndpointHttpStatus { status: 502 }),
+                    None,
+                    0,
+                ),
+                card(
+                    RateLimitProvider::OpenCodeGo,
+                    "noData",
+                    None,
+                    None,
+                    Some(RateLimitEmptyReason::NotEntitled),
+                    0,
+                ),
+            ],
+            claude: ClaudeInfo {
+                selected: true,
+                last_probe: Some(ProbeRecord {
+                    at: AT - minute,
+                    desktop: DesktopStep::NoRecord,
+                    candidates_found: 2,
+                    attempts: vec![
+                        ProbeAttempt {
+                            origin: LaunchOrigin::LocalBin,
+                            via: LaunchVia::Direct,
+                            initialize_ms: Some(900),
+                            get_usage_ms: None,
+                            failure: Some(RateLimitLiveFailure::ClaudeTimedOut),
+                            exit: ProcessExit::EndedByApp,
+                            answer: None,
+                        },
+                        ProbeAttempt {
+                            origin: npm,
+                            via: LaunchVia::ShimBinary,
+                            initialize_ms: Some(1_200),
+                            get_usage_ms: Some(2_300),
+                            failure: Some(RateLimitLiveFailure::ClaudeNoWindows),
+                            exit: ProcessExit::Exited { code: Some(1) },
+                            answer: Some(AnswerFields {
+                                rate_limits_available: Some(true),
+                                five_hour: false,
+                                seven_day: false,
+                                plan: true,
+                                error: true,
+                            }),
+                        },
+                    ],
+                }),
+                candidates: vec![
+                    CandidateNow {
+                        origin: LaunchOrigin::LocalBin,
+                        via: LaunchVia::Direct,
+                        version: Some("2.1.282".into()),
+                    },
+                    CandidateNow {
+                        origin: npm,
+                        via: LaunchVia::ShimBinary,
+                        version: Some("2.1.319".into()),
+                    },
+                ],
+                path_matches: vec!["claude.exe".into(), "claude".into(), "claude.cmd".into()],
+                user_variables: variable_names(["ANTHROPIC_BASE_URL".to_string()]),
+                settings: ClaudeSettings::Read {
+                    env: variable_names(["CLAUDE_CODE_USE_BEDROCK".to_string()]),
+                },
+                config_dir_set: true,
+            },
+        }
+    }
+
+    /// The frontend formats exactly this file (`tests/diagnostics.test.ts`),
+    /// so a field Rust renames without TypeScript following breaks a test.
+    /// Regenerate with `VIBE_UPDATE_FIXTURES=1 cargo test -p vibe-usage-app`.
+    #[test]
+    fn contract_fixture_matches_what_rust_serializes() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../tests/fixtures/diagnostics-report.json");
+        let actual = serde_json::to_value(contract_sample()).unwrap();
+        if std::env::var_os("VIBE_UPDATE_FIXTURES").is_some() {
+            let mut text = serde_json::to_string_pretty(&actual).unwrap();
+            text.push('\n');
+            std::fs::write(&path, text).unwrap();
+        }
+        let stored: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(
+            stored, actual,
+            "tests/fixtures/diagnostics-report.json is out of date; regenerate it"
+        );
     }
 }

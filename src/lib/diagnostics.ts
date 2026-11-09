@@ -98,7 +98,10 @@ export interface DiagnosticsReport {
   };
   runtime?: { kind: "bundledNode" | "systemNode" | "bun"; version?: string | null } | null;
   cli: { launcherPresent: boolean; cachedVersion?: string | null };
-  account: { keyConfigured: boolean; lastSyncRejected?: boolean | null };
+  account: {
+    keyConfigured: boolean;
+    lastSyncKey: "noRecord" | "accepted" | "rejected" | "unfinished" | "undetermined";
+  };
   deviceTag?: string | null;
   network: {
     systemProxy: "none" | "loopback" | "remote" | "unrecognized";
@@ -403,12 +406,16 @@ export function formatDiagnosticsReport(
   );
 
   const account = report.account;
+  // Only the newest sync counts (same rule as macOS): an older verdict behind
+  // a timeout would point a network problem at the key.
   const verdict =
-    account.lastSyncRejected == null
-      ? "最近没有到达服务器的同步"
-      : account.lastSyncRejected
-        ? "最近一次同步被服务器拒绝"
-        : "最近一次同步未被服务器拒绝";
+    {
+      noRecord: "暂无同步记录",
+      accepted: "最近一次同步未被服务器拒绝",
+      rejected: "最近一次同步被服务器拒绝",
+      unfinished: "最近一次同步没有完成，无法判断 Key 是否被拒",
+      undetermined: "最近一次同步失败，无法判断 Key 是否被拒",
+    }[account.lastSyncKey] ?? "无法判断 Key 是否被拒";
   const tag = shaped(report.deviceTag, DEVICE_TAG);
   lines.push(
     `账号：${account.keyConfigured ? "已配置 Key" : "未配置 Key"} · ${verdict}${tag ? ` · 设备标签 ${tag}` : ""}`,

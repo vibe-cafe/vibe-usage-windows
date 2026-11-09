@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   buildDiagnosticsText,
@@ -11,6 +12,7 @@ const products: QuotaProduct[] = [
   { provider: "claudeCode", displayName: "Claude", availability: "ready", isDetected: true },
   { provider: "codex", displayName: "Codex", availability: "ready", isDetected: true },
   { provider: "kimi-code", displayName: "Kimi Code", availability: "ready", isDetected: true },
+  { provider: "opencode-go", displayName: "OpenCode Go", availability: "ready", isDetected: true },
 ];
 
 /** Synthetic values that must never appear in a copied report. */
@@ -39,7 +41,7 @@ function report(overrides: Partial<DiagnosticsReport> = {}): DiagnosticsReport {
     system: { windowsRelease: 11, displayVersion: "23H2", build: 22631, architecture: "x86_64" },
     runtime: { kind: "bundledNode", version: "22.23.1" },
     cli: { launcherPresent: true, cachedVersion: "0.14.9" },
-    account: { keyConfigured: true, lastSyncRejected: false },
+    account: { keyConfigured: true, lastSyncKey: "accepted" },
     deviceTag: "7c2e",
     network: {
       systemProxy: "loopback",
@@ -153,7 +155,7 @@ describe("copyable diagnostics report", () => {
       report({
         runtime: null,
         cli: { launcherPresent: true, cachedVersion: null },
-        account: { keyConfigured: true, lastSyncRejected: null },
+        account: { keyConfigured: true, lastSyncKey: "unfinished" },
         syncs: [
           {
             startedAt: NOW,
@@ -168,7 +170,7 @@ describe("copyable diagnostics report", () => {
     );
     expect(text).toContain("运行环境：未找到 Node.js 或 Bun");
     expect(text).toContain("引导器没有缓存");
-    expect(text).toContain("最近没有到达服务器的同步");
+    expect(text).toContain("最近一次同步没有完成，无法判断 Key 是否被拒");
     expect(text).toContain("CLI 启动阶段失败（运行环境不可用）");
   });
 
@@ -246,3 +248,45 @@ describe("copyable diagnostics report", () => {
     expect(text).toContain("当前候选：没有找到 Claude Code 程序");
   });
 });
+
+describe("Rust ↔ TypeScript diagnostics contract", () => {
+  // Written by the Rust test `contract_fixture_matches_what_rust_serializes`
+  // from what serde actually emits, so a field renamed on one side only shows
+  // up here as a placeholder instead of silently reaching users.
+  const fixture = JSON.parse(
+    readFileSync(new URL("./fixtures/diagnostics-report.json", import.meta.url), "utf8"),
+  ) as DiagnosticsReport;
+  const text = buildDiagnosticsText(fixture, products);
+
+  it("reads every field Rust serializes", () => {
+    for (const line of [
+      "环境：Windows 11 23H2（build 22631） · x86_64 · App 0.7.5 正式版 · 运行环境：App 内置 Node 22.23.1",
+      "CLI：启动脚本正常 · 引导器已缓存 0.14.9",
+      "账号：已配置 Key · 最近一次同步没有完成，无法判断 Key 是否被拒 · 设备标签 7c2e",
+      "网络：系统代理：有（本机地址） · 已传给同步 · 未传给 Claude 配额读取",
+      "代理变量：HTTPS_PROXY 用户变量有 · HTTP_PROXY 无 · ALL_PROXY 系统变量有",
+      "定时 · CLI 启动阶段失败（引导器连不上 npm 源） · 21s",
+      "手动 · 超时，2m00s 时被 App 结束",
+      "定时 · 失败（CLI 退出码 3） · 3.0s",
+      "定时 · 失败（服务器错误 502） · 2.0s",
+      "手动 · 失败（Key 被服务器拒绝） · 1.5s",
+      "定时 · 成功 · 18s",
+      "Claude  正常 · 1 个窗口 · Claude 配额读取超时 · 来源：缓存 · 数据 30 分钟前",
+      "Codex  无数据 · Codex 配额接口返回错误 502 · 来源：实时读取",
+      "OpenCode Go  无数据 · 未订阅 OpenCode Go",
+      "当前候选：1）~\\.local\\bin\\claude.exe · 2.1.282；2）PATH 上第 3 个（claude.cmd） → 包内 claude.exe · 2.1.319",
+      "桌面端记录：没有 · 找到候选 2 个，试了 2 个",
+      "1）~\\.local\\bin\\claude.exe · 2.1.282 · initialize 0.9s · get_usage 超时 · Claude 配额读取超时 · 被 App 结束",
+      "2）PATH 上第 3 个（claude.cmd） → 包内 claude.exe · 2.1.319 · initialize 1.2s · get_usage 2.3s · Claude 没有返回额度窗口 · 退出码 1 · 回答：rate_limits_available true · 5h 无 · 7d 无 · 套餐 有 · error 有",
+      "PATH 上的 claude.*：claude.exe ×1、claude ×1、claude.cmd ×1",
+      "ANTHROPIC/CLAUDE 开头的用户变量：ANTHROPIC_BASE_URL · settings.json 的 env：CLAUDE_CODE_USE_BEDROCK · CLAUDE_CONFIG_DIR 已设",
+    ]) {
+      expect(text).toContain(line);
+    }
+  });
+
+  it("shows no placeholder that would hide a field-name mismatch", () => {
+    expect(text).not.toMatch(/\?|未知|版本未知/);
+  });
+});
+
