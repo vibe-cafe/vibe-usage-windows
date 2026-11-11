@@ -14,12 +14,21 @@
  * the app's own directory, so a run costs one small metadata request and the
  * package is only downloaded when `latest` actually moves.
  *
+ * When `latest` cannot be resolved or fetched — the registry is unreachable,
+ * answers with an error, or the new package will not download or install — the
+ * newest complete version already in the cache runs instead, with one notice
+ * line on stderr (`NOTICE_PREFIX`). Users on a flaky route to npm would
+ * otherwise lose a whole sync to every dropped connection. This is a fallback,
+ * not a pin: every run still asks for `latest` first and moves on as soon as
+ * the registry answers. With nothing cached the launcher fails as it always
+ * has, with the same messages.
+ *
  * `src/index.js` is imported in-process rather than spawned: the CLI's entry
  * point is `run(process.argv.slice(2))`, so stdout/stderr and the exit code are
  * exactly what the parent already parses.
  */
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -28,6 +37,16 @@ import { gunzipSync } from 'node:zlib';
 const PACKAGE = '@vibe-cafe/vibe-usage';
 const METADATA_URL = `https://registry.npmjs.org/${PACKAGE}/latest`;
 const ENTRY = 'src/index.js';
+/**
+ * Prefix of the one line written when a cached version stands in for
+ * `latest`. The app strips it before reading the CLI's own output and keeps
+ * only the `stage=` word; it must never start with `vibe-usage launcher:`,
+ * which means the CLI did not run at all.
+ */
+const NOTICE_PREFIX = 'vibe-usage launcher notice:';
+/** Waiting longer than this for `latest` is pointless when a cached copy can run. */
+const METADATA_TIMEOUT_WITH_CACHE_MS = 10_000;
+const METADATA_TIMEOUT_MS = 20_000;
 
 /** Where the app keeps its own files; falls back to `~/.vibe-usage`. */
 function cacheRoot() {
@@ -40,14 +59,97 @@ function fail(message) {
   process.exit(1);
 }
 
-async function fetchLatest() {
-  const res = await fetch(METADATA_URL, { signal: AbortSignal.timeout(20_000) });
-  if (!res.ok) fail(`registry returned ${res.status} for ${PACKAGE}@latest`);
-  const manifest = await res.json();
+/**
+ * A failure the launcher can name. `stage` is one of `network`, `registry`,
+ * `download`, `install` (the same words the app's sync history uses); the
+ * message is what `fail()` prints when no cached version can stand in, and the
+ * app's sync history classifies those messages by their fixed beginnings.
+ */
+class LauncherError extends Error {
+  constructor(stage, message) {
+    super(message);
+    this.stage = stage;
+  }
+}
+
+/** Anything thrown here that is not a `LauncherError` is a network failure. */
+async function fetchLatest(timeoutMs) {
+  const res = await fetch(METADATA_URL, { signal: AbortSignal.timeout(timeoutMs) });
+  if (!res.ok) throw new LauncherError('registry', `registry returned ${res.status} for ${PACKAGE}@latest`);
+  let manifest;
+  try {
+    manifest = await res.json();
+  } catch (err) {
+    // A captive portal or proxy page can answer 200 with HTML; a dropped
+    // connection fails the body read itself and stays a network failure.
+    if (err?.name !== 'SyntaxError') throw err;
+    throw new LauncherError('registry', `registry answered with unreadable metadata for ${PACKAGE}@latest`);
+  }
   if (typeof manifest?.version !== 'string' || typeof manifest?.dist?.tarball !== 'string') {
-    fail(`registry answered without a version/tarball for ${PACKAGE}@latest`);
+    throw new LauncherError('registry', `registry answered without a version/tarball for ${PACKAGE}@latest`);
   }
   return { version: manifest.version, tarball: manifest.dist.tarball, integrity: manifest.dist.integrity };
+}
+
+/** `<cache>/<version>/package` when that version is fully installed. */
+function cachedPackage(version) {
+  const dir = join(cacheRoot(), version);
+  return existsSync(join(dir, 'complete')) && existsSync(join(dir, 'package', ENTRY))
+    ? join(dir, 'package')
+    : null;
+}
+
+const SEMVER = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/;
+
+/** Highest first; a release beats a prerelease of the same number. */
+function compareVersions(a, b) {
+  const [, ...pa] = SEMVER.exec(a);
+  const [, ...pb] = SEMVER.exec(b);
+  for (let i = 0; i < 3; i++) {
+    const diff = Number(pb[i]) - Number(pa[i]);
+    if (diff !== 0) return diff;
+  }
+  if (!pa[3] !== !pb[3]) return pa[3] ? 1 : -1;
+  return (pb[3] ?? '').localeCompare(pa[3] ?? '');
+}
+
+/**
+ * The newest version that a previous run installed completely: a version-named
+ * directory with the `complete` marker and the entry file. Staging directories
+ * and anything half-written are skipped.
+ */
+function newestCached() {
+  let names;
+  try {
+    names = readdirSync(cacheRoot());
+  } catch {
+    return null;
+  }
+  const version = names
+    .filter(name => SEMVER.test(name))
+    .sort(compareVersions)
+    .find(name => cachedPackage(name));
+  return version ? { version, packageDir: cachedPackage(version) } : null;
+}
+
+/** One line, no stack: the notice is for people reading the sync log. */
+function shortReason(err) {
+  const message = String(err?.message || err).split('\n')[0];
+  const code = err?.cause?.code;
+  return (code && !message.includes(code) ? `${message}: ${code}` : message).slice(0, 200);
+}
+
+/**
+ * `latest` is out of reach at `stage`: run the newest cached version, or fail
+ * with the same text as before when there is none.
+ */
+function fallBackToCache(stage, err) {
+  const cached = newestCached();
+  if (!cached) fail(err instanceof LauncherError ? err.message : err?.stack || String(err));
+  process.stderr.write(
+    `${NOTICE_PREFIX} stage=${stage}; running cached ${PACKAGE}@${cached.version} because latest is unavailable (${shortReason(err)})\n`,
+  );
+  return cached.packageDir;
 }
 
 /** Minimal ustar reader — enough for an `npm pack` tarball, no dependency. */
@@ -86,7 +188,7 @@ function extractTar(gz, destination) {
 
 async function download(version, tarball, integrity) {
   const res = await fetch(tarball, { signal: AbortSignal.timeout(120_000) });
-  if (!res.ok) fail(`download failed (${res.status}) for ${PACKAGE}@${version}`);
+  if (!res.ok) throw new LauncherError('download', `download failed (${res.status}) for ${PACKAGE}@${version}`);
   const bytes = Buffer.from(await res.arrayBuffer());
 
   // The registry states sha512; verify it rather than executing whatever came
@@ -94,7 +196,7 @@ async function download(version, tarball, integrity) {
   if (typeof integrity === 'string' && integrity.startsWith('sha512-')) {
     const digest = createHash('sha512').update(bytes).digest('base64');
     if (digest !== integrity.slice('sha512-'.length)) {
-      fail(`integrity mismatch for ${PACKAGE}@${version}`);
+      throw new LauncherError('download', `integrity mismatch for ${PACKAGE}@${version}`);
     }
   }
 
@@ -115,7 +217,7 @@ async function download(version, tarball, integrity) {
     // that level — extracting into an extra `package/` would nest it twice.
     extractTar(bytes, staging);
     if (!existsSync(join(staging, 'package', ENTRY))) {
-      fail(`${PACKAGE}@${version} did not contain ${ENTRY}`);
+      throw new LauncherError('install', `${PACKAGE}@${version} did not contain ${ENTRY}`);
     }
     // Written before the rename, so a version directory that exists is complete.
     writeFileSync(join(staging, 'complete'), version);
@@ -125,7 +227,7 @@ async function download(version, tarball, integrity) {
       // Losing the race is not an error: the winner's copy is byte-identical
       // (same tarball, same verified digest) and already complete.
       if (!existsSync(join(target, 'complete'))) {
-        fail(`could not install ${PACKAGE}@${version}: ${err?.message || err}`);
+        throw new LauncherError('install', `could not install ${PACKAGE}@${version}: ${err?.message || err}`);
       }
     }
   } finally {
@@ -134,13 +236,27 @@ async function download(version, tarball, integrity) {
   return join(target, 'package');
 }
 
-async function main() {
-  const { version, tarball, integrity } = await fetchLatest();
-  const cached = join(cacheRoot(), version);
-  const packageDir = existsSync(join(cached, 'complete')) && existsSync(join(cached, 'package', ENTRY))
-    ? join(cached, 'package')
-    : await download(version, tarball, integrity);
+/**
+ * The package directory to run. Only resolving and fetching `latest` may fall
+ * back to the cache — never the CLI run itself, which must happen once.
+ */
+async function resolvePackageDir() {
+  let latest;
+  try {
+    latest = await fetchLatest(newestCached() ? METADATA_TIMEOUT_WITH_CACHE_MS : METADATA_TIMEOUT_MS);
+  } catch (err) {
+    return fallBackToCache(err instanceof LauncherError ? err.stage : 'network', err);
+  }
+  const { version, tarball, integrity } = latest;
+  try {
+    return cachedPackage(version) ?? (await download(version, tarball, integrity));
+  } catch (err) {
+    return fallBackToCache(err instanceof LauncherError ? err.stage : 'download', err);
+  }
+}
 
+async function main() {
+  const packageDir = await resolvePackageDir();
   const { run } = await import(pathToFileURL(join(packageDir, ENTRY)).href);
   await run(process.argv.slice(2));
 }

@@ -40,7 +40,7 @@
 文件：`%APPDATA%\ai.vibecafe.vibe-usage.windows\sync-history.json`（与 `settings.json` 同目录），最多 10 条，新的在前，滚动覆盖。每条：开始时间、发起方式（定时 / 手动）、结果（成功 / 失败 / 超时被 App 结束 / CLI 启动阶段失败）、耗时、固定原因。
 
 - 超时：120 秒时 App 结束 CLI，CLI 自己来不及写任何东西，所以只有 App 能记录。
-- CLI 启动阶段失败：没有运行环境、进程启动失败，或引导器 `cli-bootstrap.mjs` 失败（stderr 以固定前缀 `vibe-usage launcher:` 开头）。引导器失败再按固定前缀细分为：连不上 npm 源 / npm 源返回错误 / 下载或校验失败 / 安装失败 / 其他。
+- CLI 启动阶段失败：没有运行环境、进程启动失败，或引导器 `cli-bootstrap.mjs` 失败（stderr 以固定前缀 `vibe-usage launcher:` 开头）。引导器失败再按固定前缀细分为：连不上 npm 源 / npm 源返回错误 / 下载或校验失败 / 安装失败 / 其他。引导器只有在本机缓存里没有可用版本时才会这样失败；有缓存时它改跑缓存里最新的完整版本，并在 stderr 先写一行 `vibe-usage launcher notice: stage=…`。这时 CLI 真的跑了，按 CLI 自己的结果记成功或失败；这行提示在分类和状态栏取错误行之前就被去掉，只留在 `sync.log` 里。
 - 失败：只按这次运行的最终错误行分类，也就是状态栏本来显示的那一行（CLI 的 `✗ …`），不看前面工具输出的非致命警告（例如 `Cursor usage export skipped (HTTP 429 …)`）。Key 被服务器拒绝：CLI 的固定提示「API Key 无效，请运行 … 重新配置。」（部分上传后前面会加「部分完成（已上传 …）: 」），或旧版的 `Invalid API key` / `UNAUTHORIZED`、HTTP 401/403。服务器错误：失败行里的 HTTP 状态码数字。其余记 CLI 退出码，判断不了 Key。
 
 CLI 的输出只用来匹配固定前缀，从不写入记录。记录不含路径、项目名、Key 和任何原文，写入失败不影响同步本身。「重置配置」时删除这个文件；卸载时勾选删除应用数据也会一起删除。CLI 那份同步记录由 CLI 自己负责（`~/.vibe-usage/sync-history.json`，不在本仓库）。

@@ -32,7 +32,7 @@ Windows 应用，自动追踪 AI 编程工具的 Token 用量和费用。App 常
 - 内置 Node 运行时与 CLI 启动器，开箱即用，无需安装 Node.js；CLI 本体在调用时从 npm 解析 `@vibe-cafe/vibe-usage@latest` 并按版本缓存
 - 可在设置中为 Codex、Grok、Antigravity / AGY 添加多个 Multica 或其他隔离运行时目录；各工具默认目录仍会继续扫描
 - 订阅配额读取对齐 macOS：Codex 优先读取实时官方用量、离线回退会话日志；Claude 使用无工具、无提示、无会话持久化的只读探测，不修改 Claude 状态栏配置
-- CLI 不内置、也不固定版本：`src-tauri/resources/cli-bootstrap.mjs` 在每次调用时解析 npm 的 `latest` dist-tag 并缓存该版本，因此上游修复不必等待本仓库发版即可到达用户。这也是 macOS 版一直采用的策略——固定版本的快照会静默落后，0.5.12 就是这样发出去一个只认 DSH V0 的解析器。启动器校验 tarball 的 sha512、校验失败即中止，并用暂存目录 + 原子改名安装，避免调度器与手动同步并发时互相破坏缓存
+- CLI 不内置、也不固定版本：`src-tauri/resources/cli-bootstrap.mjs` 在每次调用时解析 npm 的 `latest` dist-tag 并缓存该版本，因此上游修复不必等待本仓库发版即可到达用户。这也是 macOS 版一直采用的策略——固定版本的快照会静默落后，0.5.12 就是这样发出去一个只认 DSH V0 的解析器。启动器校验 tarball 的 sha512、校验失败即中止，并用暂存目录 + 原子改名安装，避免调度器与手动同步并发时互相破坏缓存。连不上 npm（网络断开、超时、npm 返回错误，或新版下载、校验、安装失败）时，启动器改跑本机缓存里最新的完整版本，同步照常进行；下一次仍先查 `latest`，所以这不是固定版本。缓存里什么都没有时照旧报错
 - workflow_dispatch 生成的外测包可导出严格脱敏的配额诊断；正式 tag Release 不编译诊断实现，设置入口也不会显示
 - 支持开机自启动、单实例、应用内检查更新
 

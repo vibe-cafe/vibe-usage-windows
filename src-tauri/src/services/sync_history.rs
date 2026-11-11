@@ -14,6 +14,10 @@ pub const FILE_NAME: &str = "sync-history.json";
 const LIMIT: usize = 10;
 /// The launcher's own prefix (`cli-bootstrap.mjs` `fail()`): the CLI never ran.
 const LAUNCHER_PREFIX: &str = "vibe-usage launcher:";
+/// The launcher's one-line notice when `latest` was out of reach and it ran
+/// the newest cached CLI instead (`cli-bootstrap.mjs` `fallBackToCache()`).
+/// The CLI did run, so the run is judged by the CLI's own result.
+const NOTICE_PREFIX: &str = "vibe-usage launcher notice:";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -122,6 +126,23 @@ pub fn append(file: &Path, record: SyncRecord) {
         }
         let _ = vibe_core::config::atomic_write(file, &data);
     }
+}
+
+/// stderr without the launcher's cached-CLI notice. The status bar and the
+/// failure category read only what the CLI itself printed: the notice is not
+/// an error, and a run whose only stderr line is the notice still takes its
+/// error line from stdout.
+pub fn without_launcher_notice(stderr: &str) -> String {
+    if !stderr.contains(NOTICE_PREFIX) {
+        return stderr.to_string();
+    }
+    stderr
+        .lines()
+        .filter(|line| !line.trim_start().starts_with(NOTICE_PREFIX))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string()
 }
 
 /// The CLI's own fixed hint when the server rejects the key (`src/sync.js`,
@@ -244,13 +265,26 @@ mod tests {
 
     /// Exactly what `sync_engine::run_cli_sync` does with a failed run.
     fn classify(exit_code: Option<i32>, stdout: &str, stderr: &str) -> (SyncOutcome, SyncReason) {
+        classify_with_line(exit_code, stdout, stderr).0
+    }
+
+    /// The category and the status-bar line, the way `run_cli_sync` gets them.
+    fn classify_with_line(
+        exit_code: Option<i32>,
+        stdout: &str,
+        stderr: &str,
+    ) -> ((SyncOutcome, SyncReason), String) {
+        let stderr = without_launcher_notice(stderr);
         let line = crate::services::sync_engine::extract_error_line(if stderr.is_empty() {
             stdout
         } else {
-            stderr
+            &stderr
         });
-        classify_exit(exit_code, stderr, &line)
+        (classify_exit(exit_code, &stderr, &line), line)
     }
+
+    /// What `cli-bootstrap.mjs` prints before running a cached CLI.
+    const NOTICE: &str = "vibe-usage launcher notice: stage=network; running cached @vibe-cafe/vibe-usage@0.14.11 because latest is unavailable (fetch failed: ETIMEDOUT)";
 
     const KEY_HINT: &str = "API Key 无效，请运行 `npx @vibe-cafe/vibe-usage init` 重新配置。";
     const CURSOR_429: &str = "Cursor usage export skipped (HTTP 429 Too Many Requests)";
@@ -328,6 +362,48 @@ mod tests {
                 "{stderr}"
             );
         }
+    }
+
+    /// The launcher ran a cached CLI because npm was unreachable: the CLI did
+    /// start, so a failure is the CLI's own, never a startup failure, and the
+    /// notice is never what the status bar shows.
+    #[test]
+    fn a_cached_cli_run_is_judged_by_the_cli_not_the_launcher() {
+        assert_eq!(
+            classify_with_line(
+                Some(1),
+                "",
+                &format!("{NOTICE}\n✗ 同步失败: HTTP 502: <html>Bad gateway</html>")
+            ),
+            (
+                (
+                    SyncOutcome::Failed,
+                    SyncReason::ServerStatus { status: 502 }
+                ),
+                "✗ 同步失败: HTTP 502: <html>Bad gateway</html>".to_string()
+            )
+        );
+        assert_eq!(
+            classify(Some(1), "", &format!("{NOTICE}\n✗ {KEY_HINT}")),
+            (SyncOutcome::Failed, SyncReason::KeyRejected)
+        );
+        // Only the notice on stderr: the error line comes from stdout, as it
+        // did before the launcher could fall back.
+        assert_eq!(
+            classify_with_line(Some(2), "Error: could not read state.json", NOTICE),
+            (
+                (SyncOutcome::Failed, SyncReason::CliExit { exit_code: 2 }),
+                "Error: could not read state.json".to_string()
+            )
+        );
+        // Windows line endings and an indented notice are stripped as well.
+        assert_eq!(
+            without_launcher_notice(&format!("  {NOTICE}\r\nCursor usage export skipped\r\n")),
+            "Cursor usage export skipped"
+        );
+        assert_eq!(without_launcher_notice(NOTICE), "");
+        // No notice: stderr is passed on untouched.
+        assert_eq!(without_launcher_notice("  ✗ x\n"), "  ✗ x\n");
     }
 
     #[test]

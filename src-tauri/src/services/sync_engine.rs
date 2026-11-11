@@ -145,7 +145,7 @@ pub async fn run_config_command(app: &AppHandle, args: &[&str]) -> Result<String
     if output.status.success() {
         return Ok(stdout);
     }
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stderr = sync_history::without_launcher_notice(&String::from_utf8_lossy(&output.stderr));
     let message = extract_error_line(&stderr);
     Err(if message.is_empty() {
         format!("CLI 配置操作失败: Exit code {}", output.status.code().unwrap_or(-1))
@@ -361,6 +361,9 @@ async fn run_cli_sync(app: &AppHandle) -> CliRun {
     let stdout = stdout.trim().to_string();
     let stderr = stderr.trim().to_string();
     write_sync_log(app, &status, &stdout, &stderr);
+    // The launcher's notice that it ran a cached CLI is not the CLI's output:
+    // nothing below may read it as the run's error.
+    let stderr = sync_history::without_launcher_notice(&stderr);
 
     if status.success() {
         // "Synced …" / "No new usage data" both count as success.
