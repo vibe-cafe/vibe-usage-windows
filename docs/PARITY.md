@@ -57,7 +57,7 @@
 | 旧 `StatuslineHook` | `crates/core/statusline_hook.rs` 仅用于安全退休本应用可证明归属的旧 hook |
 | 设置「关于」→「诊断信息」：「复制诊断信息」最小本机摘要 + App 本机保留最近 10 次同步摘要（一键诊断 1b；维护者 2026-11-09 在架构审批门批准方案修订二：「可以开工，你派活吧。 1、2、3我都同意。」） | `services/diagnostics.rs`（白名单结构化字段）+ `services/sync_history.rs`（`sync-history.json`）+ `lib/diagnostics.ts`（排版与兜底过滤）；字段、脱敏和存放位置见 `docs/DIAGNOSTICS.md`。macOS 同一功能由 vibe-usage-app 按同一方案实现 |
 | `MenuBarController`（NSStatusItem + NSPanel） | `tray.rs` + `panel.rs`（托盘 + 标准主窗口） |
-| Sparkle | `services/updater.rs`（latest.json + SHA-256 + NSIS） |
+| Sparkle | `services/updater.rs`（latest.json + SHA-256 + NSIS 被动模式覆盖升级，见 `docs/WINDOWS_UPDATE.md`） |
 | `SMAppService`（登录项） | `auto-launch` crate（HKCU Run 注册表键） |
 
 ## 平台差异（有意为之）
@@ -66,7 +66,7 @@
 2. **「在 Dock 中显示」**：Windows 无 Dock，省略此设置项。托盘右键菜单提供「打开面板/立即同步/设置/退出」（Windows 惯例，macOS 无右键菜单，属增强）。
 3. **运行时**：macOS 版要求用户自装 Node/Bun 并用 `npx --yes` 每次联网解析；Windows 版捆绑打过补丁的 CLI 与 Node 22 运行时，离线可同步、版本可控（检测顺序：捆绑 node → 系统 node ≥22.5 → 系统 node ≥20 → bun）。
 4. **Claude 配额**：使用受限的只读官方 CLI 探测，不安装 statusline；启动时只退休旧版本可证明归属的包装器。
-5. **自更新**：Sparkle → 自研（GitHub Releases latest.json、SHA-256 校验、启动 NSIS 安装器）。UI 入口一致（footer「发现更新」+ 设置「检查更新」）。
+5. **自更新**：Sparkle → 自研（GitHub Releases latest.json、SHA-256 校验、带 `/P /UPDATE /R` 启动 NSIS 安装器：只显示进度条、直接覆盖、装完重开）。UI 入口一致（footer「发现更新」+ 设置「检查更新」）。macOS 由 Sparkle 先问一次「安装并重新启动」；Windows 点「发现更新」后不再询问，下载期间按钮显示进度。流程、旧版本过渡和撤回见 `docs/WINDOWS_UPDATE.md`。
 6. **面板关闭按钮**：macOS footer「关闭」= 退出应用（`NSApplication.terminate`）；Windows 同义（退出到无进程）。托盘常驻由开机自启保证。
 7. **配额悬停 tooltip**：交互与内容 1:1；Windows 使用 mouse enter/leave（无 NSTrackingArea 差异）。
 8. **配额卡片数量**：与 0.6.1 相同，不设上限、不折叠；选择顺序即卡片顺序，多于两张时横向滚动。首次启动勾选全部「已检测且已就绪」的产品（ZCode 未配置 Key 时除外，与 macOS 一致）。

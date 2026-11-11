@@ -1,14 +1,54 @@
 //! Self-update — Windows counterpart of Sparkle (custom flow, same as ATM):
 //! fetch latest.json from GitHub Releases, compare versions, download the
-//! NSIS installer, verify SHA-256, launch it and exit.
+//! NSIS installer, verify SHA-256, launch it in update mode and exit.
+//! See docs/WINDOWS_UPDATE.md.
 
 use crate::state::{AppCtx, UpdateInfo};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
+use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{AppHandle, Emitter, Manager};
 
 pub const UPDATE_MANIFEST_URL: &str =
     "https://github.com/vibe-cafe/vibe-usage-windows/releases/latest/download/latest.json";
+
+/// Switches for the Tauri NSIS template, the same ones tauri-plugin-updater
+/// passes: `/P` passive (progress bar only, closes itself), `/UPDATE` overwrite
+/// the installed copy without running the previous uninstaller, `/R` relaunch
+/// the app when done. Approved under the Architecture Approval Gate (Hogan,
+/// 2026-11-11).
+pub const INSTALLER_ARGS: [&str; 3] = ["/P", "/UPDATE", "/R"];
+
+fn installer_command(installer: &Path) -> std::process::Command {
+    crate::process_utils::executable_command(installer, &INSTALLER_ARGS)
+}
+
+/// One install at a time: a second click while the first download is still
+/// running would otherwise start a second passive installer over the same files.
+static INSTALLING: AtomicBool = AtomicBool::new(false);
+
+struct InstallGuard;
+
+impl InstallGuard {
+    fn acquire() -> Option<Self> {
+        INSTALLING
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .ok()
+            .map(|_| InstallGuard)
+    }
+
+    /// The installer is running and the app is exiting: stay locked.
+    fn keep(self) {
+        std::mem::forget(self);
+    }
+}
+
+impl Drop for InstallGuard {
+    fn drop(&mut self) {
+        INSTALLING.store(false, Ordering::Release);
+    }
+}
 
 pub const fn available() -> bool {
     !cfg!(feature = "external-test-diagnostics")
@@ -91,6 +131,7 @@ async fn fetch_update(
 /// Download + verify + launch the installer, then quit so it can replace us.
 pub async fn install(app: &AppHandle) -> Result<(), String> {
     require_updates()?;
+    let guard = InstallGuard::acquire().ok_or("正在下载更新，请稍候")?;
     let info = {
         let ctx = app.state::<AppCtx>();
         let info = ctx.update_info.lock().unwrap().clone();
@@ -128,10 +169,79 @@ pub async fn install(app: &AppHandle) -> Result<(), String> {
     let installer = std::env::temp_dir().join(format!("VibeUsage-{}-Setup.exe", info.version));
     std::fs::write(&installer, &bytes).map_err(|e| format!("写入安装包失败：{e}"))?;
 
-    crate::process_utils::launch_executable(&installer)
+    // Same order as tauri-plugin-updater: start the installer, then quit. The
+    // passive installer closes this app itself if it is still shutting down.
+    installer_command(&installer)
+        .spawn()
         .map_err(|e| format!("启动安装器失败：{e}"))?;
+    guard.keep();
     app.exit(0);
     Ok(())
+}
+
+#[cfg(test)]
+mod installer_tests {
+    use super::*;
+
+    #[test]
+    fn installer_gets_update_switches_in_order() {
+        let installer = Path::new("C:\\Temp\\VibeUsage-9.9.9-Setup.exe");
+        let command = installer_command(installer);
+        assert_eq!(command.get_program(), installer.as_os_str());
+        let args: Vec<_> = command.get_args().collect();
+        assert_eq!(args, ["/P", "/UPDATE", "/R"]);
+    }
+
+    #[test]
+    fn second_install_is_refused_until_the_first_finishes() {
+        let first = InstallGuard::acquire().expect("first install starts");
+        assert!(InstallGuard::acquire().is_none());
+        drop(first);
+        assert!(InstallGuard::acquire().is_some());
+    }
+
+    /// Start a stand-in installer the way `install` does and record the exact
+    /// command line it receives — the string NSIS reads into `$CMDLINE`.
+    #[cfg(windows)]
+    #[test]
+    fn installer_receives_update_switches_through_a_path_with_spaces() {
+        let temporary = tempfile::tempdir().unwrap();
+        let dir = temporary.path().join("Vibe Usage update test");
+        std::fs::create_dir(&dir).unwrap();
+        let installer = dir.join("VibeUsage-9.9.9-Setup.exe");
+        let source = temporary.path().join("echo.cs");
+        let recorded = temporary.path().join("command-line.txt");
+        std::fs::write(
+            &source,
+            "public static class Echo { public static void Main() { \
+             System.IO.File.WriteAllText(System.Environment.GetEnvironmentVariable(\"VIBE_ECHO_OUT\"), \
+             System.Environment.CommandLine); } }",
+        )
+        .unwrap();
+        let built = std::process::Command::new("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "$env:PSModulePath = $PSHOME + '\\Modules'; \
+                 Add-Type -Path $env:VIBE_ECHO_SRC -OutputAssembly $env:VIBE_ECHO_EXE -OutputType ConsoleApplication",
+            ])
+            .env("VIBE_ECHO_SRC", &source)
+            .env("VIBE_ECHO_EXE", &installer)
+            .status()
+            .unwrap();
+        assert!(built.success(), "compile the stand-in installer");
+
+        let status = installer_command(&installer)
+            .env("VIBE_ECHO_OUT", &recorded)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        assert_eq!(
+            std::fs::read_to_string(&recorded).unwrap(),
+            format!("\"{}\" /P /UPDATE /R", installer.display())
+        );
+    }
 }
 
 #[cfg(all(test, feature = "external-test-diagnostics"))]

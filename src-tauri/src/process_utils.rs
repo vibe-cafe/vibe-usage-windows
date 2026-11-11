@@ -51,14 +51,14 @@ pub fn shell_open(target: &str) -> Result<(), String> {
     }
 }
 
-/// Launch a trusted executable path we created ourselves, such as the verified
-/// updater installer. This avoids shell handlers entirely.
-pub fn launch_executable(path: &Path) -> Result<(), String> {
+/// Command for a trusted executable path we created ourselves, such as the
+/// verified updater installer. No shell is involved: each argument reaches the
+/// program as its own token, and the path is quoted for us.
+pub fn executable_command(path: &Path, args: &[&str]) -> Command {
     let mut cmd = Command::new(path);
+    cmd.args(args);
     hide_command_window(&mut cmd);
-    cmd.spawn()
-        .map(|_| ())
-        .map_err(|e| format!("launch failed: {e}"))
+    cmd
 }
 
 /// Windows system proxy from the registry (Internet Settings), as an

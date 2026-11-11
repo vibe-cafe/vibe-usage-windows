@@ -4,6 +4,15 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      kind:
+        description: >-
+          external-test: the separate "Vibe Usage Test" app, never updates.
+          release-candidate: same identity as the released app, for upgrade
+          testing; Actions artifact only, no latest.json.
+        type: choice
+        options: [external-test, release-candidate]
+        default: external-test
 
 permissions:
   actions: read
@@ -12,6 +21,10 @@ permissions:
 jobs:
   build-windows:
     runs-on: windows-2022
+    env:
+      # Only a pushed v* tag builds a release. A manual run always builds a
+      # test kind and never touches the GitHub Release, even on a tag ref.
+      VIBE_USAGE_BUILD_KIND: ${{ github.event_name == 'workflow_dispatch' && inputs.kind || 'release' }}
     steps:
       - uses: actions/checkout@v7
 
@@ -62,8 +75,7 @@ jobs:
           SIGNPATH_ALLOW_UNTRUSTED_SIGNATURE: "true"
           VIBE_USAGE_APP_COMMIT: ${{ github.sha }}
           VIBE_USAGE_APP_BUILD: ${{ github.run_number }}
-          VIBE_USAGE_BUILD_KIND: ${{ github.event_name == 'workflow_dispatch' && 'external-test' || 'release' }}
-          TAURI_FEATURES: ${{ github.event_name == 'workflow_dispatch' && 'external-test-diagnostics' || '' }}
+          TAURI_FEATURES: ${{ env.VIBE_USAGE_BUILD_KIND == 'external-test' && 'external-test-diagnostics' || '' }}
         run: ./scripts/build-tauri-windows.ps1
 
       - name: Collect signed artifacts
@@ -98,14 +110,20 @@ jobs:
             Write-Host "Verified Authenticode signature: $artifact"
           }
 
-          $dest = "VibeUsage-$version-Windows-Setup.exe"
-          Copy-Item $installer.FullName $dest -Force
-
-          node scripts/generate-updater-manifest.mjs $dest
+          if ($env:VIBE_USAGE_BUILD_KIND -eq "release-candidate") {
+            # A candidate carries the released app's identity, so its name says
+            # what it is, and it gets no update manifest that could point users at it.
+            $dest = "VibeUsage-$version-Windows-Candidate-$($env:GITHUB_RUN_NUMBER)-Setup.exe"
+            Copy-Item $installer.FullName $dest -Force
+          } else {
+            $dest = "VibeUsage-$version-Windows-Setup.exe"
+            Copy-Item $installer.FullName $dest -Force
+            node scripts/generate-updater-manifest.mjs $dest
+          }
           "installer=$dest" >> $env:GITHUB_OUTPUT
 
       - name: Upload to Release
-        if: startsWith(github.ref, 'refs/tags/')
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v3
         with:
           files: |
@@ -115,14 +133,14 @@ jobs:
       # Installer and updater manifest are separate artifacts so testers
       # download a zip containing exactly one obvious .exe.
       - name: Upload installer artifact
-        if: "!startsWith(github.ref, 'refs/tags/')"
+        if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v7
         with:
-          name: windows-installer-external-test
+          name: ${{ env.VIBE_USAGE_BUILD_KIND == 'release-candidate' && format('windows-installer-candidate-{0}', github.run_number) || 'windows-installer-external-test' }}
           path: ${{ steps.artifacts.outputs.installer }}
 
       - name: Upload updater manifest artifact
-        if: "!startsWith(github.ref, 'refs/tags/')"
+        if: github.event_name == 'workflow_dispatch' && env.VIBE_USAGE_BUILD_KIND == 'external-test'
         uses: actions/upload-artifact@v7
         with:
           name: updater-manifest

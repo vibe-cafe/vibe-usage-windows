@@ -53,7 +53,7 @@ Windows 开发时通过 `scripts/cargo-windows.ps1` 执行 Cargo 子命令；原
 
 本地外测最简单的方式：解压源码包后双击 `BUILD-WINDOWS-EXTERNAL-TEST.cmd`。首次运行可能通过 winget 安装 Node 22、Rust 1.88、Visual C++ Build Tools 与 Windows SDK；完成后安装包会出现在源码包根目录。外测包使用独立的 “Vibe Usage Test” 应用身份，不会覆盖已安装的正式版。
 
-外测包不启动正式版更新轮询，设置中明确显示不检查更新，后端也拒绝检查和安装更新命令。外测身份不等于账户数据全部隔离：Release 外测仍使用现有 Vibe Usage 账号配置和正式 ZCode 凭据目标，测试前请保留现有状态。完整任务单见 [Windows 原生验收](docs/WINDOWS_ACCEPTANCE.md)。
+外测包不启动正式版更新轮询，设置中明确显示不检查更新，后端也拒绝检查和安装更新命令。要测正式版的升级，用发布流水线手动运行时选的「候选包」（release-candidate），见 [Windows 一键更新](docs/WINDOWS_UPDATE.md)。外测身份不等于账户数据全部隔离：Release 外测仍使用现有 Vibe Usage 账号配置和正式 ZCode 凭据目标，测试前请保留现有状态。完整任务单见 [Windows 原生验收](docs/WINDOWS_ACCEPTANCE.md)。
 
 也可以手动运行：
 
@@ -109,7 +109,7 @@ Rust (Tauri 2)
   ├─ quota_product       只读本地发现 + 两项选择策略（Cursor 待接入）
   ├─ zcode_credentials   Windows Credential Manager 安全存储
   ├─ statusline_hook     仅安全退休旧版本能够证明归属的 Claude hook
-  └─ updater             latest.json + SHA-256 校验 + NSIS 静默升级
+  └─ updater             latest.json + SHA-256 校验 + NSIS 被动模式覆盖升级（/P /UPDATE /R）
 内置资源
   ├─ resources/cli-bootstrap.mjs  CLI 启动器：解析并缓存 npm latest，再用内置 Node 运行
   └─ resources/node      node.exe 22 LTS（scripts/fetch-node.mjs, 构建时下载）
