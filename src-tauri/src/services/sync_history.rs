@@ -98,7 +98,9 @@ pub struct SyncRecord {
     pub reason: Option<SyncReason>,
     /// The launcher could not get `latest` at this stage and ran the newest
     /// cached CLI instead; the outcome above is that CLI's own result. Only
-    /// the stage is kept, never the notice's text or the version.
+    /// the stage is kept, never the notice's text or the version. Approved by
+    /// the maintainer on 2026-11-11 under the architecture approval gate
+    /// (`docs/DIAGNOSTICS.md`, 追加批准).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cli_fallback: Option<LauncherStage>,
 }
