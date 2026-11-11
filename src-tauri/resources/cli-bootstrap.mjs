@@ -44,9 +44,18 @@ const ENTRY = 'src/index.js';
  * which means the CLI did not run at all.
  */
 const NOTICE_PREFIX = 'vibe-usage launcher notice:';
-/** Waiting longer than this for `latest` is pointless when a cached copy can run. */
+/**
+ * How long `latest` may take. The app ends a sync 120 s after starting this
+ * process, so with a cached copy that can stand in the wait is cut short
+ * enough to leave the CLI time to scan and upload: at most 10 + 15 s before
+ * falling back, against a typical sync of about 20 s. The tarball is ~250 KB —
+ * a few seconds on a working route; on a stalled one more waiting does not
+ * help. With nothing cached there is no alternative, so the waits stay long.
+ */
 const METADATA_TIMEOUT_WITH_CACHE_MS = 10_000;
 const METADATA_TIMEOUT_MS = 20_000;
+const DOWNLOAD_TIMEOUT_WITH_CACHE_MS = 15_000;
+const DOWNLOAD_TIMEOUT_MS = 120_000;
 
 /** Where the app keeps its own files; falls back to `~/.vibe-usage`. */
 function cacheRoot() {
@@ -64,6 +73,8 @@ function fail(message) {
  * `download`, `install` (the same words the app's sync history uses); the
  * message is what `fail()` prints when no cached version can stand in, and the
  * app's sync history classifies those messages by their fixed beginnings.
+ * Errors from Node itself keep their own text and get their stage from the
+ * step that threw them (`resolvePackageDir`).
  */
 class LauncherError extends Error {
   constructor(stage, message) {
@@ -72,7 +83,7 @@ class LauncherError extends Error {
   }
 }
 
-/** Anything thrown here that is not a `LauncherError` is a network failure. */
+/** Anything thrown here without a `stage` is a network failure. */
 async function fetchLatest(timeoutMs) {
   const res = await fetch(METADATA_URL, { signal: AbortSignal.timeout(timeoutMs) });
   if (!res.ok) throw new LauncherError('registry', `registry returned ${res.status} for ${PACKAGE}@latest`);
@@ -80,10 +91,11 @@ async function fetchLatest(timeoutMs) {
   try {
     manifest = await res.json();
   } catch (err) {
-    // A captive portal or proxy page can answer 200 with HTML; a dropped
-    // connection fails the body read itself and stays a network failure.
-    if (err?.name !== 'SyntaxError') throw err;
-    throw new LauncherError('registry', `registry answered with unreadable metadata for ${PACKAGE}@latest`);
+    // A captive portal or proxy page can answer 200 with HTML: a registry
+    // problem for the fallback, while with nothing cached the original error
+    // is still what gets printed. A dropped connection fails the body read
+    // itself and stays a network failure.
+    throw err?.name === 'SyntaxError' ? Object.assign(err, { stage: 'registry' }) : err;
   }
   if (typeof manifest?.version !== 'string' || typeof manifest?.dist?.tarball !== 'string') {
     throw new LauncherError('registry', `registry answered without a version/tarball for ${PACKAGE}@latest`);
@@ -186,8 +198,9 @@ function extractTar(gz, destination) {
   }
 }
 
-async function download(version, tarball, integrity) {
-  const res = await fetch(tarball, { signal: AbortSignal.timeout(120_000) });
+/** The verified tarball bytes; any failure here is the `download` stage. */
+async function downloadTarball(version, tarball, integrity, timeoutMs) {
+  const res = await fetch(tarball, { signal: AbortSignal.timeout(timeoutMs) });
   if (!res.ok) throw new LauncherError('download', `download failed (${res.status}) for ${PACKAGE}@${version}`);
   const bytes = Buffer.from(await res.arrayBuffer());
 
@@ -199,7 +212,11 @@ async function download(version, tarball, integrity) {
       throw new LauncherError('download', `integrity mismatch for ${PACKAGE}@${version}`);
     }
   }
+  return bytes;
+}
 
+/** Unpacks into the cache; any failure here is the `install` stage. */
+function install(version, bytes) {
   const target = join(cacheRoot(), version);
   // A sync from the scheduler, a manual sync and a quota fetch can all start at
   // once, so the tree is built in a private staging directory and moved into
@@ -241,17 +258,31 @@ async function download(version, tarball, integrity) {
  * back to the cache — never the CLI run itself, which must happen once.
  */
 async function resolvePackageDir() {
+  const hasCache = newestCached() !== null;
   let latest;
   try {
-    latest = await fetchLatest(newestCached() ? METADATA_TIMEOUT_WITH_CACHE_MS : METADATA_TIMEOUT_MS);
+    latest = await fetchLatest(hasCache ? METADATA_TIMEOUT_WITH_CACHE_MS : METADATA_TIMEOUT_MS);
   } catch (err) {
-    return fallBackToCache(err instanceof LauncherError ? err.stage : 'network', err);
+    return fallBackToCache(err?.stage ?? 'network', err);
   }
   const { version, tarball, integrity } = latest;
+  const cached = cachedPackage(version);
+  if (cached) return cached;
+  let bytes;
   try {
-    return cachedPackage(version) ?? (await download(version, tarball, integrity));
+    bytes = await downloadTarball(
+      version,
+      tarball,
+      integrity,
+      hasCache ? DOWNLOAD_TIMEOUT_WITH_CACHE_MS : DOWNLOAD_TIMEOUT_MS,
+    );
   } catch (err) {
-    return fallBackToCache(err instanceof LauncherError ? err.stage : 'download', err);
+    return fallBackToCache(err?.stage ?? 'download', err);
+  }
+  try {
+    return install(version, bytes);
+  } catch (err) {
+    return fallBackToCache(err?.stage ?? 'install', err);
   }
 }
 
