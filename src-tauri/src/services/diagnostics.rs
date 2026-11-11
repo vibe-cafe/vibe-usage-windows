@@ -849,6 +849,7 @@ mod tests {
                 outcome: SyncOutcome::TimedOut,
                 duration_ms: 120_000,
                 reason: None,
+                cli_fallback: None,
             }],
             quotas: vec![],
             claude: ClaudeInfo {
@@ -881,6 +882,7 @@ mod tests {
             outcome,
             duration_ms,
             reason,
+            cli_fallback: None,
         };
         let card = |provider, status, source, live_failure, empty_reason, meter_count| QuotaCard {
             provider,
@@ -935,6 +937,10 @@ mod tests {
                 last_success_at: Some(AT - 50 * minute),
             },
             syncs: vec![
+                SyncRecord {
+                    cli_fallback: Some(LauncherStage::Network),
+                    ..sync(5, SyncTrigger::Scheduled, SyncOutcome::Success, 14_000, None)
+                },
                 sync(
                     10,
                     SyncTrigger::Scheduled,

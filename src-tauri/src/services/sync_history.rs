@@ -96,6 +96,11 @@ pub struct SyncRecord {
     pub duration_ms: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<SyncReason>,
+    /// The launcher could not get `latest` at this stage and ran the newest
+    /// cached CLI instead; the outcome above is that CLI's own result. Only
+    /// the stage is kept, never the notice's text or the version.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cli_fallback: Option<LauncherStage>,
 }
 
 pub fn path_in(config_dir: &Path) -> PathBuf {
@@ -126,6 +131,28 @@ pub fn append(file: &Path, record: SyncRecord) {
         }
         let _ = vibe_core::config::atomic_write(file, &data);
     }
+}
+
+/// The stage named by the launcher's cached-CLI notice (`stage=network;`),
+/// if the run had one. Only the fixed word is read; an unknown word is
+/// `Other` so a newer launcher cannot hide that it fell back.
+pub fn launcher_fallback(stderr: &str) -> Option<LauncherStage> {
+    let rest = stderr
+        .lines()
+        .map(str::trim)
+        .find_map(|line| line.strip_prefix(NOTICE_PREFIX))?;
+    let word = rest
+        .trim_start()
+        .strip_prefix("stage=")
+        .and_then(|value| value.split(|c: char| !c.is_ascii_lowercase()).next())
+        .unwrap_or("");
+    Some(match word {
+        "network" => LauncherStage::Network,
+        "registry" => LauncherStage::Registry,
+        "download" => LauncherStage::Download,
+        "install" => LauncherStage::Install,
+        _ => LauncherStage::Other,
+    })
 }
 
 /// stderr without the launcher's cached-CLI notice. The status bar and the
@@ -296,6 +323,7 @@ mod tests {
             outcome,
             duration_ms: 1000,
             reason,
+            cli_fallback: None,
         }
     }
 
@@ -407,6 +435,36 @@ mod tests {
     }
 
     #[test]
+    fn the_cached_cli_notice_keeps_only_its_stage() {
+        for (word, stage) in [
+            ("network", LauncherStage::Network),
+            ("registry", LauncherStage::Registry),
+            ("download", LauncherStage::Download),
+            ("install", LauncherStage::Install),
+            ("somethingnew", LauncherStage::Other),
+        ] {
+            let stderr = format!(
+                "vibe-usage launcher notice: stage={word}; running cached @vibe-cafe/vibe-usage@0.14.11 because latest is unavailable (x)\n✗ 同步失败: y"
+            );
+            assert_eq!(launcher_fallback(&stderr), Some(stage), "{word}");
+        }
+        assert_eq!(
+            launcher_fallback(&format!("Cursor usage export skipped\r\n  {NOTICE}\r\n")),
+            Some(LauncherStage::Network)
+        );
+        assert_eq!(
+            launcher_fallback("vibe-usage launcher notice: running cached"),
+            Some(LauncherStage::Other)
+        );
+        // A launcher failure is not a fallback: the CLI never ran.
+        assert_eq!(
+            launcher_fallback("vibe-usage launcher: TypeError: fetch failed"),
+            None
+        );
+        assert_eq!(launcher_fallback("✗ 同步失败: fetch failed"), None);
+    }
+
+    #[test]
     fn cli_failures_keep_only_a_category_and_a_number() {
         assert_eq!(
             classify(Some(1), "", "Error: Invalid API key"),
@@ -494,10 +552,14 @@ mod tests {
     fn stored_records_hold_no_free_text() {
         let dir = tempfile::tempdir().unwrap();
         let file = path_in(dir.path());
+        let stderr_with_notice = &format!(
+            "{}\nError: HTTP 500: token sk-ant-api03-SECRET Bearer eyJhbGciOi.payload.sig",
+            NOTICE.replace("ETIMEDOUT", r"ETIMEDOUT C:\Users\张 三\AppData")
+        );
         let (outcome, reason) = classify(
             Some(1),
             "Synced for 张三 at C:\\Users\\张 三",
-            "Error: HTTP 500: token sk-ant-api03-SECRET Bearer eyJhbGciOi.payload.sig",
+            stderr_with_notice,
         );
         append(
             &file,
@@ -507,13 +569,17 @@ mod tests {
                 outcome,
                 duration_ms: 2500,
                 reason: Some(reason),
+                cli_fallback: launcher_fallback(stderr_with_notice),
             },
         );
         let text = std::fs::read_to_string(&file).unwrap();
-        for secret in ["张", "Users", "sk-ant", "Bearer", "eyJ", "Synced"] {
+        for secret in [
+            "张", "Users", "sk-ant", "Bearer", "eyJ", "Synced", "0.14.11", "ETIMEDOUT", "notice",
+        ] {
             assert!(!text.contains(secret), "{secret} leaked: {text}");
         }
         assert!(text.contains("\"serverStatus\""));
+        assert!(text.contains("\"cliFallback\": \"network\""));
     }
 
     #[test]
@@ -572,6 +638,24 @@ mod tests {
             .unwrap(),
             serde_json::json!({"code": "launcher", "stage": "network"})
         );
+        // Records written before the cached-CLI fallback have no such field.
+        let before: SyncRecord = serde_json::from_value(serde_json::json!({
+            "startedAt": 1, "trigger": "scheduled", "outcome": "success", "durationMs": 9
+        }))
+        .unwrap();
+        assert_eq!(before.cli_fallback, None);
+        let with_fallback = SyncRecord {
+            cli_fallback: Some(LauncherStage::Download),
+            ..before
+        };
+        assert_eq!(
+            serde_json::to_value(with_fallback).unwrap()["cliFallback"],
+            serde_json::json!("download")
+        );
+        assert!(serde_json::to_value(before)
+            .unwrap()
+            .get("cliFallback")
+            .is_none());
         // A record written by the first build of this feature.
         let old: SyncReason =
             serde_json::from_value(serde_json::json!({"code": "cliExit", "exit_code": 7})).unwrap();

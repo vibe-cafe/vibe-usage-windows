@@ -6,7 +6,9 @@
 //! bundled: a pinned copy rots silently and freezes users out of every CLI fix,
 //! which is the policy the macOS app already follows (`@latest` only).
 use crate::process_utils;
-use crate::services::sync_history::{self, SyncOutcome, SyncReason, SyncRecord, SyncTrigger};
+use crate::services::sync_history::{
+    self, LauncherStage, SyncOutcome, SyncReason, SyncRecord, SyncTrigger,
+};
 use crate::state::{AppCtx, SyncState, SyncStatus};
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -257,6 +259,7 @@ async fn run_sync_once(app: AppHandle) {
                 outcome: run.outcome,
                 duration_ms: started.elapsed().as_millis() as u64,
                 reason: run.reason,
+                cli_fallback: run.cli_fallback,
             },
         );
     }
@@ -295,6 +298,8 @@ struct CliRun {
     message: Result<String, String>,
     outcome: SyncOutcome,
     reason: Option<SyncReason>,
+    /// The launcher ran a cached CLI because `latest` was out of reach.
+    cli_fallback: Option<LauncherStage>,
 }
 
 impl CliRun {
@@ -303,6 +308,7 @@ impl CliRun {
             message: Err(message),
             outcome,
             reason,
+            cli_fallback: None,
         }
     }
 }
@@ -362,7 +368,11 @@ async fn run_cli_sync(app: &AppHandle) -> CliRun {
     let stderr = stderr.trim().to_string();
     write_sync_log(app, &status, &stdout, &stderr);
     // The launcher's notice that it ran a cached CLI is not the CLI's output:
-    // nothing below may read it as the run's error.
+    // only its stage is kept, and nothing below may read it as the run's error.
+    let cli_fallback = sync_history::launcher_fallback(&stderr);
+    if let Some(stage) = cli_fallback {
+        log::info!("latest CLI unavailable ({stage:?}); the launcher ran its newest cached version");
+    }
     let stderr = sync_history::without_launcher_notice(&stderr);
 
     if status.success() {
@@ -371,6 +381,7 @@ async fn run_cli_sync(app: &AppHandle) -> CliRun {
             message: Ok(if stdout.is_empty() { "同步完成".into() } else { stdout }),
             outcome: SyncOutcome::Success,
             reason: None,
+            cli_fallback,
         };
     }
     // The line the status bar shows is the run's final error; the history
@@ -390,7 +401,10 @@ async fn run_cli_sync(app: &AppHandle) -> CliRun {
             }
         )
     };
-    CliRun::failed(message, outcome, Some(reason))
+    CliRun {
+        cli_fallback,
+        ..CliRun::failed(message, outcome, Some(reason))
+    }
 }
 
 /// Drain stdout and stderr at the same time. Reading stdout to EOF before
