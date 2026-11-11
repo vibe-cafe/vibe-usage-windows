@@ -32,3 +32,28 @@ export function updateFailureReason(error: unknown): string {
   const text = error instanceof Error ? error.message : String(error ?? "");
   return text.trim() || "未知错误";
 }
+
+/**
+ * The button's click handler. A click while one install is in flight is
+ * ignored (a double click can land before the disabled state re-renders); a
+ * failure unlocks it so the next click retries; success keeps it locked while
+ * the app quits for the installer.
+ */
+export function createUpdateRunner(
+  install: () => Promise<void>,
+  onPhase: (phase: UpdatePhase) => void,
+): () => Promise<void> {
+  let busy = false;
+  return async () => {
+    if (busy) return;
+    busy = true;
+    onPhase({ kind: "downloading" });
+    try {
+      await install();
+      onPhase({ kind: "launching" });
+    } catch (error) {
+      busy = false;
+      onPhase({ kind: "failed", reason: updateFailureReason(error) });
+    }
+  };
+}

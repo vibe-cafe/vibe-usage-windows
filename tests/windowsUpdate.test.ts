@@ -1,6 +1,8 @@
 import { describe, expect, test } from "vitest";
 import { readFileSync } from "node:fs";
 import {
+  type UpdatePhase,
+  createUpdateRunner,
   updateButtonEnabled,
   updateButtonLabel,
   updateFailureReason,
@@ -83,6 +85,43 @@ describe("footer update button", () => {
     expect(updateButtonEnabled({ kind: "downloading" })).toBe(false);
     expect(updateButtonEnabled({ kind: "launching" })).toBe(false);
     expect(updateButtonEnabled({ kind: "failed", reason: "x" })).toBe(true);
+  });
+
+  test("a failed install unlocks the button and the next click retries", async () => {
+    const phases: UpdatePhase[] = [];
+    let fail = true;
+    let calls = 0;
+    let finish!: () => void;
+    const install = () => {
+      calls += 1;
+      if (fail) return Promise.reject("下载失败：timeout");
+      return new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+    };
+    const click = createUpdateRunner(install, (phase) => phases.push(phase));
+
+    await click();
+    expect(calls).toBe(1);
+    expect(phases).toEqual([
+      { kind: "downloading" },
+      { kind: "failed", reason: "下载失败：timeout" },
+    ]);
+    expect(updateButtonEnabled(phases[phases.length - 1])).toBe(true);
+
+    fail = false;
+    const retry = click();
+    // A double click while the retry is still downloading starts nothing.
+    await click();
+    expect(calls).toBe(2);
+    expect(updateButtonEnabled(phases[phases.length - 1])).toBe(false);
+
+    finish();
+    await retry;
+    expect(phases.slice(2)).toEqual([{ kind: "downloading" }, { kind: "launching" }]);
+    // The app is quitting for the installer: further clicks stay ignored.
+    await click();
+    expect(calls).toBe(2);
   });
 
   test("uses the backend's message as the reason", () => {

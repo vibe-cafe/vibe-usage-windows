@@ -2,16 +2,16 @@
 // Note: 关闭 quits the app, exactly like the macOS footer's power button
 // (NSApplication.terminate) — it is NOT "close panel".
 
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { AlertCircle, ArrowUpCircle, CheckCircle2, Power, RotateCw } from "lucide-react";
 import { api } from "../lib/api";
 import { useAppState } from "../state/AppStateContext";
 import { formatRelativeTime } from "../lib/formatters";
 import {
   type UpdatePhase,
+  createUpdateRunner,
   updateButtonEnabled,
   updateButtonLabel,
-  updateFailureReason,
 } from "../lib/updateButton";
 
 export function FooterBar() {
@@ -19,22 +19,7 @@ export function FooterBar() {
   const { syncState, updateInfo } = state;
   const syncing = state.configured && syncState.status === "syncing";
   const [updatePhase, setUpdatePhase] = useState<UpdatePhase>({ kind: "idle" });
-  // Guards a double click that lands before the disabled state re-renders.
-  const installing = useRef(false);
-
-  const startUpdate = async () => {
-    if (installing.current) return;
-    installing.current = true;
-    setUpdatePhase({ kind: "downloading" });
-    try {
-      await api.installUpdate();
-      // The installer is running and the app is quitting.
-      setUpdatePhase({ kind: "launching" });
-    } catch (error) {
-      installing.current = false;
-      setUpdatePhase({ kind: "failed", reason: updateFailureReason(error) });
-    }
-  };
+  const [startUpdate] = useState(() => createUpdateRunner(api.installUpdate, setUpdatePhase));
 
   return (
     <div className="flex items-center">
