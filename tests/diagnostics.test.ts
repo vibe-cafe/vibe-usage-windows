@@ -175,6 +175,40 @@ describe("copyable diagnostics report", () => {
     expect(text).toContain("CLI 启动阶段失败（运行环境不可用）");
   });
 
+  it("reports a run on the cached CLI by its own result plus the reason", () => {
+    const at = (minutes: number) => NOW - minutes * 60_000;
+    const text = buildDiagnosticsText(
+      report({
+        syncs: [
+          { startedAt: at(1), trigger: "scheduled", outcome: "success", durationMs: 9_000, cliFallback: "network" },
+          {
+            startedAt: at(2),
+            trigger: "manual",
+            outcome: "failed",
+            durationMs: 2_000,
+            reason: { code: "serverStatus", status: 502 },
+            cliFallback: "download",
+          },
+          { startedAt: at(3), trigger: "scheduled", outcome: "success", durationMs: 9_000, cliFallback: "registry" },
+          { startedAt: at(4), trigger: "scheduled", outcome: "success", durationMs: 9_000, cliFallback: "install" },
+          { startedAt: at(5), trigger: "scheduled", outcome: "success", durationMs: 9_000, cliFallback: "other" },
+          { startedAt: at(6), trigger: "scheduled", outcome: "success", durationMs: 9_000, cliFallback: null },
+        ],
+      }),
+      products,
+    );
+    const lines = text.split("\n").filter((line) => line.includes(" · ") && /^\s+\d\d-\d\d/.test(line));
+    expect(lines.map((line) => line.replace(/^\s+\d\d-\d\d \d\d:\d\d /, ""))).toEqual([
+      "定时 · 成功 · 用了本机缓存的 CLI（连不上 npm 源） · 9.0s",
+      "手动 · 失败（服务器错误 502） · 用了本机缓存的 CLI（新版下载或校验失败） · 2.0s",
+      "定时 · 成功 · 用了本机缓存的 CLI（npm 源返回错误） · 9.0s",
+      "定时 · 成功 · 用了本机缓存的 CLI（新版安装失败） · 9.0s",
+      "定时 · 成功 · 用了本机缓存的 CLI（原因未知） · 9.0s",
+      "定时 · 成功 · 9.0s",
+    ]);
+    expect(text).not.toContain("CLI 启动阶段失败");
+  });
+
   it("drops every free string that does not have its expected shape", () => {
     const hostile = report({
       app: { version: "0.7.5 C:\\Users\\张 三\\My Projects", build: "release" },
@@ -308,6 +342,7 @@ describe("Rust ↔ TypeScript diagnostics contract", () => {
       "账号：已配置 Key · 最近一次同步无法判断 Key 是否被拒 · 设备标签 7c2e",
       "网络：系统代理：有（本机地址） · 已传给同步 · 未传给 Claude 配额读取 · 自动代理脚本：有",
       "代理变量：HTTPS_PROXY 用户变量有 · HTTP_PROXY 无 · ALL_PROXY 系统变量有",
+      "定时 · 成功 · 用了本机缓存的 CLI（连不上 npm 源） · 14s",
       "定时 · CLI 启动阶段失败（引导器连不上 npm 源） · 21s",
       "手动 · 超时，2m00s 时被 App 结束",
       "定时 · 失败（CLI 退出码 3） · 3.0s",

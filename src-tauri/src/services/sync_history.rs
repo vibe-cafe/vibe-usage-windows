@@ -14,6 +14,10 @@ pub const FILE_NAME: &str = "sync-history.json";
 const LIMIT: usize = 10;
 /// The launcher's own prefix (`cli-bootstrap.mjs` `fail()`): the CLI never ran.
 const LAUNCHER_PREFIX: &str = "vibe-usage launcher:";
+/// The launcher's one-line notice when `latest` was out of reach and it ran
+/// the newest cached CLI instead (`cli-bootstrap.mjs` `fallBackToCache()`).
+/// The CLI did run, so the run is judged by the CLI's own result.
+const NOTICE_PREFIX: &str = "vibe-usage launcher notice:";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -92,6 +96,13 @@ pub struct SyncRecord {
     pub duration_ms: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<SyncReason>,
+    /// The launcher could not get `latest` at this stage and ran the newest
+    /// cached CLI instead; the outcome above is that CLI's own result. Only
+    /// the stage is kept, never the notice's text or the version. Approved by
+    /// the maintainer on 2026-11-11 under the architecture approval gate
+    /// (`docs/DIAGNOSTICS.md`, 追加批准).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cli_fallback: Option<LauncherStage>,
 }
 
 pub fn path_in(config_dir: &Path) -> PathBuf {
@@ -122,6 +133,45 @@ pub fn append(file: &Path, record: SyncRecord) {
         }
         let _ = vibe_core::config::atomic_write(file, &data);
     }
+}
+
+/// The stage named by the launcher's cached-CLI notice (`stage=network;`),
+/// if the run had one. Only the fixed word is read; an unknown word is
+/// `Other` so a newer launcher cannot hide that it fell back.
+pub fn launcher_fallback(stderr: &str) -> Option<LauncherStage> {
+    let rest = stderr
+        .lines()
+        .map(str::trim)
+        .find_map(|line| line.strip_prefix(NOTICE_PREFIX))?;
+    let word = rest
+        .trim_start()
+        .strip_prefix("stage=")
+        .and_then(|value| value.split(|c: char| !c.is_ascii_lowercase()).next())
+        .unwrap_or("");
+    Some(match word {
+        "network" => LauncherStage::Network,
+        "registry" => LauncherStage::Registry,
+        "download" => LauncherStage::Download,
+        "install" => LauncherStage::Install,
+        _ => LauncherStage::Other,
+    })
+}
+
+/// stderr without the launcher's cached-CLI notice. The status bar and the
+/// failure category read only what the CLI itself printed: the notice is not
+/// an error, and a run whose only stderr line is the notice still takes its
+/// error line from stdout.
+pub fn without_launcher_notice(stderr: &str) -> String {
+    if !stderr.contains(NOTICE_PREFIX) {
+        return stderr.to_string();
+    }
+    stderr
+        .lines()
+        .filter(|line| !line.trim_start().starts_with(NOTICE_PREFIX))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string()
 }
 
 /// The CLI's own fixed hint when the server rejects the key (`src/sync.js`,
@@ -244,13 +294,26 @@ mod tests {
 
     /// Exactly what `sync_engine::run_cli_sync` does with a failed run.
     fn classify(exit_code: Option<i32>, stdout: &str, stderr: &str) -> (SyncOutcome, SyncReason) {
+        classify_with_line(exit_code, stdout, stderr).0
+    }
+
+    /// The category and the status-bar line, the way `run_cli_sync` gets them.
+    fn classify_with_line(
+        exit_code: Option<i32>,
+        stdout: &str,
+        stderr: &str,
+    ) -> ((SyncOutcome, SyncReason), String) {
+        let stderr = without_launcher_notice(stderr);
         let line = crate::services::sync_engine::extract_error_line(if stderr.is_empty() {
             stdout
         } else {
-            stderr
+            &stderr
         });
-        classify_exit(exit_code, stderr, &line)
+        (classify_exit(exit_code, &stderr, &line), line)
     }
+
+    /// What `cli-bootstrap.mjs` prints before running a cached CLI.
+    const NOTICE: &str = "vibe-usage launcher notice: stage=network; running cached @vibe-cafe/vibe-usage@0.14.11 because latest is unavailable (fetch failed: ETIMEDOUT)";
 
     const KEY_HINT: &str = "API Key 无效，请运行 `npx @vibe-cafe/vibe-usage init` 重新配置。";
     const CURSOR_429: &str = "Cursor usage export skipped (HTTP 429 Too Many Requests)";
@@ -262,6 +325,7 @@ mod tests {
             outcome,
             duration_ms: 1000,
             reason,
+            cli_fallback: None,
         }
     }
 
@@ -328,6 +392,78 @@ mod tests {
                 "{stderr}"
             );
         }
+    }
+
+    /// The launcher ran a cached CLI because npm was unreachable: the CLI did
+    /// start, so a failure is the CLI's own, never a startup failure, and the
+    /// notice is never what the status bar shows.
+    #[test]
+    fn a_cached_cli_run_is_judged_by_the_cli_not_the_launcher() {
+        assert_eq!(
+            classify_with_line(
+                Some(1),
+                "",
+                &format!("{NOTICE}\n✗ 同步失败: HTTP 502: <html>Bad gateway</html>")
+            ),
+            (
+                (
+                    SyncOutcome::Failed,
+                    SyncReason::ServerStatus { status: 502 }
+                ),
+                "✗ 同步失败: HTTP 502: <html>Bad gateway</html>".to_string()
+            )
+        );
+        assert_eq!(
+            classify(Some(1), "", &format!("{NOTICE}\n✗ {KEY_HINT}")),
+            (SyncOutcome::Failed, SyncReason::KeyRejected)
+        );
+        // Only the notice on stderr: the error line comes from stdout, as it
+        // did before the launcher could fall back.
+        assert_eq!(
+            classify_with_line(Some(2), "Error: could not read state.json", NOTICE),
+            (
+                (SyncOutcome::Failed, SyncReason::CliExit { exit_code: 2 }),
+                "Error: could not read state.json".to_string()
+            )
+        );
+        // Windows line endings and an indented notice are stripped as well.
+        assert_eq!(
+            without_launcher_notice(&format!("  {NOTICE}\r\nCursor usage export skipped\r\n")),
+            "Cursor usage export skipped"
+        );
+        assert_eq!(without_launcher_notice(NOTICE), "");
+        // No notice: stderr is passed on untouched.
+        assert_eq!(without_launcher_notice("  ✗ x\n"), "  ✗ x\n");
+    }
+
+    #[test]
+    fn the_cached_cli_notice_keeps_only_its_stage() {
+        for (word, stage) in [
+            ("network", LauncherStage::Network),
+            ("registry", LauncherStage::Registry),
+            ("download", LauncherStage::Download),
+            ("install", LauncherStage::Install),
+            ("somethingnew", LauncherStage::Other),
+        ] {
+            let stderr = format!(
+                "vibe-usage launcher notice: stage={word}; running cached @vibe-cafe/vibe-usage@0.14.11 because latest is unavailable (x)\n✗ 同步失败: y"
+            );
+            assert_eq!(launcher_fallback(&stderr), Some(stage), "{word}");
+        }
+        assert_eq!(
+            launcher_fallback(&format!("Cursor usage export skipped\r\n  {NOTICE}\r\n")),
+            Some(LauncherStage::Network)
+        );
+        assert_eq!(
+            launcher_fallback("vibe-usage launcher notice: running cached"),
+            Some(LauncherStage::Other)
+        );
+        // A launcher failure is not a fallback: the CLI never ran.
+        assert_eq!(
+            launcher_fallback("vibe-usage launcher: TypeError: fetch failed"),
+            None
+        );
+        assert_eq!(launcher_fallback("✗ 同步失败: fetch failed"), None);
     }
 
     #[test]
@@ -418,10 +554,14 @@ mod tests {
     fn stored_records_hold_no_free_text() {
         let dir = tempfile::tempdir().unwrap();
         let file = path_in(dir.path());
+        let stderr_with_notice = &format!(
+            "{}\nError: HTTP 500: token sk-ant-api03-SECRET Bearer eyJhbGciOi.payload.sig",
+            NOTICE.replace("ETIMEDOUT", r"ETIMEDOUT C:\Users\张 三\AppData")
+        );
         let (outcome, reason) = classify(
             Some(1),
             "Synced for 张三 at C:\\Users\\张 三",
-            "Error: HTTP 500: token sk-ant-api03-SECRET Bearer eyJhbGciOi.payload.sig",
+            stderr_with_notice,
         );
         append(
             &file,
@@ -431,13 +571,17 @@ mod tests {
                 outcome,
                 duration_ms: 2500,
                 reason: Some(reason),
+                cli_fallback: launcher_fallback(stderr_with_notice),
             },
         );
         let text = std::fs::read_to_string(&file).unwrap();
-        for secret in ["张", "Users", "sk-ant", "Bearer", "eyJ", "Synced"] {
+        for secret in [
+            "张", "Users", "sk-ant", "Bearer", "eyJ", "Synced", "0.14.11", "ETIMEDOUT", "notice",
+        ] {
             assert!(!text.contains(secret), "{secret} leaked: {text}");
         }
         assert!(text.contains("\"serverStatus\""));
+        assert!(text.contains("\"cliFallback\": \"network\""));
     }
 
     #[test]
@@ -496,6 +640,24 @@ mod tests {
             .unwrap(),
             serde_json::json!({"code": "launcher", "stage": "network"})
         );
+        // Records written before the cached-CLI fallback have no such field.
+        let before: SyncRecord = serde_json::from_value(serde_json::json!({
+            "startedAt": 1, "trigger": "scheduled", "outcome": "success", "durationMs": 9
+        }))
+        .unwrap();
+        assert_eq!(before.cli_fallback, None);
+        let with_fallback = SyncRecord {
+            cli_fallback: Some(LauncherStage::Download),
+            ..before
+        };
+        assert_eq!(
+            serde_json::to_value(with_fallback).unwrap()["cliFallback"],
+            serde_json::json!("download")
+        );
+        assert!(serde_json::to_value(before)
+            .unwrap()
+            .get("cliFallback")
+            .is_none());
         // A record written by the first build of this feature.
         let old: SyncReason =
             serde_json::from_value(serde_json::json!({"code": "cliExit", "exit_code": 7})).unwrap();

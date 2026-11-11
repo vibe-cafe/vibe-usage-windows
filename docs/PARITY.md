@@ -75,7 +75,7 @@
 
 ## CLI Windows 适配（不再内置快照）
 
-应用不再内置 CLI：`src-tauri/resources/cli-bootstrap.mjs` 在每次调用时解析 npm `latest`、校验 sha512 后缓存并用内置 Node 运行。原先由 `scripts/vendor-cli.mjs` 打的那批 Windows 补丁已随 `windows-support` PR 进入上游（`src/init.js` 的 `cmd /c start`、`codex.js` / `qwen-code.js` 的反斜杠 cwd、`opencode-roots.js` 的 `%LOCALAPPDATA%\opencode`、`amp.js` 的 `%LOCALAPPDATA%\amp\threads`，以及 `config.json` / `state.json` 被误建成目录时的自愈）。
+应用不再内置 CLI：`src-tauri/resources/cli-bootstrap.mjs` 在每次调用时解析 npm `latest`、校验 sha512 后缓存并用内置 Node 运行。解析或下载 `latest` 失败时改跑缓存里最新的完整版本（缓存为空时照旧失败），国内访问 npm 时断时续也不会让同步失败；macOS 版经 `bun x` / `npx` 运行，目前没有这层退路。原先由 `scripts/vendor-cli.mjs` 打的那批 Windows 补丁已随 `windows-support` PR 进入上游（`src/init.js` 的 `cmd /c start`、`codex.js` / `qwen-code.js` 的反斜杠 cwd、`opencode-roots.js` 的 `%LOCALAPPDATA%\opencode`、`amp.js` 的 `%LOCALAPPDATA%\amp\threads`，以及 `config.json` / `state.json` 被误建成目录时的自愈）。
 
 两处不属于"已上游"：
 

@@ -168,6 +168,13 @@
   "schemaVersion": 1,
   "syncs": [
     {
+      "cliFallback": "network",
+      "durationMs": 14000,
+      "outcome": "success",
+      "startedAt": 1794205620000,
+      "trigger": "scheduled"
+    },
+    {
       "durationMs": 21000,
       "outcome": "cliStartupFailed",
       "reason": {

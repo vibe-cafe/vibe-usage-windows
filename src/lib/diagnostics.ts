@@ -35,6 +35,8 @@ export interface SyncRecord {
   outcome: SyncOutcome;
   durationMs: number;
   reason?: SyncReason | null;
+  /** The launcher ran its newest cached CLI because `latest` was out of reach here. */
+  cliFallback?: LauncherStage | null;
 }
 
 export type LaunchOrigin =
@@ -231,7 +233,24 @@ function syncLine(record: SyncRecord): string {
     default:
       result = `失败（${failureReason(reason)}）`;
   }
-  return `${when} ${trigger} · ${result} · ${seconds(record.durationMs)}`;
+  const fallback = record.cliFallback ? ` · 用了本机缓存的 CLI（${fallbackReason(record.cliFallback)}）` : "";
+  return `${when} ${trigger} · ${result}${fallback} · ${seconds(record.durationMs)}`;
+}
+
+/** Why the launcher ran a cached CLI; the run's own result is reported as usual. */
+function fallbackReason(stage: LauncherStage): string {
+  switch (stage) {
+    case "network":
+      return "连不上 npm 源";
+    case "registry":
+      return "npm 源返回错误";
+    case "download":
+      return "新版下载或校验失败";
+    case "install":
+      return "新版安装失败";
+    default:
+      return "原因未知";
+  }
 }
 
 function startupReason(reason: SyncReason | null | undefined): string {
