@@ -38,7 +38,10 @@ Function VibeUsageUpgradeInPlace
   Push $1
   Push $2
 
-  ; Any argument (/P, /UPDATE, /NS, /D= ...) means the caller chose a mode.
+  ; Any argument (/P, /UPDATE, /NS ...) means the caller chose a mode.
+  ; Exception: NSIS strips /D=<dir> from $CMDLINE before this runs, so a run
+  ; with only /D= looks argument-free and is taken over; the relaunch has no
+  ; /D= and installs to the registered directory. Rare; left as is.
   ${GetParameters} $0
   StrCmp $0 "" 0 vibe_upgrade_wizard
 
