@@ -100,6 +100,157 @@
     "launcherPresent": true
   },
   "deviceTag": "7c2e",
+  "doctor": {
+    "kind": "ok",
+    "report": {
+      "account": {
+        "configured": true,
+        "server": "default",
+        "uploadState": "match"
+      },
+      "cliVersion": "0.14.11",
+      "daemon": {
+        "installed": false,
+        "platform": "taskscheduler"
+      },
+      "network": {
+        "npmRegistry": {
+          "error": "timeout",
+          "reachable": false
+        },
+        "registry": "official",
+        "server": {
+          "latencyMs": 320,
+          "reachable": true
+        }
+      },
+      "runtime": {
+        "name": "node",
+        "version": "22.23.1"
+      },
+      "settings": {
+        "extraRoots": 1,
+        "kikiStartAt": "unset",
+        "magpieStartAt": "none",
+        "uploadProject": true
+      },
+      "sqlite": "node:sqlite",
+      "syncHistory": {
+        "available": true,
+        "entries": [
+          {
+            "cliVersion": "0.14.9",
+            "durationMs": 14000,
+            "result": "success",
+            "startedAt": 1794205623000,
+            "surface": "windows-app",
+            "uploaded": {
+              "buckets": 12,
+              "sessions": 3
+            }
+          },
+          {
+            "cliVersion": "0.14.11",
+            "startedAt": 1794204725000,
+            "surface": "windows-app",
+            "uploaded": {
+              "buckets": 5,
+              "sessions": 0
+            }
+          },
+          {
+            "cliVersion": "0.14.10",
+            "startedAt": 1794200400000,
+            "surface": "cli",
+            "uploaded": {
+              "buckets": 0,
+              "sessions": 0
+            }
+          },
+          {
+            "cliVersion": "0.14.10",
+            "durationMs": 2000,
+            "failure": {
+              "code": "server_error",
+              "status": 502
+            },
+            "result": "failed",
+            "startedAt": 1794196800000,
+            "surface": "daemon",
+            "uploaded": {
+              "buckets": 0,
+              "sessions": 0
+            }
+          }
+        ]
+      },
+      "tools": [
+        {
+          "detected": true,
+          "extraRoots": 0,
+          "id": "cursor",
+          "lastSync": {
+            "buckets": 0,
+            "incomplete": false,
+            "serverDropped": 0,
+            "sessions": 0,
+            "skipped": true,
+            "startedAt": 1794204000000,
+            "warnings": [
+              {
+                "code": "cursor_token_encrypted",
+                "count": 1
+              }
+            ]
+          },
+          "mergedInto": [],
+          "name": "Cursor",
+          "uploaded": {
+            "buckets": 840,
+            "sessions": 0
+          }
+        },
+        {
+          "detected": true,
+          "extraRoots": 1,
+          "id": "codex",
+          "lastSync": {
+            "buckets": 30,
+            "incomplete": false,
+            "indexing": {
+              "completed": 120,
+              "total": 400
+            },
+            "serverDropped": 30,
+            "sessions": 2,
+            "skipped": false,
+            "startedAt": 1794204000000,
+            "warnings": []
+          },
+          "mergedInto": [],
+          "name": "Codex CLI",
+          "uploaded": {
+            "buckets": 1204,
+            "sessions": 88
+          }
+        },
+        {
+          "detected": true,
+          "extraRoots": 0,
+          "id": "cindy",
+          "mergedInto": [
+            "codex",
+            "pi-coding-agent"
+          ],
+          "name": "Cindy",
+          "uploaded": {
+            "buckets": 0,
+            "sessions": 0
+          }
+        }
+      ]
+    }
+  },
   "generatedAt": 1794205920000,
   "network": {
     "autoConfigScript": true,

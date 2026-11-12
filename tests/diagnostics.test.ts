@@ -2,7 +2,9 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   buildDiagnosticsText,
+  CliDoctor,
   DiagnosticsReport,
+  DoctorReport,
   formatDiagnosticsReport,
   scrubDiagnosticsText,
 } from "../src/lib/diagnostics";
@@ -134,7 +136,7 @@ describe("copyable diagnostics report", () => {
     expect(text).toContain("手动 · 超时，2m00s 时被 App 结束");
     expect(text).toContain("CLI 启动阶段失败（引导器连不上 npm 源）");
     expect(text).toContain("失败（服务器错误 502）");
-    expect(text).toContain("Claude  正常 · 2 个窗口 · Claude 配额读取超时 · 来源：缓存 · 数据 1800 分钟前");
+    expect(text).toContain("Claude  正常 · 2 个窗口 · Claude 配额读取超时 · 来源：缓存 · 数据 30 小时前");
     expect(text).toContain("Kimi Code  需重新登录");
     expect(text).toContain(
       "1）~\\.local\\bin\\claude.exe · initialize 0.9s · get_usage 超时 · Claude 配额读取超时 · 被 App 结束",
@@ -326,6 +328,149 @@ describe("copyable diagnostics report", () => {
   });
 });
 
+describe("data age in the quota section", () => {
+  const age = (secondsAgo: number) =>
+    buildDiagnosticsText(
+      report({
+        quotas: [
+          { provider: "claudeCode", status: "ok", source: "cache", meterCount: 1, dataAsOf: NOW / 1000 - secondsAgo },
+        ],
+      }),
+      products,
+    );
+
+  it("scales from minutes to hours to days", () => {
+    expect(age(45 * 60)).toContain("来源：缓存 · 数据 45 分钟前");
+    expect(age(30 * 3600)).toContain("来源：缓存 · 数据 30 小时前");
+    // A stale Grok cache was shown as 「数据 149962 分钟前」.
+    expect(age(47 * 3600 + 59 * 60)).toContain("来源：缓存 · 数据 47 小时前");
+    expect(age(48 * 3600)).toContain("来源：缓存 · 数据 2 天前");
+    expect(age(149_962 * 60)).toContain("来源：缓存 · 数据 104 天前");
+    expect(age(149_962 * 60)).not.toContain("分钟前");
+  });
+});
+
+describe("CLI doctor (plan step 2′)", () => {
+  const fixture = JSON.parse(
+    readFileSync(new URL("./fixtures/diagnostics-report.json", import.meta.url), "utf8"),
+  ) as DiagnosticsReport;
+  const doctorReport = (fixture.doctor as { kind: "ok"; report: DoctorReport }).report;
+  const withDoctor = (doctor: CliDoctor, overrides: Partial<DiagnosticsReport> = {}) =>
+    buildDiagnosticsText(report({ doctor, ...overrides }), products);
+  const cliLine = (text: string) => text.split("\n").find((line) => line.startsWith("CLI："));
+
+  it("names why the CLI could not answer in one fixed phrase, and keeps the app's half", () => {
+    const cases: Array<[CliDoctor, string]> = [
+      [
+        { kind: "startupFailed", reason: { code: "launcher", stage: "network" } },
+        "CLI：启动阶段失败（引导器连不上 npm 源） · 引导器已缓存 0.14.9 · 本报告不含 CLI 诊断和工具明细",
+      ],
+      [
+        { kind: "startupFailed", reason: { code: "runtimeUnavailable" } },
+        "CLI：启动阶段失败（运行环境不可用） · 引导器已缓存 0.14.9 · 本报告不含 CLI 诊断和工具明细",
+      ],
+      [
+        { kind: "timedOut" },
+        "CLI：CLI 诊断超时（30 秒内没有结束） · 引导器已缓存 0.14.9 · 本报告不含 CLI 诊断和工具明细",
+      ],
+      [
+        { kind: "noDoctorCommand" },
+        "CLI：CLI 较旧，没有诊断命令 · 引导器已缓存 0.14.9 · 本报告不含 CLI 诊断和工具明细",
+      ],
+      [
+        { kind: "unsupportedSchema", schemaVersion: 2 },
+        "CLI：CLI 较新，诊断格式不认识（schemaVersion 2） · 引导器已缓存 0.14.9 · 本报告不含 CLI 诊断和工具明细",
+      ],
+      [
+        { kind: "unrecognizedOutput" },
+        "CLI：CLI 诊断输出无法识别 · 引导器已缓存 0.14.9 · 本报告不含 CLI 诊断和工具明细",
+      ],
+      [
+        { kind: "failed", exitCode: 1 },
+        "CLI：CLI 诊断命令失败（退出码 1） · 引导器已缓存 0.14.9 · 本报告不含 CLI 诊断和工具明细",
+      ],
+    ];
+    for (const [doctor, line] of cases) {
+      const text = withDoctor(doctor);
+      expect(cliLine(text)).toBe(line);
+      expect(text).not.toContain("CLI 诊断（doctor");
+      expect(text).toContain("最近同步（App 记录，新的在前）：");
+      expect(text).toContain("Claude 读取明细：");
+    }
+    expect(
+      cliLine(withDoctor({ kind: "timedOut" }, { cli: { launcherPresent: false, cachedVersion: null } })),
+    ).toBe("CLI：CLI 诊断超时（30 秒内没有结束） · 启动脚本缺失 · 引导器没有缓存 · 本报告不含 CLI 诊断和工具明细");
+  });
+
+  it("explains a CLI sync without an end only by an app timeout that covers it", () => {
+    const appTimeout = { startedAt: NOW - 40 * 60_000, trigger: "manual" as const, outcome: "timedOut" as const, durationMs: 120_000 };
+    const entry = (startedAt: number, surface: string) => ({
+      startedAt,
+      surface,
+      cliVersion: "0.14.11",
+      uploaded: { buckets: 0, sessions: 0 },
+    });
+    const text = withDoctor(
+      {
+        kind: "ok",
+        report: {
+          ...doctorReport,
+          syncHistory: {
+            available: true,
+            entries: [
+              entry(appTimeout.startedAt + 15_000, "windows-app"),
+              entry(appTimeout.startedAt + 15_000, "cli"),
+              entry(appTimeout.startedAt + 200_000, "windows-app"),
+              // The last millisecond of the run the app ended still matches.
+              entry(appTimeout.startedAt + 120_000, "windows-app"),
+              // A queued sync that starts right after the timeout is a new
+              // run, possibly still going: never the timed-out one.
+              entry(appTimeout.startedAt + 120_500, "windows-app"),
+            ],
+          },
+        },
+      },
+      { syncs: [appTimeout] },
+    );
+    const lines = text.split("\n").filter((line) => line.includes("CLI 0.14.11") && /^ {4}\d/.test(line));
+    expect(lines.map((line) => line.replace(/^ +\d\d-\d\d \d\d:\d\d /, ""))).toEqual([
+      "Windows App · 超时，2m00s 时被 App 结束 · CLI 0.14.11",
+      "终端 · 未记录结束，原因未知 · CLI 0.14.11",
+      "Windows App · 未记录结束，原因未知 · CLI 0.14.11",
+      "Windows App · 超时，2m00s 时被 App 结束 · CLI 0.14.11",
+      "Windows App · 未记录结束，原因未知 · CLI 0.14.11",
+    ]);
+  });
+
+  it("shows a new code as the code itself and drops strings of the wrong shape", () => {
+    const hostile: DoctorReport = {
+      ...doctorReport,
+      cliVersion: "C:\\Users\\张 三\\My Projects",
+      sqlite: "brand:new",
+      account: { configured: true, server: "default", uploadState: "someone@example.com" },
+      tools: [
+        {
+          ...doctorReport.tools[0],
+          name: "-Users-zhangsan-Coding-secret-project",
+          lastSync: {
+            ...doctorReport.tools[0].lastSync!,
+            warnings: [
+              { code: "brand_new_warning", count: 2 },
+              { code: "vbu_test_0123456789abcdef Bearer eyJhbGciOiJIUzI1NiJ9", count: 1 },
+            ],
+          },
+        },
+      ],
+    };
+    const text = withDoctor({ kind: "ok", report: hostile });
+    for (const secret of SECRETS) expect(text).not.toContain(secret);
+    expect(text).toContain("CLI 诊断（doctor）：");
+    expect(text).toContain("SQLite：brand:new");
+    expect(text).toContain("账号：服务器：默认 · 未知");
+    expect(text).toContain("cursor  已检测 · 上次 0 buckets · brand_new_warning ×2（brand_new_warning）");
+  });
+});
+
 describe("Rust ↔ TypeScript diagnostics contract", () => {
   // Written by the Rust test `contract_fixture_matches_what_rust_serializes`
   // from what serde actually emits, so a field renamed on one side only shows
@@ -338,7 +483,7 @@ describe("Rust ↔ TypeScript diagnostics contract", () => {
   it("reads every field Rust serializes", () => {
     for (const line of [
       "环境：Windows 11 23H2（build 22631） · x86_64 · App 0.7.5 正式版 · 运行环境：App 内置 Node 22.23.1",
-      "CLI：启动脚本正常 · 引导器已缓存 0.14.9",
+      "CLI：启动正常 · 本次运行 0.14.11 · 引导器已缓存 0.14.9",
       "账号：已配置 Key · 最近一次同步无法判断 Key 是否被拒 · 设备标签 7c2e",
       "网络：系统代理：有（本机地址） · 已传给同步 · 未传给 Claude 配额读取 · 自动代理脚本：有",
       "代理变量：HTTPS_PROXY 用户变量有 · HTTP_PROXY 无 · ALL_PROXY 系统变量有",
@@ -358,13 +503,29 @@ describe("Rust ↔ TypeScript diagnostics contract", () => {
       "2）PATH 上第 3 个（claude.cmd） → 包内 claude.exe · initialize 1.2s · get_usage 2.3s · Claude 没有返回额度窗口 · 退出码 1 · 回答：rate_limits_available true · 5h 无 · 7d 无 · 套餐 有 · error 有",
       "PATH 上的 claude.*：claude.exe ×1、claude ×1、claude.cmd ×1",
       "ANTHROPIC/CLAUDE 开头的用户变量：ANTHROPIC_BASE_URL · settings.json 的 env：CLAUDE_CODE_USE_BEDROCK · CLAUDE_CONFIG_DIR 已设",
+      "CLI 诊断（doctor，CLI 0.14.11）：",
+      "  运行环境（本次调用）：Node 22.23.1 · SQLite：内置 node:sqlite",
+      "  账号：服务器：默认 · 上传记录与当前 Key 一致",
+      "  网络：服务器可达 320ms · npm 源（官方）连不上（超时）",
+      "  后台：CLI 后台服务：未安装 · 最近一次后台同步",
+      "  设置：项目名：上传 · 额外数据目录 1 个 · Kiki 切点：未设 · Magpie 切点：全部历史",
+      "Windows App · 成功 14s · 上传 12 buckets / 3 sessions · CLI 0.14.9",
+      // The CLI record without an end lies inside the app's 120 s timeout.
+      "Windows App · 超时，2m00s 时被 App 结束 · 已上传 5 buckets · CLI 0.14.11",
+      "终端 · 未记录结束，原因未知 · CLI 0.14.10",
+      "后台服务 · 失败 2.0s · 服务器错误 502 · CLI 0.14.10",
+      "Cursor     已检测 · 上次 0 buckets · 本地登录令牌已加密（Cursor 3.27+） ×1（cursor_token_encrypted） · 累计已上传 840 buckets",
+      "Codex CLI  已检测 · 额外目录 1 个 · 上次 30 buckets / 2 sessions · 正在建立本地索引 120/400 · 服务端丢弃 30（服务端还没收录这个来源） · 累计已上传 1,204 buckets / 88 sessions",
+      "Cindy      已检测 · 数据并入 Codex CLI / pi-coding-agent",
     ]) {
       expect(text).toContain(line);
     }
   });
 
   it("shows no placeholder that would hide a field-name mismatch", () => {
-    expect(text).not.toMatch(/\?|未知|版本未知/);
+    // 「未记录结束，原因未知」 is the contract's own wording for a CLI sync
+    // with no end and no app timeout to explain it.
+    expect(text.replaceAll("未记录结束，原因未知", "")).not.toMatch(/\?|未知|版本未知/);
   });
 });
 

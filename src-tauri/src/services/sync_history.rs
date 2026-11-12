@@ -13,6 +13,8 @@ use std::path::{Path, PathBuf};
 pub const FILE_NAME: &str = "sync-history.json";
 const LIMIT: usize = 10;
 /// The launcher's own prefix (`cli-bootstrap.mjs` `fail()`): the CLI never ran.
+/// An exception thrown after the CLI's `run()` started is printed without it
+/// (#34), so it lands in the CLI's own categories below.
 const LAUNCHER_PREFIX: &str = "vibe-usage launcher:";
 /// The launcher's one-line notice when `latest` was out of reach and it ran
 /// the newest cached CLI instead (`cli-bootstrap.mjs` `fallBackToCache()`).
@@ -36,7 +38,8 @@ pub enum SyncOutcome {
     /// The app ended the CLI at `SYNC_TIMEOUT`.
     TimedOut,
     /// The CLI itself never ran: no runtime, spawn failure, or the launcher
-    /// could not resolve / download / install the published package.
+    /// could not resolve / download / install / load the published package.
+    /// A crash inside the CLI's own run is `Failed`.
     CliStartupFailed,
 }
 
@@ -189,17 +192,8 @@ pub fn classify_exit(
     stderr: &str,
     final_line: &str,
 ) -> (SyncOutcome, SyncReason) {
-    if let Some(rest) = stderr
-        .lines()
-        .map(str::trim)
-        .find_map(|line| line.strip_prefix(LAUNCHER_PREFIX))
-    {
-        return (
-            SyncOutcome::CliStartupFailed,
-            SyncReason::Launcher {
-                stage: launcher_stage(rest.trim(), stderr),
-            },
-        );
+    if let Some(stage) = launcher_failure(stderr) {
+        return (SyncOutcome::CliStartupFailed, SyncReason::Launcher { stage });
     }
     if KEY_REJECTED_MARKERS
         .iter()
@@ -225,6 +219,16 @@ pub fn classify_exit(
             exit_code: exit_code.unwrap_or(-1),
         },
     )
+}
+
+/// The launcher's own failure (`vibe-usage launcher: …`, the CLI never ran),
+/// by the stage its fixed message names. Shared by sync and `doctor`.
+pub fn launcher_failure(stderr: &str) -> Option<LauncherStage> {
+    let rest = stderr
+        .lines()
+        .map(str::trim)
+        .find_map(|line| line.strip_prefix(LAUNCHER_PREFIX))?;
+    Some(launcher_stage(rest.trim(), stderr))
 }
 
 fn launcher_stage(message: &str, stderr: &str) -> LauncherStage {
@@ -464,6 +468,36 @@ mod tests {
             None
         );
         assert_eq!(launcher_fallback("✗ 同步失败: fetch failed"), None);
+    }
+
+    /// #34: the launcher prints an exception from inside the CLI's `run()`
+    /// the way Node prints an uncaught error, without its own prefix. The CLI
+    /// did start (it may have uploaded already), so this is a CLI failure
+    /// with its exit code, never 「CLI 启动阶段失败（引导器其他错误）」.
+    #[test]
+    fn a_crash_inside_the_cli_is_a_cli_failure_not_a_startup_failure() {
+        let crash = "Cursor usage export skipped (HTTP 429 Too Many Requests)\n\
+            TypeError: Cannot read properties of undefined (reading 'buckets')\n    \
+            at syncOnce (file:///C:/Users/%E5%BC%A0/AppData/Roaming/x/cli-cache/0.14.11/package/src/sync.js:10:5)\n    \
+            at async run (file:///C:/x/package/src/index.js:2:3)";
+        assert_eq!(
+            classify(Some(1), "", crash),
+            (SyncOutcome::Failed, SyncReason::CliExit { exit_code: 1 })
+        );
+        assert_eq!(
+            classify(Some(1), "", &format!("{NOTICE}\n{crash}")),
+            (SyncOutcome::Failed, SyncReason::CliExit { exit_code: 1 })
+        );
+        // The launcher's own failure keeps its prefix and stays a startup failure.
+        assert_eq!(
+            classify(Some(1), "", "vibe-usage launcher: Error: cli failed to load\n    at x"),
+            (
+                SyncOutcome::CliStartupFailed,
+                SyncReason::Launcher {
+                    stage: LauncherStage::Other
+                }
+            )
+        );
     }
 
     #[test]

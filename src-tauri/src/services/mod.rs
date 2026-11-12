@@ -1,6 +1,7 @@
 pub mod api_client;
 pub mod auto_launch;
 pub mod claude_usage;
+pub mod cli_doctor;
 pub mod codex_usage;
 pub mod device_link;
 pub mod diagnostics;

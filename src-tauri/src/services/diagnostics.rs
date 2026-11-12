@@ -12,10 +12,13 @@
 //! when they look like ordinary names (`[A-Z0-9_]`); anything else is counted.
 //! The frontend lays the report out and runs a final scrub over the text.
 //!
-//! It does not call the CLI (`doctor --json` comes later, as 2′), and it does
-//! not touch the test-build diagnostics module.
+//! The CLI's own `doctor --json` (plan step 2′) runs alongside and is merged
+//! in through `services::cli_doctor`, which applies the same whitelist rule;
+//! when the CLI cannot answer the report still has this half. It does not
+//! touch the test-build diagnostics module.
 
 use crate::services::claude_usage::{self, CandidateNow, ProbeRecord};
+use crate::services::cli_doctor::{self, CliDoctor};
 use crate::services::sync_engine;
 use crate::services::sync_history::{self, KeyVerdict, SyncRecord};
 use crate::state::{AppCtx, SyncStatus};
@@ -53,6 +56,9 @@ pub struct DiagnosticsReport {
     pub syncs: Vec<SyncRecord>,
     pub quotas: Vec<QuotaCard>,
     pub claude: ClaudeInfo,
+    /// The CLI's `doctor --json`, or why it could not answer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub doctor: Option<CliDoctor>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -213,12 +219,19 @@ pub enum ClaudeSettings {
     },
 }
 
+/// The app's half, the Claude candidates' versions and the CLI's `doctor`
+/// run side by side; `doctor` bounds the wait (`cli_doctor::TIMEOUT`).
 pub async fn collect(app: &AppHandle) -> DiagnosticsReport {
     let blocking_app = app.clone();
-    let mut report = tauri::async_runtime::spawn_blocking(move || collect_local(&blocking_app))
-        .await
-        .expect("diagnostics collection panicked");
-    report.claude.candidates = claude_usage::candidates_with_versions().await;
+    let local = tauri::async_runtime::spawn_blocking(move || collect_local(&blocking_app));
+    let (local, candidates, doctor) = tokio::join!(
+        local,
+        claude_usage::candidates_with_versions(),
+        cli_doctor::run(app)
+    );
+    let mut report = local.expect("diagnostics collection panicked");
+    report.claude.candidates = candidates;
+    report.doctor = Some(doctor);
     report
 }
 
@@ -318,6 +331,7 @@ fn collect_local(app: &AppHandle) -> DiagnosticsReport {
             settings: claude_settings(&claude_settings_file()),
             config_dir_set: app_has("CLAUDE_CONFIG_DIR"),
         },
+        doctor: None,
     }
 }
 
@@ -383,7 +397,7 @@ fn windows_release(build: u32) -> u8 {
 }
 
 /// Digits and dots only (`0.7.5`), or nothing.
-fn plain_version(raw: &str) -> Option<String> {
+pub(crate) fn plain_version(raw: &str) -> Option<String> {
     let version = raw.trim().trim_start_matches('v');
     let valid = !version.is_empty()
         && version.len() <= 20
@@ -400,7 +414,8 @@ fn short_token(raw: &str) -> Option<String> {
         .then(|| token.to_string())
 }
 
-fn cached_cli_version(cache: &Path) -> Option<String> {
+/// Highest complete version in the launcher's cache (`<config>/cli-cache`).
+pub(crate) fn cached_cli_version(cache: &Path) -> Option<String> {
     let entries = std::fs::read_dir(cache).ok()?;
     entries
         .flatten()
@@ -863,6 +878,7 @@ mod tests {
                 settings: ClaudeSettings::Missing,
                 config_dir_set: false,
             },
+            doctor: Some(CliDoctor::Failed { exit_code: 1 }),
         };
         assert_clean(&serde_json::to_string(&report).unwrap());
     }
@@ -1064,6 +1080,9 @@ mod tests {
                 },
                 config_dir_set: true,
             },
+            doctor: Some(CliDoctor::Ok {
+                report: cli_doctor::sample_report(),
+            }),
         }
     }
 
