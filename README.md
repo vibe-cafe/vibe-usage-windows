@@ -6,7 +6,7 @@ Windows 应用，自动追踪 AI 编程工具的 Token 用量和费用。App 常
 
 从 [Releases](https://github.com/vibe-cafe/vibe-usage-windows/releases/latest) 下载 `VibeUsage-x.y.z-Windows-Setup.exe` 并运行（per-user 安装，无需管理员权限；缺少 WebView2 时安装器会自动下载）。
 
-安装包由 Release workflow 通过 SignPath `Release` 策略提交 Authenticode 签名。Windows 仍可能因为新证书或下载量低显示 SmartScreen 声誉提示；如出现「Windows 已保护你的电脑」，点「更多信息」→「仍要运行」。
+**首次安装如果看到「Windows 已保护你的电脑」，点「更多信息」→「仍要运行」。** 这是因为安装包目前用的是自签名证书，Windows 不认识这个发布者，会显示「未知发布者」。换成 Windows 信任的签名之前，从网页下载后第一次运行安装包时都会出现这个提示。
 
 ## 配置
 
