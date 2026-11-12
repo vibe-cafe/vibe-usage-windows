@@ -468,6 +468,14 @@ pub async fn check_for_update(app: AppHandle) -> Result<Option<UpdateInfo>, Stri
     updater::check(&app).await
 }
 
+/// The update the latest check found, if any. The check at startup can finish
+/// before a window has subscribed to `update-available`, so each window reads
+/// this once after subscribing. Read-only: it never starts a check.
+#[tauri::command]
+pub fn get_update_info(app: AppHandle) -> Option<UpdateInfo> {
+    app.state::<AppCtx>().update_info.lock().unwrap().clone()
+}
+
 #[tauri::command]
 pub async fn install_update(app: AppHandle) -> Result<(), String> {
     updater::install(&app).await

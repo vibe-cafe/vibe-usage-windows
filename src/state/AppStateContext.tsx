@@ -49,6 +49,7 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { startLiveRefresh } from "../lib/liveRefresh";
+import { followUpdateOffer } from "../lib/updateOffer";
 
 /** The dashboard/quota state every component reads through `useAppState`. */
 export interface AppStateValue {
@@ -457,8 +458,13 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
           void fetchUsageData();
         }
       }),
-      onUpdateAvailable((u) => setUpdateInfo(u)),
-      onUpdateCleared(() => setUpdateInfo(null)),
+      // Also picks up an update the startup check found before these
+      // listeners were attached (otherwise the offer waited a day for the
+      // next check); a withdrawal (`update-cleared`) clears it.
+      followUpdateOffer(
+        { onAvailable: onUpdateAvailable, onCleared: onUpdateCleared, readCurrent: api.getUpdateInfo },
+        setUpdateInfo,
+      ),
       onSettingsUpdated((nextSettings) => {
         setSettings(nextSettings);
         setRateLimits([]);

@@ -72,6 +72,8 @@ export const api = {
 
   // Updates -----------------------------------------------------------------------
   checkForUpdate: () => invoke<UpdateInfo | null>("check_for_update"),
+  /** What the backend's latest check found; never starts a check. */
+  getUpdateInfo: () => invoke<UpdateInfo | null>("get_update_info"),
   installUpdate: () => invoke<void>("install_update"),
 };
 

@@ -101,6 +101,7 @@ pub fn run() {
             commands::collect_diagnostics,
             commands::update_tray_stats,
             commands::check_for_update,
+            commands::get_update_info,
             commands::install_update,
         ])
         .build(context)

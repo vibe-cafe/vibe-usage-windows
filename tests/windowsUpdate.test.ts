@@ -24,7 +24,10 @@ describe("update offer (#36)", () => {
     const api = readFileSync("src/lib/api.ts", "utf-8");
     const appState = readFileSync("src/state/AppStateContext.tsx", "utf-8");
     expect(api).toContain('listen("update-cleared"');
-    expect(appState).toContain("onUpdateCleared(() => setUpdateInfo(null))");
+    // Wired through followUpdateOffer, which applies null on update-cleared
+    // (tests/updateOffer.test.ts).
+    expect(appState).toContain("onCleared: onUpdateCleared");
+    expect(appState).toContain("setUpdateInfo,");
   });
 });
 
