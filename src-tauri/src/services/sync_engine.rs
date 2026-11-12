@@ -136,6 +136,12 @@ pub(super) fn quota_command(
     cli_command(app, &borrowed)
 }
 
+/// `doctor --json` for 「复制诊断信息」, with the same runtime, directories,
+/// surface and proxy as a sync (`services::cli_doctor`).
+pub(super) fn doctor_command(app: &AppHandle) -> Result<tokio::process::Command, String> {
+    cli_command(app, &["doctor", "--json"])
+}
+
 /// Run a short config command against the same bundled CLI and config directory
 /// used by sync.
 pub async fn run_config_command(app: &AppHandle, args: &[&str]) -> Result<String, String> {
@@ -349,6 +355,7 @@ async fn run_cli_sync(app: &AppHandle) -> CliRun {
         } => res,
         _ = tokio::time::sleep(SYNC_TIMEOUT) => {
             process_utils::kill_child_tree(&mut child);
+            write_timeout_log(app);
             return CliRun::failed("同步超时".into(), SyncOutcome::TimedOut, None);
         }
     };
@@ -473,9 +480,49 @@ pub(crate) fn extract_error_line(msg: &str) -> String {
     s
 }
 
-/// Full CLI output → %APPDATA%/<identifier>/logs/sync.log (simple 512 KB cap)
+/// Full CLI output → the app log directory's `sync.log` (simple 512 KB cap)
 /// so failures in the field are diagnosable.
 fn write_sync_log(app: &AppHandle, status: &std::process::ExitStatus, stdout: &str, stderr: &str) {
+    let entry = format!(
+        "==== {} exit={:?} ====\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}\n\n",
+        now_secs(),
+        status.code()
+    );
+    append_sync_log(app, &entry);
+    log::debug!("sync exit={status:?}");
+}
+
+/// A sync the app ended at `SYNC_TIMEOUT` leaves one fixed line, so the log
+/// no longer skips exactly the runs that hung. No CLI output is written: the
+/// run was cut off mid-way and its text is not kept. The version is the
+/// newest complete one in the launcher's cache, which is what the launcher
+/// runs unless that run was still downloading a newer `latest` or `latest`
+/// moved back to an older cached version.
+fn write_timeout_log(app: &AppHandle) {
+    let version = crate::services::diagnostics::cached_cli_version(
+        &app.state::<AppCtx>().config.config_dir.join("cli-cache"),
+    );
+    append_sync_log(app, &timeout_entry(now_secs(), version.as_deref()));
+}
+
+fn timeout_entry(now: u64, version: Option<&str>) -> String {
+    format!(
+        "==== {now} timeout={}s newest-cached-cli={} ====\n\n",
+        SYNC_TIMEOUT.as_secs(),
+        version.unwrap_or("none")
+    )
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// `%LOCALAPPDATA%\<identifier>\logs\sync.log` (Tauri 2's app log
+/// directory), rotated to `sync.log.1` past 512 KB.
+fn append_sync_log(app: &AppHandle, entry: &str) {
     let Ok(dir) = app.path().app_log_dir() else {
         return;
     };
@@ -484,24 +531,15 @@ fn write_sync_log(app: &AppHandle, status: &std::process::ExitStatus, stdout: &s
     if std::fs::metadata(&file).map(|m| m.len() > 512 * 1024).unwrap_or(false) {
         let _ = std::fs::rename(&file, dir.join("sync.log.1"));
     }
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let entry = format!(
-        "==== {now} exit={:?} ====\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}\n\n",
-        status.code()
-    );
     use std::io::Write;
     if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&file) {
         let _ = f.write_all(entry.as_bytes());
     }
-    log::debug!("sync exit={status:?}; log → {}", file.display());
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{read_both, run_with_follow_up};
+    use super::{read_both, run_with_follow_up, timeout_entry};
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Arc;
     use tokio::sync::{Mutex, Notify};
@@ -637,6 +675,20 @@ mod tests {
         .await;
         assert_eq!(runs.load(Ordering::SeqCst), 1);
         assert!(!pending.load(Ordering::SeqCst));
+    }
+
+    /// #131 follow-up: a timed-out sync used to leave nothing in sync.log.
+    /// Its line holds only fixed fields: time, the timeout, a version.
+    #[test]
+    fn a_timeout_leaves_one_fixed_line() {
+        assert_eq!(
+            timeout_entry(1_794_205_920, Some("0.14.11")),
+            "==== 1794205920 timeout=120s newest-cached-cli=0.14.11 ====\n\n"
+        );
+        assert_eq!(
+            timeout_entry(1, None),
+            "==== 1 timeout=120s newest-cached-cli=none ====\n\n"
+        );
     }
 
     /// A CLI that writes far more to stderr than a pipe holds, and only then
