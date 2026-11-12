@@ -71,18 +71,21 @@ interface FakeVersion {
   entry?: boolean;
   /** `run()` throws after printing, like a CLI that crashes. */
   crashes?: boolean;
+  /** The entry module throws while loading, before `run()` exists. */
+  brokenImport?: boolean;
 }
 
 /** A cache directory the way the launcher leaves it after an install. */
 function cache(versions: Record<string, FakeVersion>) {
-  for (const [name, { complete = true, entry = true, crashes = false }] of Object.entries(versions)) {
+  for (const [name, { complete = true, entry = true, crashes = false, brokenImport = false }] of Object.entries(versions)) {
     const dir = join(home, "cli-cache", name);
     mkdirSync(join(dir, "package", "src"), { recursive: true });
     writeFileSync(join(dir, "package", "package.json"), JSON.stringify({ name: "fake", type: "module" }));
     if (entry) {
       writeFileSync(
         join(dir, "package", "src", "index.js"),
-        `export async function run(argv) {
+        `${brokenImport ? 'throw new Error("cli failed to load");' : ""}
+export async function run(argv) {
   process.stdout.write("ran ${name} " + argv.join(" ") + "\\n");
   ${crashes ? 'throw new Error("cli crashed");' : ""}
 }
@@ -308,7 +311,25 @@ describe("cli-bootstrap: the CLI itself runs once", () => {
     expect(run.status).toBe(1);
     expect(run.stdout).toBe("ran 0.14.11 sync\n");
     expect(run.notices).toEqual([]);
-    expect(run.failures[0]).toBe(`${FAILURE} Error: cli crashed`);
+  });
+
+  // #34: once run() has started, a crash is the CLI's own failure. Without the
+  // launcher prefix the app records it as a CLI exit, not a startup failure.
+  it("prints a crash inside run() like Node would, without the launcher prefix", () => {
+    cache({ "0.14.11": { crashes: true } });
+    const run = launch({ latest: latest("0.14.11") });
+    expect(run.status).toBe(1);
+    expect(run.failures).toEqual([]);
+    expect(run.stderr[0]).toBe("Error: cli crashed");
+    expect(run.stderr.slice(1).every((line) => line.trimStart().startsWith("at "))).toBe(true);
+  });
+
+  it("still reports a CLI that fails to load as a launcher failure", () => {
+    cache({ "0.14.11": { brokenImport: true } });
+    const run = launch({ latest: latest("0.14.11") });
+    expect(run.status).toBe(1);
+    expect(run.stdout).toBe("");
+    expect(run.failures[0]).toBe(`${FAILURE} Error: cli failed to load`);
   });
 
   it("does not retry a crashing fallback version", () => {

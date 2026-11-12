@@ -286,10 +286,24 @@ async function resolvePackageDir() {
   }
 }
 
+/**
+ * The launcher's own work (resolving, downloading, installing and loading the
+ * CLI) fails through `fail()`, whose prefix tells the app that the CLI never
+ * ran. Once `run()` has started, an exception is the CLI's own: it is printed
+ * the way Node prints an uncaught error, without the launcher prefix, so the
+ * app records an ordinary CLI failure with its exit code instead of a startup
+ * failure (vibe-cafe/vibe-usage-windows#34). The CLI may already have scanned
+ * or uploaded by then.
+ */
 async function main() {
   const packageDir = await resolvePackageDir();
   const { run } = await import(pathToFileURL(join(packageDir, ENTRY)).href);
-  await run(process.argv.slice(2));
+  try {
+    await run(process.argv.slice(2));
+  } catch (err) {
+    process.stderr.write(`${err?.stack || String(err)}\n`);
+    process.exit(1);
+  }
 }
 
 main().catch(err => fail(err?.stack || String(err)));
