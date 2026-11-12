@@ -121,6 +121,21 @@ Rust (Tauri 2)
 - [@vibe-cafe/vibe-usage](https://github.com/vibe-cafe/vibe-usage) — 命令行同步工具
 - [vibecafe.ai/usage](https://vibecafe.ai/usage) — Web 仪表盘
 
+## Code signing policy
+
+**现状：Windows 安装包正在申请 SignPath Foundation 的免费代码签名，尚未获批。** 获批之前，安装包仍用自签名证书。
+
+获批后：Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).（由 SignPath.io 免费提供代码签名，证书签发给 SignPath Foundation。）
+
+- **签名范围**（获批后）：只签由本仓库源码、经 [Release 工作流](.github/workflows/release.yml) 在 GitHub 托管的构建机上编出来的文件，即主程序 `vibe-usage-app.exe`、卸载程序和安装包。安装包里随附的第三方组件（Node.js 运行时、NSIS 安装器插件）以及安装时按需下载的微软 WebView2 引导程序，不由本项目签名。
+- **运行时下载的组件**：App 运行时从 npm 下载的命令行组件 [`@vibe-cafe/vibe-usage`](https://github.com/vibe-cafe/vibe-usage) 不在安装包里，也不在签名范围内。它是同一团队维护的 MIT 开源项目；启动器下载后，先按 npm 公布的 sha512 校验，再运行。
+- **人工批准**（获批后）：每一次签名请求，都要由下面的批准者在 SignPath 上手动批准。
+- **团队角色**：
+  - Committers（可以直接提交代码）：[@kalasoo](https://github.com/kalasoo)、[@Glowin](https://github.com/Glowin)、[@sudoHG](https://github.com/sudoHG)、[@haoruilee](https://github.com/haoruilee)
+  - Reviewers（审阅非成员提交的 PR）：[@sudoHG](https://github.com/sudoHG)、[@kalasoo](https://github.com/kalasoo)、[@Glowin](https://github.com/Glowin)
+  - Approvers（批准每一次签名）：[@sudoHG](https://github.com/sudoHG)
+- **隐私政策**：[PRIVACY.md](PRIVACY.md)
+
 ## License
 
 MIT
