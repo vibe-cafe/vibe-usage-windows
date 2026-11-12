@@ -276,11 +276,9 @@ fn parse_usage_response(root: &Value, now: f64) -> Option<ProviderRateLimit> {
             RateLimitEmptyReason::NoWindow
         }
     });
-    let plan_label = root
-        .get("plan_type")
-        .and_then(Value::as_str)
-        .filter(|s| !s.is_empty())
-        .map(capitalize);
+    let plan_label = vibe_core::rate_limit::codex::format_plan_label(
+        root.get("plan_type").and_then(Value::as_str),
+    );
     let reset_credits_count = root
         .pointer("/rate_limit_reset_credits/available_count")
         .and_then(Value::as_u64)
@@ -315,14 +313,6 @@ fn reports_limit_reached(limits: &serde_json::Map<String, Value>) -> bool {
         return !allowed;
     }
     false
-}
-
-fn capitalize(raw: &str) -> String {
-    let mut chars = raw.chars();
-    chars
-        .next()
-        .map(|first| first.to_uppercase().collect::<String>() + chars.as_str())
-        .unwrap_or_default()
 }
 
 fn now_epoch() -> f64 {
@@ -364,6 +354,28 @@ mod tests {
         assert!(result.five_hour_not_enforced);
         assert_eq!(result.seven_day.unwrap().utilization, 26.0);
         assert_eq!(result.reset_credits_count, Some(2));
+    }
+
+    /// `self_serve_business_prolite` reads as on macOS (vibe-usage-app#56);
+    /// a weekly-only answer still flags the 5h window as not enforced.
+    #[test]
+    fn business_prolite_plan_is_readable_from_the_live_response() {
+        let value = json!({
+            "plan_type":"self_serve_business_prolite",
+            "rate_limit":{"primary_window":{"used_percent":0,"limit_window_seconds":604800,"reset_after_seconds":604800}},
+            "rate_limit_reset_credits":{"available_count":2}
+        });
+        let result = parse_usage_response(&value, 1000.0).unwrap();
+        assert_eq!(result.plan_label.as_deref(), Some("Business ProLite"));
+        assert_eq!(result.status, RateLimitStatus::Ok);
+        assert_eq!(result.seven_day.unwrap().utilization, 0.0);
+        assert!(result.five_hour_not_enforced);
+        assert_eq!(result.reset_credits_count, Some(2));
+        let plus = json!({"plan_type":"plus","rate_limit":{}});
+        assert_eq!(
+            parse_usage_response(&plus, 1000.0).unwrap().plan_label.as_deref(),
+            Some("Plus")
+        );
     }
 
     #[test]

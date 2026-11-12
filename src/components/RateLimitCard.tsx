@@ -13,6 +13,7 @@ import {
 } from "../lib/types";
 import {
   canonicalQuotaMeters,
+  expectsCodexFiveHour,
   providerLabel,
   quotaEmptyStateText,
   quotaProvenanceText,
@@ -20,6 +21,7 @@ import {
 } from "../lib/quotaProducts";
 import { elapsedPercent, utilizationColor } from "../lib/aggregate";
 import { formatPercent, formatTimeUntil } from "../lib/formatters";
+import { MiddleTruncateLabel } from "./MiddleTruncateLabel";
 import { ProviderIcon } from "./ProviderIcon";
 import { QuotaTabStrip } from "./QuotaTabStrip";
 
@@ -225,10 +227,7 @@ function ProviderCard({ snapshot }: { snapshot: ProviderRateLimit }) {
   const state = useAppState();
   const name = providerLabel(snapshot.provider, state.quotaProducts);
   const provenance = quotaProvenanceText(snapshot, name);
-  const plan = snapshot.planLabel?.toLowerCase();
-  const expectsFiveHour =
-    snapshot.provider === "codex" &&
-    (plan === "plus" || plan === "pro" || plan === "prolite" || plan === "business");
+  const expectsFiveHour = expectsCodexFiveHour(snapshot);
 
   const rows: RowItem[] = canonicalQuotaMeters(snapshot.meters ?? []).map((meter) => ({
     kind: "live",
@@ -264,12 +263,14 @@ function ProviderCard({ snapshot }: { snapshot: ProviderRateLimit }) {
         <div className="grow" />
         {state.isRefreshingRateLimits && <div className="spinner h-3 w-3 shrink-0" />}
         {snapshot.planLabel && (
-          <span
-            className="max-w-[80px] truncate rounded-full px-[7px] py-0.5 text-[10px] font-medium"
+          // One line, middle-truncated with the full name on hover (macOS
+          // `.lineLimit(1).truncationMode(.middle).help(label)`). Wide enough
+          // for 「Business ProLite」 beside the provider name.
+          <MiddleTruncateLabel
+            label={snapshot.planLabel}
+            className="max-w-[120px] whitespace-nowrap rounded-full px-[7px] py-0.5 text-[10px] font-medium"
             style={{ background: "rgba(255,255,255,0.16)", color: "#8C8C8C" }}
-          >
-            {snapshot.planLabel}
-          </span>
+          />
         )}
       </div>
 

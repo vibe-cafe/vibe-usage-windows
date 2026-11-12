@@ -144,12 +144,19 @@ fn scan_file(file: &Path, now: f64) -> Option<Snapshot> {
     None
 }
 
-/// Codex emits plan_type lowercase ("free", "plus", "pro", "business") —
-/// render the customer-facing capitalized form.
-fn format_plan_label(raw: Option<&str>) -> Option<String> {
+/// Codex emits plan_type lowercase ("free", "plus", "pro", "prolite",
+/// "business") — render the customer-facing capitalized form. Internal ids
+/// with a known product name are spelled out (`self_serve_business_prolite` →
+/// `Business ProLite`, as macOS `CodexRateLimitReader.formatPlanLabel`).
+/// Shared by the live endpoint and the session log so the badge does not
+/// change with whichever source answered.
+pub fn format_plan_label(raw: Option<&str>) -> Option<String> {
     let raw = raw?;
     if raw.is_empty() {
         return None;
+    }
+    if raw.eq_ignore_ascii_case("self_serve_business_prolite") {
+        return Some("Business ProLite".into());
     }
     let mut chars = raw.chars();
     let first = chars.next()?;
@@ -248,6 +255,37 @@ mod tests {
         let seven = r.seven_day.unwrap();
         assert_eq!(seven.utilization, 8.0);
         assert_eq!(seven.resets_at, Some(NOW + 86400.0));
+    }
+
+    /// Same name as the live endpoint and macOS (vibe-usage-app#56).
+    #[test]
+    fn business_prolite_plan_is_readable_from_the_session_log() {
+        let dir = tempdir().unwrap();
+        let day = dir.path().join("2026").join("07").join("10");
+        let rl = format!(
+            r#"{{"plan_type":"self_serve_business_prolite","primary":{{"used_percent":12.0,"window_minutes":300,"resets_at":{}}}}}"#,
+            NOW + 600.0
+        );
+        write_rollout(&day, "rollout-business.jsonl", &[&token_count_line(&rl)]);
+        let r = read_from(dir.path(), NOW);
+        assert_eq!(r.plan_label.as_deref(), Some("Business ProLite"));
+        assert_eq!(r.five_hour.unwrap().utilization, 12.0);
+    }
+
+    #[test]
+    fn plan_labels_capitalize_and_spell_out_known_internal_ids() {
+        assert_eq!(format_plan_label(Some("plus")).as_deref(), Some("Plus"));
+        assert_eq!(format_plan_label(Some("prolite")).as_deref(), Some("Prolite"));
+        assert_eq!(
+            format_plan_label(Some("self_serve_business_prolite")).as_deref(),
+            Some("Business ProLite")
+        );
+        assert_eq!(
+            format_plan_label(Some("Self_Serve_Business_ProLite")).as_deref(),
+            Some("Business ProLite")
+        );
+        assert_eq!(format_plan_label(Some("")), None);
+        assert_eq!(format_plan_label(None), None);
     }
 
     #[test]
