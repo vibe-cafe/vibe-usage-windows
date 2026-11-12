@@ -633,9 +633,11 @@ function syncFailureText(failure: DoctorSync["failure"]): string {
 /**
  * The app's timeout that explains a CLI sync with no end: the app started it
  * (`windows-app`) and the CLI's start lies within that run, which the app
- * ended at 120 s. Without one the CLI record stays 「未记录结束，原因未知」 —
- * the app may have quit, the machine slept, or the sync is still running
- * (一键诊断方案第七节「两份怎么对上」).
+ * ended at 120 s. No slack past the end: both sides are milliseconds on one
+ * clock, and a queued sync that starts right after the timeout is a new run
+ * that may still be going. Without one the CLI record stays
+ * 「未记录结束，原因未知」 — the app may have quit, the machine slept, or the
+ * sync is still running (一键诊断方案第七节「两份怎么对上」).
  */
 function appTimeoutFor(entry: DoctorSync, appSyncs: SyncRecord[]): SyncRecord | undefined {
   const started = number(entry.startedAt);
@@ -648,7 +650,7 @@ function appTimeoutFor(entry: DoctorSync, appSyncs: SyncRecord[]): SyncRecord | 
       appStart != null &&
       duration != null &&
       appStart <= started &&
-      started <= appStart + duration + 1000
+      started <= appStart + duration
     );
   });
 }

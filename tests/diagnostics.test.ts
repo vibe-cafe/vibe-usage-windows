@@ -421,6 +421,11 @@ describe("CLI doctor (plan step 2′)", () => {
               entry(appTimeout.startedAt + 15_000, "windows-app"),
               entry(appTimeout.startedAt + 15_000, "cli"),
               entry(appTimeout.startedAt + 200_000, "windows-app"),
+              // The last millisecond of the run the app ended still matches.
+              entry(appTimeout.startedAt + 120_000, "windows-app"),
+              // A queued sync that starts right after the timeout is a new
+              // run, possibly still going: never the timed-out one.
+              entry(appTimeout.startedAt + 120_500, "windows-app"),
             ],
           },
         },
@@ -431,6 +436,8 @@ describe("CLI doctor (plan step 2′)", () => {
     expect(lines.map((line) => line.replace(/^ +\d\d-\d\d \d\d:\d\d /, ""))).toEqual([
       "Windows App · 超时，2m00s 时被 App 结束 · CLI 0.14.11",
       "终端 · 未记录结束，原因未知 · CLI 0.14.11",
+      "Windows App · 未记录结束，原因未知 · CLI 0.14.11",
+      "Windows App · 超时，2m00s 时被 App 结束 · CLI 0.14.11",
       "Windows App · 未记录结束，原因未知 · CLI 0.14.11",
     ]);
   });
