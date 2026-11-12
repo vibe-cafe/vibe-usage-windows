@@ -269,9 +269,9 @@ export function quotaProvenanceText(
 }
 
 /**
- * Paid Codex plans have a 5-hour window, so a card without one says why
- * (「官方当前未启用」 / 「近 5 小时无活动」) instead of silently showing only
- * 7d. Same plans as macOS `RateLimitCardView.expectsCodexFiveHour`, including
+ * Paid Codex plans have a 5-hour window, so a card without one keeps the slot
+ * and says why (`codexFiveHourPlaceholder`) instead of silently showing only
+ * 7d. Same plans as macOS `RateLimitCardView.expectsFiveHourWindow`, including
  * Business ProLite (vibe-usage-app#56).
  */
 export function expectsCodexFiveHour(snapshot: ProviderRateLimit): boolean {
@@ -284,6 +284,23 @@ export function expectsCodexFiveHour(snapshot: ProviderRateLimit): boolean {
     plan === "business" ||
     plan === "business prolite"
   );
+}
+
+/**
+ * The reserved Codex 5h slot when no 5h window came back, or null when the
+ * card keeps no slot. Same rule as macOS (`RateLimitCardView.allRows`,
+ * maintainer decision 2026-10-24): the live endpoint reports enforced windows
+ * exhaustively, so its missing 5h window (`fiveHourNotEnforced`) means the
+ * limit is off — 「不限额」; OpenAI keeps 5h off for Pro / Prolite, so those
+ * plans read 「不限额」 from any source. Otherwise the numbers came from the
+ * session log, where a missing window may only mean no activity for five
+ * hours — 「近 5 小时无活动」. Business ProLite is not a Pro plan here.
+ */
+export function codexFiveHourPlaceholder(snapshot: ProviderRateLimit): string | null {
+  if (snapshot.fiveHour || !expectsCodexFiveHour(snapshot)) return null;
+  const plan = snapshot.planLabel?.toLowerCase();
+  const unlimited = snapshot.fiveHourNotEnforced === true || plan === "pro" || plan === "prolite";
+  return unlimited ? "不限额" : "近 5 小时无活动";
 }
 
 /**
