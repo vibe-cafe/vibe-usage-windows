@@ -2,7 +2,7 @@
 // Note: 关闭 quits the app, exactly like the macOS footer's power button
 // (NSApplication.terminate) — it is NOT "close panel".
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { AlertCircle, ArrowUpCircle, CheckCircle2, Power, RotateCw } from "lucide-react";
 import { api } from "../lib/api";
 import { useAppState } from "../state/AppStateContext";
@@ -10,6 +10,7 @@ import { formatRelativeTime } from "../lib/formatters";
 import {
   type UpdatePhase,
   createUpdateRunner,
+  phaseForNewOffer,
   updateButtonEnabled,
   updateButtonLabel,
 } from "../lib/updateButton";
@@ -20,6 +21,12 @@ export function FooterBar() {
   const syncing = state.configured && syncState.status === "syncing";
   const [updatePhase, setUpdatePhase] = useState<UpdatePhase>({ kind: "idle" });
   const [startUpdate] = useState(() => createUpdateRunner(api.installUpdate, setUpdatePhase));
+  // The button disappears with the offer (updateInfo null after
+  // `update-cleared`); a failure message never carries over to the next one.
+  const offeredVersion = updateInfo?.version ?? null;
+  useEffect(() => {
+    setUpdatePhase(phaseForNewOffer);
+  }, [offeredVersion]);
 
   return (
     <div className="flex items-center">

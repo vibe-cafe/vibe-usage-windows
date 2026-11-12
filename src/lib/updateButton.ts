@@ -27,6 +27,16 @@ export function updateButtonEnabled(phase: UpdatePhase): boolean {
   return phase.kind === "idle" || phase.kind === "failed";
 }
 
+/**
+ * The offer behind the button changed: a newer version replaced it, or a
+ * later check withdrew it (#36). A failure message belonged to the old offer,
+ * so the button starts over; an install already under way keeps its state
+ * (the backend holds the address it is downloading).
+ */
+export function phaseForNewOffer(phase: UpdatePhase): UpdatePhase {
+  return phase.kind === "failed" ? { kind: "idle" } : phase;
+}
+
 /** Tauri rejects a command with the Rust `Err(String)` as-is. */
 export function updateFailureReason(error: unknown): string {
   const text = error instanceof Error ? error.message : String(error ?? "");

@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import {
   type UpdatePhase,
   createUpdateRunner,
+  phaseForNewOffer,
   updateButtonEnabled,
   updateButtonLabel,
   updateFailureReason,
@@ -15,6 +16,17 @@ import {
 const hooks = readFileSync("src-tauri/windows/installer-hooks.nsh", "utf-8");
 const updater = readFileSync("src-tauri/src/services/updater.rs", "utf-8");
 const workflow = readFileSync(".github/workflows/release.yml", "utf-8");
+
+describe("update offer (#36)", () => {
+  test("a check without a newer version clears the stored offer and tells the panel", () => {
+    expect(updater).toContain("record_check(&ctx.update_info, info.as_ref())");
+    expect(updater).toContain('app.emit("update-cleared", ())');
+    const api = readFileSync("src/lib/api.ts", "utf-8");
+    const appState = readFileSync("src/state/AppStateContext.tsx", "utf-8");
+    expect(api).toContain('listen("update-cleared"');
+    expect(appState).toContain("onUpdateCleared(() => setUpdateInfo(null))");
+  });
+});
 
 describe("update switches", () => {
   test("the app and the installer hook pass the same switches", () => {
@@ -122,6 +134,13 @@ describe("footer update button", () => {
     // The app is quitting for the installer: further clicks stay ignored.
     await click();
     expect(calls).toBe(2);
+  });
+
+  test("a withdrawn or replaced offer drops the old failure but not an install under way", () => {
+    expect(phaseForNewOffer({ kind: "failed", reason: "下载失败：404" })).toEqual({ kind: "idle" });
+    expect(phaseForNewOffer({ kind: "idle" })).toEqual({ kind: "idle" });
+    expect(phaseForNewOffer({ kind: "downloading" })).toEqual({ kind: "downloading" });
+    expect(phaseForNewOffer({ kind: "launching" })).toEqual({ kind: "launching" });
   });
 
   test("uses the backend's message as the reason", () => {
