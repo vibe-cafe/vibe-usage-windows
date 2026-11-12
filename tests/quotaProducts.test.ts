@@ -1,6 +1,8 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   canonicalQuotaMeters,
+  codexFiveHourPlaceholder,
   compactQuotaStatus,
   expectsCodexFiveHour,
   isZCodeConfigured,
@@ -342,5 +344,48 @@ describe("Codex 5h window expectation", () => {
     expect(
       expectsCodexFiveHour({ provider: "claudeCode", status: { kind: "ok" }, planLabel: "Pro" }),
     ).toBe(false);
+  });
+});
+
+describe("Codex 5h slot wording (macOS rule, 2026-10-24)", () => {
+  const codex = (planLabel: string, extra: Partial<ProviderRateLimit> = {}): ProviderRateLimit => ({
+    provider: "codex",
+    status: { kind: "ok" },
+    planLabel,
+    sevenDay: { utilization: 10 },
+    ...extra,
+  });
+
+  it("the live endpoint without a 5h window means the limit is off", () => {
+    for (const plan of ["Plus", "Business", "Business ProLite", "Pro"]) {
+      expect(codexFiveHourPlaceholder(codex(plan, { fiveHourNotEnforced: true }))).toBe("不限额");
+    }
+  });
+
+  it("Pro and Prolite read 不限额 even from the session log", () => {
+    expect(codexFiveHourPlaceholder(codex("Pro"))).toBe("不限额");
+    expect(codexFiveHourPlaceholder(codex("Prolite"))).toBe("不限额");
+  });
+
+  it("other paid plans from the session log only say there was no recent activity", () => {
+    for (const plan of ["Plus", "Business", "Business ProLite"]) {
+      expect(codexFiveHourPlaceholder(codex(plan))).toBe("近 5 小时无活动");
+    }
+  });
+
+  it("no slot when a 5h window exists, or the plan has none", () => {
+    expect(
+      codexFiveHourPlaceholder(codex("Pro", { fiveHour: { utilization: 3 }, fiveHourNotEnforced: true })),
+    ).toBeNull();
+    expect(codexFiveHourPlaceholder(codex("Free", { fiveHourNotEnforced: true }))).toBeNull();
+    expect(
+      codexFiveHourPlaceholder({ provider: "claudeCode", status: { kind: "ok" }, planLabel: "Pro" }),
+    ).toBeNull();
+  });
+
+  it("the old 官方当前未启用 wording is gone from the card", () => {
+    const card = readFileSync("src/components/RateLimitCard.tsx", "utf-8");
+    expect(card).not.toContain("官方当前未启用");
+    expect(card).toContain("codexFiveHourPlaceholder(snapshot)");
   });
 });

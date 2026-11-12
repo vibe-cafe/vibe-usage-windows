@@ -13,7 +13,7 @@ import {
 } from "../lib/types";
 import {
   canonicalQuotaMeters,
-  expectsCodexFiveHour,
+  codexFiveHourPlaceholder,
   providerLabel,
   quotaEmptyStateText,
   quotaProvenanceText,
@@ -227,7 +227,7 @@ function ProviderCard({ snapshot }: { snapshot: ProviderRateLimit }) {
   const state = useAppState();
   const name = providerLabel(snapshot.provider, state.quotaProducts);
   const provenance = quotaProvenanceText(snapshot, name);
-  const expectsFiveHour = expectsCodexFiveHour(snapshot);
+  const fiveHourPlaceholder = codexFiveHourPlaceholder(snapshot);
 
   const rows: RowItem[] = canonicalQuotaMeters(snapshot.meters ?? []).map((meter) => ({
     kind: "live",
@@ -237,12 +237,8 @@ function ProviderCard({ snapshot }: { snapshot: ProviderRateLimit }) {
   if (rows.length === 0) {
     if (snapshot.fiveHour) {
       rows.push({ kind: "live", label: "5h", window: snapshot.fiveHour });
-    } else if (expectsFiveHour) {
-      rows.push({
-        kind: "placeholder",
-        label: "5h",
-        message: snapshot.fiveHourNotEnforced ? "官方当前未启用" : "近 5 小时无活动",
-      });
+    } else if (fiveHourPlaceholder) {
+      rows.push({ kind: "placeholder", label: "5h", message: fiveHourPlaceholder });
     }
     if (snapshot.sevenDay) rows.push({ kind: "live", label: "7d", window: snapshot.sevenDay });
   }
