@@ -11,7 +11,14 @@ import {
   useRef,
   useState,
 } from "react";
-import { api, onPanelShown, onSettingsUpdated, onSyncState, onUpdateAvailable } from "../lib/api";
+import {
+  api,
+  onPanelShown,
+  onSettingsUpdated,
+  onSyncState,
+  onUpdateAvailable,
+  onUpdateCleared,
+} from "../lib/api";
 import {
   AppSettings,
   AppStatus,
@@ -451,6 +458,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         }
       }),
       onUpdateAvailable((u) => setUpdateInfo(u)),
+      onUpdateCleared(() => setUpdateInfo(null)),
       onSettingsUpdated((nextSettings) => {
         setSettings(nextSettings);
         setRateLimits([]);

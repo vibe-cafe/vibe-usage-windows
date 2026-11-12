@@ -95,6 +95,11 @@ export function onUpdateAvailable(handler: (u: UpdateInfo) => void): Promise<Unl
   return listen<UpdateInfo>("update-available", (e) => handler(e.payload));
 }
 
+/** A later check found no newer version (e.g. the release was pulled): drop the offer. */
+export function onUpdateCleared(handler: () => void): Promise<UnlistenFn> {
+  return listen("update-cleared", () => handler());
+}
+
 export function onSettingsUpdated(handler: (settings: AppSettings) => void): Promise<UnlistenFn> {
   return listen<AppSettings>("settings-updated", (e) => handler(e.payload));
 }

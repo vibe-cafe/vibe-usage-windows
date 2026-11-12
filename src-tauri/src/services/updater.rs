@@ -8,6 +8,7 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager};
 
 pub const UPDATE_MANIFEST_URL: &str =
@@ -72,7 +73,12 @@ struct Manifest {
     sha256: Option<String>,
 }
 
-/// Check for a newer version; stores + emits `update-available` when found.
+/// Check for a newer version. Found: store it and emit `update-available`.
+/// The manifest names no newer version: drop any update found earlier and
+/// emit `update-cleared`, so a release that was pulled (the previous version
+/// marked latest again, see docs/WINDOWS_UPDATE.md 「撤回」) stops being
+/// offered and its download address is forgotten. A failed check changes
+/// nothing.
 pub async fn check(app: &AppHandle) -> Result<Option<UpdateInfo>, String> {
     require_updates()?;
     let http = {
@@ -85,12 +91,25 @@ pub async fn check(app: &AppHandle) -> Result<Option<UpdateInfo>, String> {
         UPDATE_MANIFEST_URL,
     )
     .await?;
-    if let Some(ref info) = info {
+    let cleared = {
         let ctx = app.state::<AppCtx>();
-        *ctx.update_info.lock().unwrap() = Some(info.clone());
+        record_check(&ctx.update_info, info.as_ref())
+    };
+    if let Some(ref info) = info {
         let _ = app.emit("update-available", info);
+    } else if cleared {
+        let _ = app.emit("update-cleared", ());
     }
     Ok(info)
+}
+
+/// Store the result of a successful check. Returns whether an update found
+/// earlier was dropped because the manifest no longer names a newer version.
+fn record_check(slot: &Mutex<Option<UpdateInfo>>, found: Option<&UpdateInfo>) -> bool {
+    let mut slot = slot.lock().unwrap();
+    let had_update = slot.is_some();
+    *slot = found.cloned();
+    had_update && found.is_none()
 }
 
 async fn fetch_update(
@@ -190,6 +209,36 @@ mod installer_tests {
         assert_eq!(command.get_program(), installer.as_os_str());
         let args: Vec<_> = command.get_args().collect();
         assert_eq!(args, ["/P", "/UPDATE", "/R"]);
+    }
+
+    fn update(version: &str) -> UpdateInfo {
+        UpdateInfo {
+            version: version.into(),
+            notes: None,
+            url: format!("https://example.test/VibeUsage-{version}-Setup.exe"),
+            sha256: None,
+        }
+    }
+
+    /// vibe-cafe/vibe-usage-windows#36: after a release is pulled, the next
+    /// check finds no newer version; the stale offer and its download address
+    /// must go, or 「发现更新」 keeps downloading the withdrawn installer.
+    #[test]
+    fn a_check_without_a_newer_version_drops_the_stale_update() {
+        let slot = Mutex::new(None);
+        assert!(!record_check(&slot, Some(&update("0.7.6"))));
+        assert_eq!(slot.lock().unwrap().as_ref().unwrap().version, "0.7.6");
+
+        assert!(record_check(&slot, None), "the earlier offer is withdrawn");
+        assert!(slot.lock().unwrap().is_none());
+        assert!(!record_check(&slot, None), "nothing left to withdraw");
+
+        // A newer release replaces the old one rather than clearing it.
+        record_check(&slot, Some(&update("0.7.6")));
+        assert!(!record_check(&slot, Some(&update("0.7.7"))));
+        let stored = slot.lock().unwrap().clone().unwrap();
+        assert_eq!(stored.version, "0.7.7");
+        assert!(stored.url.ends_with("VibeUsage-0.7.7-Setup.exe"));
     }
 
     #[test]
