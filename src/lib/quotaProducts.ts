@@ -269,6 +269,24 @@ export function quotaProvenanceText(
 }
 
 /**
+ * Paid Codex plans have a 5-hour window, so a card without one says why
+ * (「官方当前未启用」 / 「近 5 小时无活动」) instead of silently showing only
+ * 7d. Same plans as macOS `RateLimitCardView.expectsCodexFiveHour`, including
+ * Business ProLite (vibe-usage-app#56).
+ */
+export function expectsCodexFiveHour(snapshot: ProviderRateLimit): boolean {
+  if (snapshot.provider !== "codex") return false;
+  const plan = snapshot.planLabel?.toLowerCase();
+  return (
+    plan === "plus" ||
+    plan === "pro" ||
+    plan === "prolite" ||
+    plan === "business" ||
+    plan === "business prolite"
+  );
+}
+
+/**
  * Tab strip order: products whose monitoring is on first, then the rest — each
  * group in the user's persisted order. Mirrors `AppState.quotaTabOrder` on
  * macOS: an unknown id in the stored order is dropped, a catalog product the

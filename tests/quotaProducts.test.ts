@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   canonicalQuotaMeters,
   compactQuotaStatus,
+  expectsCodexFiveHour,
   isZCodeConfigured,
   moveQuotaProduct,
   quotaEmptyStateText,
@@ -317,5 +318,29 @@ describe("read failure reasons and sources", () => {
         "Codex",
       ),
     ).toBeNull();
+  });
+});
+
+describe("Codex 5h window expectation", () => {
+  const codex = (planLabel?: string): ProviderRateLimit => ({
+    provider: "codex",
+    status: { kind: "ok" },
+    planLabel,
+  });
+
+  it.each(["Plus", "Pro", "Prolite", "Business", "Business ProLite"])(
+    "a paid plan (%s) explains a missing 5h window, as on macOS",
+    (plan) => {
+      expect(expectsCodexFiveHour(codex(plan))).toBe(true);
+    },
+  );
+
+  it("free, unknown and non-Codex cards do not", () => {
+    expect(expectsCodexFiveHour(codex("Free"))).toBe(false);
+    expect(expectsCodexFiveHour(codex())).toBe(false);
+    expect(expectsCodexFiveHour(codex("self_serve_business_prolite"))).toBe(false);
+    expect(
+      expectsCodexFiveHour({ provider: "claudeCode", status: { kind: "ok" }, planLabel: "Pro" }),
+    ).toBe(false);
   });
 });
