@@ -138,7 +138,7 @@ Rust (Tauri 2)
 
 ## License
 
-MIT
+[MIT](LICENSE)
 
 ## 自动刷新与跨设备统计
 
