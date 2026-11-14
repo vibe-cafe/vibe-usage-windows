@@ -22,7 +22,7 @@ const FAILURE = "vibe-usage launcher:";
 /**
  * Answers the launcher's two requests from `BOOTSTRAP_TEST_FETCH`, and reports
  * on stderr (`stub: …` lines, split off by `launch`) each tarball request and
- * each timeout the launcher asks for.
+ * each timeout the launcher asks for, and every URL it fetches (`url: …`).
  */
 const STUB = `
 const plan = JSON.parse(process.env.BOOTSTRAP_TEST_FETCH);
@@ -31,6 +31,7 @@ AbortSignal.timeout = (ms) => {
   process.stderr.write("stub: timeout " + ms + "\\n");
   return timeout(ms);
 };
+const fetchUrl = (url) => process.stderr.write("url: " + url + "\\n");
 const networkError = () =>
   new TypeError("fetch failed", { cause: Object.assign(new Error("connect ETIMEDOUT 104.16.0.35:443"), { code: "ETIMEDOUT" }) });
 const answer = (kind) => {
@@ -46,6 +47,7 @@ const answer = (kind) => {
 };
 globalThis.fetch = async (url) => {
   const target = String(url);
+  fetchUrl(target);
   if (target.endsWith("/latest")) return answer(plan.latest);
   process.stderr.write("stub: tarball requested\\n");
   return answer(plan.tarball ?? { type: "network" });
@@ -111,18 +113,23 @@ function launch(plan: { latest: Answer; tarball?: Answer }) {
     timeout: 30_000,
     env: {
       ...process.env,
+      // `os.homedir()` for `~/.npmrc`: never the developer's or the runner's own.
+      HOME: home,
+      USERPROFILE: home,
       VIBE_USAGE_CONFIG_DIR: home,
       BOOTSTRAP_TEST_FETCH: JSON.stringify(plan),
     },
   });
   const lines = result.stderr.split(/\r?\n/).filter(Boolean);
-  const stderr = lines.filter((line) => !line.startsWith("stub: "));
+  const stderr = lines.filter((line) => !line.startsWith("stub: ") && !line.startsWith("url: "));
   return {
     status: result.status,
     stdout: result.stdout,
     stderr,
     /** What the stub saw, e.g. `timeout 10000`, `tarball requested`. */
     stub: lines.filter((line) => line.startsWith("stub: ")).map((line) => line.slice("stub: ".length)),
+    /** Every URL the launcher fetched, in order. */
+    urls: lines.filter((line) => line.startsWith("url: ")).map((line) => line.slice("url: ".length)),
     notices: stderr.filter((line) => line.startsWith(NOTICE)),
     failures: stderr.filter((line) => line.startsWith(FAILURE)),
   };
@@ -338,5 +345,78 @@ describe("cli-bootstrap: the CLI itself runs once", () => {
     expect(run.status).toBe(1);
     expect(run.stdout).toBe("ran 0.14.11 sync\n");
     expect(run.notices).toHaveLength(1);
+  });
+});
+
+describe("cli-bootstrap: the registry follows ~/.npmrc", () => {
+  const OFFICIAL = "https://registry.npmjs.org/@vibe-cafe/vibe-usage/latest";
+  const npmrc = (text: string) => writeFileSync(join(home, ".npmrc"), text);
+  const metadataUrl = (plan: { latest: Answer; tarball?: Answer } = { latest: latest("0.14.11") }) => {
+    cache({ "0.14.11": {} });
+    const run = launch(plan);
+    expect(run.status).toBe(0);
+    return run.urls[0];
+  };
+
+  it("asks registry.npmjs.org without an npmrc", () => {
+    expect(metadataUrl()).toBe(OFFICIAL);
+  });
+
+  it("asks the mirror the npmrc names and downloads the tarball it returns", () => {
+    npmrc("registry=https://registry.npmmirror.com/\n");
+    const mirror = published("0.16.0");
+    const tarballUrl = "https://registry.npmmirror.com/@vibe-cafe/vibe-usage/-/vibe-usage-0.16.0.tgz";
+    const dist = (mirror.latest as { json: { dist: Record<string, string> } }).json.dist;
+    dist.tarball = tarballUrl;
+    const run = launch(mirror);
+    expect(run.status).toBe(0);
+    expect(run.stdout).toBe("ran 0.16.0 sync\n");
+    expect(run.urls).toEqual(["https://registry.npmmirror.com/@vibe-cafe/vibe-usage/latest", tarballUrl]);
+  });
+
+  it("reads the file the way npm does: comments, quotes, CRLF, BOM, last assignment wins", () => {
+    npmrc(
+      "\uFEFF; registry=https://commented.example\r\n" +
+        "# registry=https://also-commented.example\r\n" +
+        "registry=https://first.example\r\n" +
+        'registry = "https://npm.example.com/repository/npm/"\r\n',
+    );
+    expect(metadataUrl()).toBe("https://npm.example.com/repository/npm/@vibe-cafe/vibe-usage/latest");
+  });
+
+  it("prefers the @vibe-cafe scope's registry", () => {
+    npmrc("@vibe-cafe:registry=https://scoped.example/npm\nregistry=https://registry.npmmirror.com\n");
+    expect(metadataUrl()).toBe("https://scoped.example/npm/@vibe-cafe/vibe-usage/latest");
+  });
+
+  it("keeps a token for registry.npmjs.org from changing anything", () => {
+    npmrc("//registry.npmjs.org/:_authToken=npm_abc\n");
+    expect(metadataUrl()).toBe(OFFICIAL);
+  });
+
+  for (const [name, text] of [
+    ["plain http", "registry=http://registry.npmmirror.com/\n"],
+    ["a registry it holds a token for", "registry=https://npm.corp.example/\n//npm.corp.example/:_authToken=secret\n"],
+    ["a registry it holds a password for", "registry=https://npm.corp.example:8443/r/\n//npm.corp.example:8443/r/:_password=c2VjcmV0\n"],
+    ["an unscoped credential", "registry=https://npm.corp.example/\n_auth=dXNlcjpwYXNz\n"],
+    ["credentials in the URL", "registry=https://user:pass@npm.corp.example/\n"],
+    ["an unexpanded placeholder", "registry=${NPM_REGISTRY}\n"],
+    ["something that is not a URL", "registry=registry.npmmirror.com\n"],
+  ] as const) {
+    it(`stays on registry.npmjs.org for ${name}`, () => {
+      npmrc(text);
+      expect(metadataUrl()).toBe(OFFICIAL);
+    });
+  }
+
+  it("falls back to the cache when the mirror is unreachable, like the official registry", () => {
+    npmrc("registry=https://registry.npmmirror.com\n");
+    cache({ "0.14.11": {} });
+    const run = launch({ latest: { type: "network" } });
+    expect(run.status).toBe(0);
+    expect(run.stdout).toBe("ran 0.14.11 sync\n");
+    expect(run.urls).toEqual(["https://registry.npmmirror.com/@vibe-cafe/vibe-usage/latest"]);
+    expect(run.notices).toHaveLength(1);
+    expect(run.notices[0]).toMatch(new RegExp(`^${NOTICE} stage=network; `));
   });
 });
