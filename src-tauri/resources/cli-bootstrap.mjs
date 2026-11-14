@@ -23,19 +23,24 @@
  * the registry answers. With nothing cached the launcher fails as it always
  * has, with the same messages.
  *
+ * The registry is the one the user's `~/.npmrc` names, like `npx` would use
+ * (`registryBase()`), so a user who pointed npm at a mirror keeps getting the
+ * CLI from that mirror; with no such setting it is registry.npmjs.org.
+ *
  * `src/index.js` is imported in-process rather than spawned: the CLI's entry
  * point is `run(process.argv.slice(2))`, so stdout/stderr and the exit code are
  * exactly what the parent already parses.
  */
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { gunzipSync } from 'node:zlib';
 
 const PACKAGE = '@vibe-cafe/vibe-usage';
-const METADATA_URL = `https://registry.npmjs.org/${PACKAGE}/latest`;
+const SCOPE = '@vibe-cafe';
+const DEFAULT_REGISTRY = 'https://registry.npmjs.org';
 const ENTRY = 'src/index.js';
 /**
  * Prefix of the one line written when a cached version stands in for
@@ -69,6 +74,108 @@ function fail(message) {
 }
 
 /**
+ * An unquoted npmrc value ends at the first `#` or `;` not escaped with `\`
+ * (an inline comment); `\#`, `\;` and `\\` stand for the character itself.
+ * The same walk as npm's `ini` parser, so `registry=https://… # 国内镜像` reads
+ * as the address alone.
+ */
+function stripInlineComment(value) {
+  let out = '';
+  for (let i = 0; i < value.length; i++) {
+    const c = value[i];
+    if (c === '\\' && i + 1 < value.length) {
+      const next = value[++i];
+      out += next === '#' || next === ';' || next === '\\' ? next : c + next;
+    } else if (c === '#' || c === ';') {
+      break;
+    } else {
+      out += c;
+    }
+  }
+  return out.trim();
+}
+
+/** `key=value` lines of an npmrc; the last assignment of a key wins, as in npm. */
+function parseNpmrc(text) {
+  const settings = new Map();
+  for (const raw of text.replace(/^\uFEFF/, '').split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith('#') || line.startsWith(';')) continue;
+    const eq = line.indexOf('=');
+    if (eq <= 0) continue;
+    let value = line.slice(eq + 1).trim();
+    if (value.length >= 2 && (value[0] === '"' || value[0] === "'") && value.at(-1) === value[0]) {
+      value = value.slice(1, -1);
+    } else {
+      value = stripInlineComment(value);
+    }
+    settings.set(line.slice(0, eq).trim(), value);
+  }
+  return settings;
+}
+
+const CREDENTIAL_FIELDS = new Set(['_auth', '_authToken', '_password', 'username', 'certfile', 'keyfile']);
+
+/**
+ * Whether the npmrc holds credentials for `host` (`//host/…:_authToken=…`), or
+ * an unscoped one, which npm applies to the configured registry.
+ */
+function hasCredentials(settings, host) {
+  for (const key of settings.keys()) {
+    const separator = key.lastIndexOf(':');
+    if (!CREDENTIAL_FIELDS.has(key.slice(separator + 1))) continue;
+    if (separator < 0) return true;
+    const scope = key.slice(0, separator);
+    if (!scope.startsWith('//')) continue;
+    try {
+      if (new URL(`https:${scope}`).host === host) return true;
+    } catch {
+      // Not a registry key.
+    }
+  }
+  return false;
+}
+
+/**
+ * The registry to ask, read from `~/.npmrc` the way `npx` reads it:
+ * `@vibe-cafe:registry`, else `registry`. Many users point npm at a mirror
+ * (registry.npmmirror.com in mainland China) because their direct route to
+ * registry.npmjs.org is slow or drops; asking the mirror they chose keeps their
+ * first sync, when nothing is cached yet, from depending on that route. It is
+ * the same trust `npx` already gives the setting.
+ *
+ * Only a plain `https:` URL is followed. The launcher sends no credentials, so a
+ * registry the file holds credentials for (a private company registry) would
+ * only answer 401 and is skipped; so are URLs with embedded credentials and
+ * plain `http:`, whose answer anyone on the route could replace — including the
+ * integrity it carries. Environment variables are not expanded the way npm
+ * expands them: a value containing `${` counts as invalid and means the
+ * official registry. Anything skipped, unreadable or absent means
+ * registry.npmjs.org, as before. Proxy settings in the file are not read.
+ */
+function registryBase() {
+  let settings;
+  try {
+    settings = parseNpmrc(readFileSync(join(homedir(), '.npmrc'), 'utf8'));
+  } catch {
+    return DEFAULT_REGISTRY;
+  }
+  const configured = settings.get(`${SCOPE}:registry`) ?? settings.get('registry');
+  if (!configured || configured.includes('${')) return DEFAULT_REGISTRY;
+  let url;
+  try {
+    url = new URL(configured);
+  } catch {
+    return DEFAULT_REGISTRY;
+  }
+  if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) {
+    return DEFAULT_REGISTRY;
+  }
+  if (hasCredentials(settings, url.host)) return DEFAULT_REGISTRY;
+  return `${url.origin}${url.pathname}`.replace(/\/+$/, '');
+}
+
+/**
  * A failure the launcher can name. `stage` is one of `network`, `registry`,
  * `download`, `install` (the same words the app's sync history uses); the
  * message is what `fail()` prints when no cached version can stand in, and the
@@ -85,7 +192,7 @@ class LauncherError extends Error {
 
 /** Anything thrown here without a `stage` is a network failure. */
 async function fetchLatest(timeoutMs) {
-  const res = await fetch(METADATA_URL, { signal: AbortSignal.timeout(timeoutMs) });
+  const res = await fetch(`${registryBase()}/${PACKAGE}/latest`, { signal: AbortSignal.timeout(timeoutMs) });
   if (!res.ok) throw new LauncherError('registry', `registry returned ${res.status} for ${PACKAGE}@latest`);
   let manifest;
   try {
