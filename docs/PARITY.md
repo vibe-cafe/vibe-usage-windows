@@ -37,7 +37,7 @@
 | `SummaryCardsView` | `components/SummaryCards.tsx` |
 | `BarChartView` | `components/TrendChart.tsx`（自绘 div 堆叠条） |
 | `DistributionChartsView` | `components/DistributionGrid.tsx`（自绘 SVG donut） |
-| 长名字 `.truncationMode(.middle)` + `.help()`（分布图例/筛选选项，同前缀项目名区分信息在尾部） | `components/MiddleTruncateLabel.tsx`（head 截断 + tail 6 字符不收缩 + `title` 悬浮全名） |
+| 长名字 `.truncationMode(.middle)` + `.help()`（分布图例/筛选选项，同前缀项目名区分信息在尾部） | `components/MiddleTruncateLabel.tsx`（head 截断 + tail 6 字符不收缩 + `title` 悬浮全名；两段都 `whitespace-pre`，否则拆分处的空格会被 flex 子元素吞掉，显示成「Gemini 4Carbon」） |
 | `SettingsView` (NSWindow 460×480) | `SettingsApp`（独立 WebView 窗口 460×620，信息架构 1:1：数据同步 → 订阅配额 → 常规 → 数据目录（高级）→ 测试诊断 → 关于 → 危险操作） |
 | `SettingsView.zCodeRow` / `compactQuotaStatus`（收起显示「待配置/已配置」，展开才是区域 + Key 表单） | `SettingsApp` 的 ZCode 行 + `lib/quotaProducts.ts:compactQuotaStatus` |
 | `AppState` | `state/AppStateContext.tsx` + Rust `AppCtx` |
