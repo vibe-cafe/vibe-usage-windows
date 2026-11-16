@@ -26,13 +26,19 @@ import { ProviderIcon } from "./ProviderIcon";
 import { QuotaTabStrip } from "./QuotaTabStrip";
 
 /**
- * Fixed card width. Two cards plus the 8 px gap fill the panel's content box
- * exactly ((520 − 2×16 padding − 8) / 2), so the familiar two-card row is
- * unchanged; a third product scrolls instead of squeezing every card narrower
- * than its meters and labels can render.
+ * Two cards per screen: each card is half the row minus half the 8 px gap, so
+ * the pair always fills the content box. At the default (and minimum) window
+ * width that is (520 − 2×16 padding − 8) / 2 = 240 px, the size the meters and
+ * labels were laid out for; a wider window widens the cards instead of leaving
+ * a gap on the right. A third product scrolls rather than squeezing the row.
  */
-const CARD_WIDTH = 240;
 const CARD_GAP = 8;
+export const QUOTA_CARD_BASIS = `calc((100% - ${CARD_GAP}px) / 2)`;
+
+/** Scroll distance from one card to the next in a row `rowWidth` px wide. */
+export function quotaCardStep(rowWidth: number): number {
+  return (rowWidth + CARD_GAP) / 2;
+}
 
 export function RateLimitCards() {
   const state = useAppState();
@@ -56,8 +62,6 @@ export function RateLimitCards() {
     return cardProviders[0] ?? tabOrder[0] ?? "codex";
   });
 
-  const step = CARD_WIDTH + CARD_GAP;
-
   /** The card nearest the leading edge is the one on screen; the strip follows
    *  it and the choice is persisted, so the row reopens where the user left it. */
   const syncActiveFromScroll = useCallback(() => {
@@ -65,12 +69,12 @@ export function RateLimitCards() {
     if (!scroller || cardProviders.length === 0) return;
     const index = Math.min(
       cardProviders.length - 1,
-      Math.max(0, Math.round(scroller.scrollLeft / step)),
+      Math.max(0, Math.round(scroller.scrollLeft / quotaCardStep(scroller.clientWidth))),
     );
     const provider = cardProviders[index];
     setActiveProvider((current) => (current === provider ? current : provider));
     state.selectQuotaTab(provider);
-  }, [cardProviders, state, step]);
+  }, [cardProviders, state]);
 
   const selectFromTab = useCallback(
     (provider: RateLimitProvider) => {
@@ -78,9 +82,11 @@ export function RateLimitCards() {
       state.selectQuotaTab(provider);
       const index = cardProviders.indexOf(provider);
       if (index < 0) return;
-      scrollerRef.current?.scrollTo({ left: index * step, behavior: "smooth" });
+      const scroller = scrollerRef.current;
+      if (!scroller) return;
+      scroller.scrollTo({ left: index * quotaCardStep(scroller.clientWidth), behavior: "smooth" });
     },
-    [cardProviders, state, step],
+    [cardProviders, state],
   );
 
   // Restore the last-viewed product as the leading card. Keyed on the row's
@@ -92,7 +98,7 @@ export function RateLimitCards() {
     if (!scroller) return;
     const index = cardProviders.indexOf(activeProvider);
     if (index <= 0) return;
-    scroller.scrollTo({ left: index * step });
+    scroller.scrollTo({ left: index * quotaCardStep(scroller.clientWidth) });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- see comment above
   }, [rowSignature]);
 
@@ -189,7 +195,7 @@ export function RateLimitCards() {
             <div
               key={provider}
               className="shrink-0"
-              style={{ width: CARD_WIDTH, scrollSnapAlign: "start" }}
+              style={{ flexBasis: QUOTA_CARD_BASIS, scrollSnapAlign: "start" }}
             >
               <ProviderCard snapshot={snapshot(provider)} />
             </div>

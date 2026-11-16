@@ -1,5 +1,6 @@
 // Settings window — port of Views/SettingsView.swift (grouped Form, 420px
-// content in a 460×620 window). macOS's "在 Dock 中显示" has no Windows
+// content in a 460×620 window; on Windows the window is resizable and the
+// column widens with it). macOS's "在 Dock 中显示" has no Windows
 // equivalent (no Dock) and is intentionally omitted.
 
 import { useCallback, useEffect, useState } from "react";
@@ -335,11 +336,14 @@ export function SettingsApp() {
   const isolatedRootsSummary = isolatedRootCount === 0 ? "未添加" : `${isolatedRootCount} 个目录`;
 
   return (
+    // The window is resizable: the whole window scrolls, and the column
+    // widens with it up to a comfortable reading width, then stays centered.
+    // At the default 460 width the 15px gutter keeps the original 430 column.
     <div
-      className="h-screen overflow-hidden font-sans text-[13px]"
+      className="no-scrollbar h-screen overflow-y-auto px-[15px] font-sans text-[13px]"
       style={{ background: "#1C1C1E", color: "#E8E8E8" }}
     >
-      <div className="no-scrollbar mx-auto flex h-full max-w-[430px] flex-col gap-4 overflow-y-auto px-4 py-4">
+      <div className="mx-auto flex max-w-[640px] flex-col gap-4 px-4 py-4">
         {/* 数据同步 — account key plus sync health; the former standalone
             「上次同步」 row rides along as a caption instead of a full row. */}
         <Section title="数据同步">

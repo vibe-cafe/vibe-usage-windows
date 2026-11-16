@@ -6,7 +6,7 @@
 
 | Token | 值 | Swift 来源 |
 |---|---|---|
-| 面板尺寸 | 520×620，圆角 12 | `MenuBarController.panelWidth/Height`, contentView cornerRadius |
+| 面板尺寸 | 520×620，圆角 12（Windows 为默认尺寸，窗口可调整，见「平台差异」11） | `MenuBarController.panelWidth/Height`, contentView cornerRadius |
 | 背景 | `#0A0A0A` | `Color(white: 0.04)` |
 | 卡片 | bg `#171717` / 边框 `#292929` / 圆角 4 | `Color(white: 0.09/0.16)` |
 | 文字 | `#FFFFFF` / `#A1A1A1` / `#616161` / `#808080` | `.white`, `white: 0.63/0.38/0.5` |
@@ -38,7 +38,7 @@
 | `BarChartView` | `components/TrendChart.tsx`（自绘 div 堆叠条） |
 | `DistributionChartsView` | `components/DistributionGrid.tsx`（自绘 SVG donut） |
 | 长名字 `.truncationMode(.middle)` + `.help()`（分布图例/筛选选项，同前缀项目名区分信息在尾部） | `components/MiddleTruncateLabel.tsx`（head 截断 + tail 6 字符不收缩 + `title` 悬浮全名；两段都 `whitespace-pre`，否则拆分处的空格会被 flex 子元素吞掉，显示成「Gemini 4Carbon」） |
-| `SettingsView` (NSWindow 460×480) | `SettingsApp`（独立 WebView 窗口 460×620，信息架构 1:1：数据同步 → 订阅配额 → 常规 → 数据目录（高级）→ 测试诊断 → 关于 → 危险操作） |
+| `SettingsView` (NSWindow 460×480) | `SettingsApp`（独立 WebView 窗口，默认 460×620、可调整，信息架构 1:1：数据同步 → 订阅配额 → 常规 → 数据目录（高级）→ 测试诊断 → 关于 → 危险操作） |
 | `SettingsView.zCodeRow` / `compactQuotaStatus`（收起显示「待配置/已配置」，展开才是区域 + Key 表单） | `SettingsApp` 的 ZCode 行 + `lib/quotaProducts.ts:compactQuotaStatus` |
 | `AppState` | `state/AppStateContext.tsx` + Rust `AppCtx` |
 | `APIClient` | `services/api_client.rs` |
@@ -57,7 +57,7 @@
 | `ClaudeUsageProbe`（Claude Code stdio `get_usage` 探测）+ `ClaudeUsageCache` | `src-tauri/src/services/claude_usage.rs`（探测参数与请求体与 macOS 逐项一致，见 `docs/SUBSCRIPTION_QUOTAS.md`「Claude 探测约束」）+ `crates/core/claude_code.rs`（候选程序：与 `discoverBinaries` 一样查 PATH，npm 的 `claude.cmd` 解析到它调用的 `claude.exe` / `cli.js`，不经 cmd.exe；macOS 最后还会试 Claude Desktop 自带的 Claude Code，Windows 尚无此项）+ `crates/core/rate_limit/claude_desktop.rs`（Desktop 记录，Windows 独有：`%APPDATA%\Claude`、MSIX 包的 `Packages\Claude_<后缀>\LocalCache\Roaming\Claude` 和 2026-11 起的 `%LOCALAPPDATA%\Claude-Data\claude_<后缀>`，同一包后缀的新旧目录算一份安装，见 `docs/SUBSCRIPTION_QUOTAS.md`） |
 | 旧 `StatuslineHook` | `crates/core/statusline_hook.rs` 仅用于安全退休本应用可证明归属的旧 hook |
 | 设置「关于」→「诊断信息」：「复制诊断信息」最小本机摘要 + App 本机保留最近 10 次同步摘要（一键诊断 1b；维护者 2026-11-09 在架构审批门批准方案修订二：「可以开工，你派活吧。 1、2、3我都同意。」） | `services/diagnostics.rs`（白名单结构化字段）+ `services/cli_doctor.rs`（并入 CLI 的 `doctor --json`，方案 2′）+ `services/sync_history.rs`（`sync-history.json`）+ `lib/diagnostics.ts`（排版与兜底过滤）；字段、脱敏和存放位置见 `docs/DIAGNOSTICS.md`。macOS 同一功能由 vibe-usage-app 按同一方案实现（并入 `doctor --json` 那一步 macOS 尚未做） |
-| `MenuBarController`（NSStatusItem + NSPanel） | `tray.rs` + `panel.rs`（托盘 + 标准主窗口） |
+| `MenuBarController`（NSStatusItem + NSPanel） | `tray.rs` + `panel.rs`（托盘 + 标准主窗口，可调整大小）+ `window_geometry.rs`（再次打开时缩到屏幕放得下再居中） |
 | Sparkle | `services/updater.rs`（latest.json + SHA-256 + NSIS 被动模式覆盖升级，见 `docs/WINDOWS_UPDATE.md`） |
 | `SMAppService`（登录项） | `auto-launch` crate（HKCU Run 注册表键） |
 
@@ -73,6 +73,11 @@
 8. **配额卡片数量**：与 0.6.1 相同，不设上限、不折叠；选择顺序即卡片顺序，多于两张时横向滚动。首次启动勾选全部「已检测且已就绪」的产品（ZCode 未配置 Key 时除外，与 macOS 一致）。
 9. **设置页「托盘」分组**：macOS 的「菜单栏」对应 Windows 的「托盘」，两项合并进「常规」，不单列分组。
 10. **官方图标资产**：七家图标直接复用 macOS 已验收的官方标准资产（@2x 56px，透明底 + 官方容器），本仓库不改色、不加边框；卡片与设置页共用同一个 `ProviderIcon`。
+11. **窗口可调整大小**（vibe-cafe/vibe-usage-windows#51）：macOS 面板固定 520×620、设置窗口固定 460×480，都不能调。Windows 是带标题栏的普通窗口，固定 620 高在小屏或高缩放下放不下（例如 1366×768 + 125%，逻辑高度约 614，再扣掉任务栏和标题栏），所以两个窗口都允许拖动调整：
+    - 主窗口默认 520×620，最小 520×360。宽度不低于设计宽度，否则汇总卡片的数字会被截断；高度不够时内容区滚动。放宽时配额卡片（两张各占一半）、筛选下拉的位置、趋势图横轴跟着伸展。不能最大化。
+    - 设置窗口默认 460×620，最小 460×360，整窗滚动；内容列随宽度伸展到 640 后居中，默认宽度下仍是原来的 430 列。
+    - 建窗时不超出屏幕可用区（`preventOverflow`）；从托盘再次打开（或打开设置）时，若窗口比所在屏幕的可用区大，先缩小再居中，标题栏不会被推出屏幕。
+    - 主窗口大小在隐藏到托盘和退出时写入 `window-size.json`（见下方文件表），下次启动恢复；设置窗口不记。
 
 ## CLI Windows 适配（不再内置快照）
 
@@ -92,6 +97,7 @@
 | `%USERPROFILE%\.vibe-usage\claude-rate-limits.json` | 旧版本 statusline 留下的抓取文件；当前版本不再读取（`crates/core/rate_limit/claude.rs` 的旧解析器已无调用方），也不安装 statusline |
 | `%USERPROFILE%\.codex\sessions\` | Codex 配额读取（只读） |
 | `%APPDATA%\ai.vibecafe.vibe-usage.windows\settings.json` | 应用设置（对应 macOS UserDefaults） |
+| `%APPDATA%\ai.vibecafe.vibe-usage.windows\window-size.json` | 主窗口上次的大小（逻辑像素，`{"width","height"}`），只由 App 读写；从未调整过就不建这个文件，内容损坏或尺寸不合理时忽略、用默认大小。「重置配置」不删除（只是界面状态） |
 | `%APPDATA%\ai.vibecafe.vibe-usage.windows\sync-history.json` | App 自己的最近 10 次同步摘要（只有类型化字段，见 `docs/DIAGNOSTICS.md`）；「重置配置」时删除 |
 
 ## 验收清单

@@ -14,6 +14,7 @@ import {
   toolName,
 } from "../lib/types";
 import { localDayKey } from "../lib/formatters";
+import { useElementWidth } from "../lib/useElementWidth";
 import { MiddleTruncateLabel } from "./MiddleTruncateLabel";
 
 type Dimension = "hostname" | "source" | "model" | "project";
@@ -28,11 +29,25 @@ const DIMENSIONS: { key: Dimension; label: string; Icon: typeof Monitor }[] = [
 const FILTER_ROW_HEIGHT = 28;
 const DROPDOWN_WIDTH = 240;
 const DROPDOWN_MAX_HEIGHT = 260;
+const FILTER_GAP = 8;
+
+/**
+ * Left edge of the 240px dropdown: centered under button `index` of `count`
+ * equal buttons spread over `available` px, then clamped inside the row. The
+ * row width follows the resizable window (488 at the default 520 width), so it
+ * is measured rather than assumed.
+ */
+export function dropdownLeft(index: number, count: number, available: number): number {
+  const buttonWidth = (available - FILTER_GAP * (count - 1)) / count;
+  const buttonCenter = index * (buttonWidth + FILTER_GAP) + buttonWidth / 2;
+  return Math.min(Math.max(0, buttonCenter - DROPDOWN_WIDTH / 2), available - DROPDOWN_WIDTH);
+}
 
 export function FilterTags() {
   const state = useAppState();
   const [openFilter, setOpenFilter] = useState<Dimension | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const rowWidth = useElementWidth(containerRef);
 
   const unique = useMemo(() => {
     const s = new Set<string>();
@@ -150,7 +165,7 @@ export function FilterTags() {
 
       {/* Filter grid + anchored dropdown */}
       <div ref={containerRef} className="relative" style={{ height: FILTER_ROW_HEIGHT }}>
-        <div className="flex gap-2">
+        <div className="flex" style={{ gap: FILTER_GAP }}>
           {DIMENSIONS.map((dim) => {
             const values = valuesFor(dim.key);
             const selected = selectedFor(dim.key);
@@ -205,6 +220,7 @@ export function FilterTags() {
         {openFilter && (
           <DropdownPanel
             dimension={openFilter}
+            rowWidth={rowWidth}
             values={valuesFor(openFilter)}
             groups={groups}
             labels={openFilter === "source" ? (value) => toolName(state.names, value) : undefined}
@@ -305,6 +321,7 @@ function CustomRangeControls() {
 
 function DropdownPanel({
   dimension,
+  rowWidth,
   values,
   groups,
   labels,
@@ -313,6 +330,7 @@ function DropdownPanel({
   onSetSelected,
 }: {
   dimension: Dimension;
+  rowWidth: number;
   values: string[];
   groups: ModelFilterGroup[];
   labels?: (value: string) => string;
@@ -320,15 +338,8 @@ function DropdownPanel({
   onToggle: (value: string) => void;
   onSetSelected: (next: Set<string>) => void;
 }) {
-  // Center the 240px panel under the dimension's button, clamped to bounds.
   const index = DIMENSIONS.findIndex((d) => d.key === dimension);
-  const count = DIMENSIONS.length;
-  // Content width = 520 - 2*16 padding = 488; gap 8.
-  const available = 488;
-  const gap = 8;
-  const buttonWidth = (available - gap * (count - 1)) / count;
-  const buttonCenter = index * (buttonWidth + gap) + buttonWidth / 2;
-  const left = Math.min(Math.max(0, buttonCenter - DROPDOWN_WIDTH / 2), available - DROPDOWN_WIDTH);
+  const left = dropdownLeft(index, DIMENSIONS.length, rowWidth);
 
   return (
     <div

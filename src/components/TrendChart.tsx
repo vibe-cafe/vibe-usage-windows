@@ -20,6 +20,7 @@ import {
   formatNumber,
 } from "../lib/formatters";
 import { CHART_MODE_LABELS, ChartMode, isHourly } from "../lib/types";
+import { useElementWidth } from "../lib/useElementWidth";
 
 const CHART_HEIGHT = 150;
 const Y_AXIS_WIDTH = 44;
@@ -138,7 +139,8 @@ function ChartContent({
     setHoveredIndex(idx);
   };
 
-  const plotWidth = plotRef.current?.getBoundingClientRect().width ?? 0;
+  // Follows window resizes, so the axis labels and tooltip stay under their bars.
+  const plotWidth = useElementWidth(plotRef);
 
   return (
     <div>
