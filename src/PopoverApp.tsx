@@ -28,7 +28,7 @@ function LocalQuotaView() {
         <HeaderBar />
       </div>
       <div className="h-px shrink-0 bg-card-border" />
-      <div className="no-scrollbar grow overflow-y-auto p-4">
+      <div className="no-scrollbar min-h-0 grow overflow-y-auto p-4">
         <div className="flex flex-col gap-4">
           <RateLimitCards />
           <div className="h-px bg-card-border" />
@@ -53,7 +53,9 @@ function DashboardView() {
       </div>
       <div className="h-px shrink-0 bg-card-border" />
 
-      <div className="no-scrollbar h-[560px] grow overflow-y-auto">
+      {/* Takes whatever height the resizable window leaves between header and
+          footer, and scrolls when the dashboard is taller than that. */}
+      <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto">
         <div className="flex flex-col gap-[14px] p-4">
           {state.usageError && (
             <div

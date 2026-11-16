@@ -8,6 +8,7 @@ mod process_lifecycle;
 mod services;
 mod state;
 mod tray;
+mod window_geometry;
 
 use state::AppCtx;
 use tauri::{Manager, WindowEvent};
@@ -32,6 +33,9 @@ pub fn run() {
         }))
         .setup(|app| {
             tray::create_tray(app.handle())?;
+            // Created hidden in tauri.conf.json so the remembered size is in
+            // place before the first paint.
+            panel::show_on_launch(app.handle());
             services::claude_usage::set_bundled_node(services::sync_engine::bundled_node(
                 app.handle(),
             ));
@@ -116,6 +120,7 @@ pub fn run() {
                     // launches and wait for our child jobs before exiting.
                     api.prevent_exit();
                     if process_lifecycle::begin_shutdown() {
+                        panel::remember_size(app);
                         services::scheduler::stop(app);
                         let app = app.clone();
                         let code = code.unwrap_or(0);

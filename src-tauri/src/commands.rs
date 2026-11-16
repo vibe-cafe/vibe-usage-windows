@@ -397,8 +397,7 @@ pub fn open_external(url: String) -> Result<(), String> {
 
 pub fn open_settings_impl(app: &AppHandle) {
     if let Some(existing) = app.get_webview_window("settings") {
-        let _ = existing.show();
-        let _ = existing.set_focus();
+        crate::window_geometry::present(&existing);
         let _ = app.emit("settings-shown", ());
         return;
     }
@@ -409,9 +408,12 @@ pub fn open_settings_impl(app: &AppHandle) {
     // whole string as an app resource path on some WebView/Tauri versions.
     let result = WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("index.html".into()))
         .title("Vibe Usage 设置")
+        // Same size rules as the `settings` entry in tauri.conf.json.
         .inner_size(460.0, 620.0)
-        .resizable(false)
+        .min_inner_size(460.0, 360.0)
+        .resizable(true)
         .maximizable(false)
+        .prevent_overflow()
         .center()
         .build();
     match result {
