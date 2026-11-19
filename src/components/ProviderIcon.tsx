@@ -3,6 +3,9 @@
 // (mirrors RateLimitCardView.ProviderIcon). Assets are the app's own copies of
 // each vendor's standard container mark, taken at @2x (56 px) so a 14 px CSS
 // box stays crisp on HiDPI displays; no recolouring, no added border.
+// Antigravity / AGY has no artwork on macOS either (`image(for:)` returns nil
+// and the card draws the `sparkles` symbol), so it goes straight to the
+// fallback symbol here too.
 
 import { useState } from "react";
 import { Code, Sparkles, SquareTerminal } from "lucide-react";
@@ -15,7 +18,7 @@ import kimiIcon from "../assets/kimi-icon.png";
 import openCodeIcon from "../assets/opencode-icon@2x.png";
 import zcodeIcon from "../assets/zcode-icon.png";
 
-const ICONS: Record<RateLimitProvider, string> = {
+const ICONS: Partial<Record<RateLimitProvider, string>> = {
   codex: codexIcon,
   claudeCode: claudeIcon,
   "kimi-code": kimiIcon,
@@ -33,6 +36,7 @@ const FALLBACKS: Record<RateLimitProvider, typeof Sparkles> = {
   grok: Sparkles,
   cursor: Sparkles,
   "opencode-go": Code,
+  antigravity: Sparkles,
 };
 
 export function ProviderIcon({
@@ -43,10 +47,11 @@ export function ProviderIcon({
   size?: number;
 }) {
   const [failed, setFailed] = useState(false);
-  if (!failed) {
+  const icon = ICONS[provider];
+  if (icon && !failed) {
     return (
       <img
-        src={ICONS[provider]}
+        src={icon}
         width={size}
         height={size}
         className="shrink-0"

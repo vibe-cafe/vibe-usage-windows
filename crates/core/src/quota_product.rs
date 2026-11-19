@@ -173,7 +173,35 @@ pub fn catalog() -> &'static [ProductDefinition] {
             command: "cursor",
             relative_paths: &[".cursor"],
         },
+        ProductDefinition {
+            provider: Antigravity,
+            display_name: "Antigravity / AGY",
+            availability: Ready,
+            cli_id: Some("antigravity"),
+            command: "agy",
+            relative_paths: &[".gemini/antigravity-cli", ".gemini/antigravity"],
+        },
     ]
+}
+
+/// Where the CLI looks for `agy.exe` besides PATH (`antigravityBinary()` in
+/// the CLI's `src/quotas/providers/antigravity.js`; keep the two lists equal,
+/// or a product can count as installed yet never be read):
+/// `~\.local\bin\agy.exe`, and the official installer's default
+/// `%LOCALAPPDATA%\agy\bin\agy.exe` (antigravity.google/docs/getting-started
+/// and its `install.ps1` / `install.cmd`). That folder reaches PATH only after
+/// `agy install` edits the user environment, which an app started earlier
+/// (autostart) never sees, so it has to be checked directly.
+pub fn antigravity_cli_paths(environment: &DiscoveryEnvironment) -> Vec<PathBuf> {
+    let mut paths = vec![environment
+        .home
+        .join(".local")
+        .join("bin")
+        .join("agy.exe")];
+    if let Some(local) = &environment.local_app_data {
+        paths.push(local.join("agy").join("bin").join("agy.exe"));
+    }
+    paths
 }
 
 pub fn cli_id(provider: RateLimitProvider) -> Option<&'static str> {
@@ -269,6 +297,15 @@ fn application_paths(
             // `%LOCALAPPDATA%\opencode` on Windows, which the home-relative
             // `relative_paths` cannot express.
             RateLimitProvider::OpenCodeGo => paths.push(root.join("opencode")),
+            // Not in Antigravity's docs (they give no desktop install folder):
+            // community reports put the per-user Antigravity 2.0 desktop app
+            // and the 1.x IDE in `Programs\Antigravity`, and the standalone
+            // 2.x IDE in `Programs\Antigravity IDE`. Detection only; reading
+            // the quota always needs `agy`.
+            RateLimitProvider::Antigravity => {
+                paths.push(root.join("Antigravity").join("Antigravity.exe"));
+                paths.push(root.join("Antigravity IDE").join("Antigravity IDE.exe"));
+            }
         }
     }
     if let Some(app_data) = &environment.app_data {
@@ -280,6 +317,9 @@ fn application_paths(
     }
     if provider == RateLimitProvider::ClaudeCode {
         paths.extend(crate::rate_limit::claude_desktop::data_dirs(environment));
+    }
+    if provider == RateLimitProvider::Antigravity {
+        paths.extend(antigravity_cli_paths(environment));
     }
     paths
 }
@@ -346,7 +386,11 @@ mod tests {
         }
         assert_eq!(
             ids,
-            HashSet::from(["kimi-code", "zcode", "grok", "opencode-go"])
+            HashSet::from(["kimi-code", "zcode", "grok", "opencode-go", "antigravity"])
+        );
+        assert_eq!(
+            cli_provider("antigravity"),
+            Some(RateLimitProvider::Antigravity)
         );
         assert_eq!(
             cli_provider("opencode-go"),
@@ -440,6 +484,68 @@ mod tests {
             &discover_with(&home_env),
             RateLimitProvider::OpenCodeGo
         ));
+    }
+
+    #[test]
+    fn discovers_antigravity_where_the_cli_finds_agy_and_where_the_apps_install() {
+        let touch = |path: PathBuf| {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, "").unwrap();
+        };
+        let empty = tempfile::tempdir().unwrap();
+        assert!(!detected(
+            &discover_with(&environment(empty.path())),
+            RateLimitProvider::Antigravity
+        ));
+
+        // The official installer's default, outside PATH for an app that was
+        // already running when `agy install` edited the user environment.
+        let official = tempfile::tempdir().unwrap();
+        let env = environment(official.path());
+        let installed = env
+            .local_app_data
+            .as_ref()
+            .unwrap()
+            .join("agy")
+            .join("bin")
+            .join("agy.exe");
+        assert!(antigravity_cli_paths(&env).contains(&installed));
+        touch(installed);
+        assert!(detected(
+            &discover_with(&env),
+            RateLimitProvider::Antigravity
+        ));
+
+        let cases: [fn(&DiscoveryEnvironment) -> PathBuf; 5] = [
+            |env| env.home.join(".local").join("bin").join("agy.exe"),
+            |env| env.path_directories[0].join("agy.exe"),
+            |env| env.home.join(".gemini").join("antigravity-cli").join("settings.json"),
+            |env| {
+                env.local_app_data
+                    .as_ref()
+                    .unwrap()
+                    .join("Programs")
+                    .join("Antigravity")
+                    .join("Antigravity.exe")
+            },
+            |env| {
+                env.local_app_data
+                    .as_ref()
+                    .unwrap()
+                    .join("Programs")
+                    .join("Antigravity IDE")
+                    .join("Antigravity IDE.exe")
+            },
+        ];
+        for path in cases {
+            let root = tempfile::tempdir().unwrap();
+            let env = environment(root.path());
+            touch(path(&env));
+            assert!(detected(
+                &discover_with(&env),
+                RateLimitProvider::Antigravity
+            ));
+        }
     }
 
     fn detected(products: &[QuotaProduct], provider: RateLimitProvider) -> bool {

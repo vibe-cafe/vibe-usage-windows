@@ -45,12 +45,12 @@
 | `SyncEngine`（npx/bun x，120s） | `services/sync_engine.rs`（内置 CLI + node，120s，CREATE_NO_WINDOW） |
 | 设置中的隔离运行时目录（Codex / Grok / Antigravity） | 原生文件夹选择器 + 同一组 CLI `config roots/add-root/remove-root` 命令 |
 | `SyncScheduler`（30 分钟） | `services/scheduler.rs` |
-| 七产品订阅配额目录与任意数量选择 | Codex / Claude 原生适配；Kimi / ZCode / Grok / OpenCode Go 使用版本化 typed CLI bridge（OpenCode Go 的凭据读取由内置 CLI 负责：2.x 凭据表 → 1.x `auth.json` 回退）；Cursor 独立显示待接入 |
+| 八产品订阅配额目录与任意数量选择 | Codex / Claude 原生适配；Kimi / ZCode / Grok / OpenCode Go / Antigravity / AGY 使用版本化 typed CLI bridge（OpenCode Go 的凭据读取由内置 CLI 负责：2.x 凭据表 → 1.x `auth.json` 回退；Antigravity 由 CLI 启动用户已登录的 `agy` 读取，Windows 额外查官方默认安装位置，见 `docs/SUBSCRIPTION_QUOTAS.md`「Antigravity / AGY 探测约束」）；Cursor 独立显示待接入（macOS 0.7.4 起已经读取，Windows 尚未跟进） |
 | `RateLimitCardView`：`QuotaTabStripView`（整目录图标 Tab：已生效彩色在前、未生效置灰在后、可拖动排序、最右齿轮进设置、已启用但非 ok 加琥珀点）+ 一行两张 240px 卡片横滑，Tab 与横滑双向联动（点 Tab 滑过去、滑动时高亮跟随前缘卡片）；卡片只属于已启用产品，全部关闭时只剩图标行 | `components/RateLimitCard.tsx` + `components/QuotaTabStrip.tsx`：同一模型（HTML5 拖放排序、前缘卡片经滚动位置判定、`quotaTabOrder` 顺序与 `quotaProductOrder` 持久化、齿轮调 `open_settings_window`） |
 | `RateLimitCardView.allRows` 的 Codex 5h 占位行（`fiveHourNotEnforced` 或 Pro / Prolite →「不限额」，否则「近 5 小时无活动」；维护者 2026-10-24 定）与 `expectsFiveHourWindow` | `lib/quotaProducts.ts:codexFiveHourPlaceholder` / `expectsCodexFiveHour`（同一规则；Windows 原先显示「官方当前未启用」，已对齐） |
 | `RateLimitCardView.emptyStateText(for:isDetected:)` / `ProviderRateLimit.EmptyReason` | `lib/quotaProducts.ts:quotaEmptyStateText` + Rust `RateLimitEmptyReason`（`crates/core/src/rate_limit/mod.rs`） |
 | `ProviderRateLimit.Source` / `ProviderRateLimit.LiveFailure`（卡片的实际来源和固定失败原因，一键诊断 1a） | Rust `RateLimitSource` / `RateLimitLiveFailure`（同一组代码，另加 Windows 独有的桌面端记录四种原因和凭据管理器）+ `lib/quotaProducts.ts:quotaFailureText` / `quotaProvenanceText`（文案与显示规则一致，见 `docs/SUBSCRIPTION_QUOTAS.md`「失败原因和来源」） |
-| `RateLimitCardView.ProviderIcon`（官方 28/56px 资产，卡片与设置共用） | `components/ProviderIcon.tsx`（`src/assets/*-icon.png` 为官方资产 @2x=56px，卡片 14px 显示）+ 符号兜底 |
+| `RateLimitCardView.ProviderIcon`（官方 28/56px 资产，卡片与设置共用；Antigravity / AGY 没有资产，画 `sparkles`） | `components/ProviderIcon.tsx`（`src/assets/*-icon.png` 为官方资产 @2x=56px，卡片 14px 显示）+ 符号兜底（Antigravity / AGY 直接用 lucide `Sparkles`） |
 | ZCode 两区域 Key | BigModel / Z.ai 分开存入 Windows Credential Manager；只向明确选择的区域请求注入 |
 | `RuntimeDetector` | `crates/core/runtime.rs`（Windows 路径 + 捆绑 node 兜底） |
 | `CodexRateLimitReader` | `crates/core/rate_limit/codex.rs` |
@@ -72,7 +72,7 @@
 7. **配额悬停 tooltip**：交互与内容 1:1；Windows 使用 mouse enter/leave（无 NSTrackingArea 差异）。
 8. **配额卡片数量**：与 0.6.1 相同，不设上限、不折叠；选择顺序即卡片顺序，多于两张时横向滚动。首次启动勾选全部「已检测且已就绪」的产品（ZCode 未配置 Key 时除外，与 macOS 一致）。
 9. **设置页「托盘」分组**：macOS 的「菜单栏」对应 Windows 的「托盘」，两项合并进「常规」，不单列分组。
-10. **官方图标资产**：七家图标直接复用 macOS 已验收的官方标准资产（@2x 56px，透明底 + 官方容器），本仓库不改色、不加边框；卡片与设置页共用同一个 `ProviderIcon`。
+10. **官方图标资产**：七家图标直接复用 macOS 已验收的官方标准资产（@2x 56px，透明底 + 官方容器），本仓库不改色、不加边框；卡片与设置页共用同一个 `ProviderIcon`。Antigravity / AGY 两端都没有官方资产，都画星光符号。
 11. **窗口可调整大小**（vibe-cafe/vibe-usage-windows#51）：macOS 面板固定 520×620、设置窗口固定 460×480，都不能调。Windows 是带标题栏的普通窗口，固定 620 高在小屏或高缩放下放不下（例如 1366×768 + 125%，逻辑高度约 614，再扣掉任务栏和标题栏），所以两个窗口都允许拖动调整：
     - 主窗口默认 520×620，最小 520×360。宽度不低于设计宽度，否则汇总卡片的数字会被截断；高度不够时内容区滚动。放宽时配额卡片（两张各占一半）、筛选下拉的位置、趋势图横轴跟着伸展。不能最大化。
     - 设置窗口默认 460×620，最小 460×360，整窗滚动；内容列随宽度伸展到 640 后居中，默认宽度下仍是原来的 430 列。

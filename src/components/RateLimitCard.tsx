@@ -316,6 +316,9 @@ function unauthorizedText(provider: RateLimitProvider, region: "bigModel" | "zAI
   if (provider === "kimi-code") return "请重新登录 Kimi Code 后重试";
   // The key comes from OpenCode's own store; only OpenCode can re-issue it.
   if (provider === "opencode-go") return "请在 OpenCode 中重新登录后重试";
+  // The CLI reports this both when no `agy` is installed and when it is
+  // signed out (same sentence as the macOS card).
+  if (provider === "antigravity") return "请安装 agy 并登录后重试";
   return `请打开 ${label} 使用一次后重试`;
 }
 

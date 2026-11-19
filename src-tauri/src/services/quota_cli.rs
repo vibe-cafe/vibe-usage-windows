@@ -371,6 +371,30 @@ mod tests {
     }
 
     #[test]
+    fn antigravity_answers_reach_its_card_and_a_missing_agy_asks_for_sign_in() {
+        let ok = decode(
+            br#"{"schemaVersion":1,"products":[{"id":"antigravity","status":"ok","meters":[{"id":"gemini-5h","label":"5h","utilization":100,"windowSeconds":18000},{"id":"gemini-weekly","label":"7d","utilization":25,"resetsAt":"2026-11-23T00:00:00.000Z","windowSeconds":604800}],"fetchedAt":"2026-11-19T02:00:00.000Z","source":"live"}]}"#,
+            &[RateLimitProvider::Antigravity],
+        )
+        .unwrap()
+        .remove(0);
+        assert_eq!(ok.provider, RateLimitProvider::Antigravity);
+        assert_eq!(ok.status, RateLimitStatus::Ok);
+        assert_eq!(
+            ok.meters.iter().map(|m| m.label.as_str()).collect::<Vec<_>>(),
+            ["5h", "7d"]
+        );
+        // The CLI found no `agy`: the card says to install and sign in.
+        let missing = decode(
+            br#"{"schemaVersion":1,"products":[{"id":"antigravity","status":"missing_credentials","meters":[],"fetchedAt":"2026-11-19T02:00:00.000Z","message":"Install agy and sign in, then retry"}]}"#,
+            &[RateLimitProvider::Antigravity],
+        )
+        .unwrap()
+        .remove(0);
+        assert_eq!(missing.status, RateLimitStatus::Unauthorized);
+    }
+
+    #[test]
     fn maps_an_optional_cli_empty_reason_and_ignores_unknown_tokens() {
         let snapshot = |extra: &str| {
             decode(
