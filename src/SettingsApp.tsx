@@ -518,7 +518,7 @@ export function SettingsApp() {
               Cookie、登录 Token 或其他应用凭据。
             </p>
             <p className="text-[10.5px] leading-relaxed" style={{ color: "#8C8C8C" }}>
-              Kimi Code 使用其官方 CLI 登录。
+              Kimi Code 使用其官方 CLI 登录；Antigravity / AGY 使用官方 agy 登录。
             </p>
             <div className="flex justify-end">
               <SmallButton disabled={quotaBusy} onClick={() => void rediscoverQuotaProducts()}>

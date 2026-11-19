@@ -127,14 +127,18 @@ describe("empty quota card copy", () => {
 });
 
 describe("tab strip model", () => {
-  const catalog: RateLimitProvider[] = ["codex", "claudeCode", "kimi-code", "zcode", "grok", "cursor", "opencode-go"];
+  const catalog: RateLimitProvider[] = [
+    "codex", "claudeCode", "kimi-code", "zcode", "grok", "cursor", "opencode-go", "antigravity",
+  ];
 
   it("lists enabled products first, then the grey ones, each in stored order", () => {
     const stored: RateLimitProvider[] = ["opencode-go", "grok", "cursor", "codex", "claudeCode"];
     const order = quotaTabOrder(catalog, ["grok", "codex"], stored);
 
     expect(order.slice(0, 2)).toEqual(["grok", "codex"]);
-    expect(new Set(order.slice(2))).toEqual(new Set(["opencode-go", "cursor", "claudeCode", "kimi-code", "zcode"]));
+    expect(new Set(order.slice(2))).toEqual(
+      new Set(["opencode-go", "cursor", "claudeCode", "kimi-code", "zcode", "antigravity"]),
+    );
     // Every catalog product keeps a tab: an id the stored order forgot is
     // appended rather than dropped, and a ghost id disappears.
     expect(order).toHaveLength(catalog.length);

@@ -53,6 +53,10 @@ pub enum RateLimitProvider {
     OpenCodeGo,
     #[serde(rename = "cursor")]
     Cursor,
+    /// CLI-backed: the CLI starts the user's signed-in `agy` and reads its
+    /// loopback quota summary; the app never talks to `agy` itself.
+    #[serde(rename = "antigravity")]
+    Antigravity,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -254,6 +258,14 @@ mod tests {
         assert_eq!(
             serde_json::to_value(RateLimitProvider::OpenCodeGo).unwrap(),
             serde_json::json!("opencode-go")
+        );
+        assert_eq!(
+            serde_json::from_value::<RateLimitProvider>(serde_json::json!("antigravity")).unwrap(),
+            RateLimitProvider::Antigravity
+        );
+        assert_eq!(
+            serde_json::to_value(RateLimitProvider::Antigravity).unwrap(),
+            serde_json::json!("antigravity")
         );
         for (reason, id) in [
             (RateLimitEmptyReason::NotEntitled, "notEntitled"),

@@ -6,14 +6,14 @@
 
 Codex 付费套餐（Plus / Pro / Prolite / Business / Business ProLite）没有拿到 5h 窗口时，卡片仍保留 5h 这一行并说明原因，规则与 macOS 相同（维护者 2026-10-24 定，见 macOS `AGENTS.md`「"Not enforced" vs "no data" for the Codex 5h window」）：实时用量接口会列出所有生效的窗口，它没给 5h 就说明官方关掉了这个限额（`fiveHourNotEnforced`），显示「不限额」；OpenAI 对 Pro / Prolite 一直关着 5h，这两种套餐不论数据来自接口还是本地日志都显示「不限额」；其余情况数据来自本地会话日志，少了 5h 窗口可能只是近 5 小时没用，显示「近 5 小时无活动」。Business ProLite 不算 Pro 套餐，只在接口确认没有 5h 时显示「不限额」。实现在 `src/lib/quotaProducts.ts:codexFiveHourPlaceholder`。
 
-用户可以选择任意数量的订阅产品，选择顺序即卡片顺序；面板为每个已选产品始终渲染一张卡片，多于两张时横向滚动，不折叠成一句通用提示。自动检测只影响首次推荐（首次启动会勾选全部已检测且已就绪的产品）；手动选择不受安装路径限制。Cursor 当前只展示待接入状态。
+用户可以选择任意数量的订阅产品，选择顺序即卡片顺序；面板为每个已选产品始终渲染一张卡片，多于两张时横向滚动，不折叠成一句通用提示。自动检测只影响首次推荐（首次启动会勾选全部已检测且已就绪的产品）；手动选择不受安装路径限制。Cursor 当前只展示待接入状态（macOS 已经读取，Windows 尚未跟进）。
 
 ## 数据流和职责
 
 - `crates/core/src/quota_product.rs`：应用侧产品目录，集中维护名称、可用性、CLI 路由、常规目录和命令检测。Windows 应用安装位置在同一模块适配。
 - `commands.rs`：启动时初始化一次默认选择，后续产品查询不写设置；处理选择、区域和用户输入的凭据。
 - `rate_limits.rs`：刷新调度和短期内存缓存。Codex/Claude 保留原读取实现（Claude 原生探测的 `rate_limits_available:false` 直接给出 `sessionWithoutPlanLimits` 空态原因），其他已接入产品通过 `quota_cli.rs` 使用固定 CLI 的 JSON 协议；CLI 结果里的可选 `emptyReason` 会映射到 `RateLimitEmptyReason`，缺失或未知取值保持 `None`（向前兼容）。每张卡片的快照另带 `source`（实际来源）和 `liveFailure`（固定失败原因），见下文「失败原因和来源（不放原文）」。
-- 前端从目录获取产品名称，使用共享卡片展示配额；官方图标资产（七家，@2x）由 `src/assets/` 提供，卡片与设置页共用 `src/components/ProviderIcon.tsx`。类型定义保留编译期检查，产品特有的登录提示仍由 UI 处理。
+- 前端从目录获取产品名称，使用共享卡片展示配额；官方图标资产（七家，@2x）由 `src/assets/` 提供，卡片与设置页共用 `src/components/ProviderIcon.tsx`。Antigravity / AGY 在 macOS 也没有图标资产，两端都画星光符号（macOS `sparkles`，Windows lucide `Sparkles`）。类型定义保留编译期检查，产品特有的登录提示仍由 UI 处理。
 
 ## Claude 探测约束（与 macOS 逐项一致）
 
@@ -26,6 +26,15 @@ Codex 付费套餐（Plus / Pro / Prolite / Business / Business ProLite）没有
 - 套餐名照 `subscription_type` 显示，首字母大写。2026-10-30 起 Max 20x 改名 Ultra，但 Claude Code 对这类账号仍报 `max`，所以显示 Max；不按「没有 5 小时窗口」推断 Ultra，因为未验证的 Ultra 账号仍有 5 小时窗口。
 - 窗口为 `null` 视为「没有该窗口」，不是坏数据。实时回答、`~/.claude.json` 缓存、Claude Desktop 记录（`crates/core/src/rate_limit/claude_desktop.rs`）三条路径都只跳过该窗口，保留其余窗口。Claude Desktop 记录里非空但不是数字的值仍判整条无效；实时回答和缓存遇到不合法的窗口只丢掉该窗口。
 - Claude Desktop 记录 `plan-usage-history.json` 在三处查找：普通安装的 `%APPDATA%\Claude`；MSIX 包旧版的 `%LOCALAPPDATA%\Packages\Claude_<包后缀>\LocalCache\Roaming\Claude`；MSIX 包 2026-11 更新后写入的 `%LOCALAPPDATA%\Claude-Data\claude_<包后缀>`（记录直接在这一层，#27）。`Claude_` / `claude_` 前缀不区分大小写，后缀只接受字母和数字。判断「装了多份」按安装而不是按目录：同一个包后缀的新旧两个目录算同一份安装，两处都有记录时取修改时间较新的一份（同样新时取新目录）；只有包后缀不同、或普通安装与 MSIX 包同时有记录，才算多份安装、不猜账号。比较前先解析链接（`canonicalize`，失败时用原路径），用户把旧目录链接到新目录时同一个文件只算一次。
+
+## Antigravity / AGY 探测约束（与 CLI 查找规则一致）
+
+2026-11-19 接入（vibe-cafe/vibe-usage-windows#54），对齐 macOS 0.7.4（vibe-cafe/vibe-usage-app#53）。读取全部由 CLI 完成（`quota fetch --product antigravity`，vibe-cafe/vibe-usage#128）：CLI 启动用户已安装、已登录的 `agy.exe`，开一个不发提示词的 stream-json 进程，带随机 CSRF token，只访问它在 `127.0.0.1` 上开的配额接口，读完结束自己启动的进程树。不读 agy 存在 Windows 凭据管理器里的登录信息，也没有磁盘缓存：读不到就是读不到，不会显示旧数值。CLI 给 agy 最多 20 秒，在 App 30 秒的 CLI 总预算以内；它和 Kimi / ZCode / Grok / OpenCode Go 同一批读取，最慢的一个决定这一批什么时候回来（与 macOS 相同）。
+
+- CLI 找 `agy.exe` 的顺序：`ANTIGRAVITY_CLI_PATH`（测试用）→ `~\.local\bin\agy.exe` → PATH 上的 `agy.exe` → 官方安装位置 `%LOCALAPPDATA%\agy\bin\agy.exe`。最后一项由 vibe-cafe/vibe-usage#176 加入（要等它发到 npm 才生效）；官方文档（antigravity.google/docs/getting-started）和安装脚本 `install.ps1` / `install.cmd` 都装到这里，要等 `agy install` 改了用户环境变量才进 PATH，而开机自启、一直挂在托盘的 App 看不到之后改的 PATH（App 把自己启动时的 PATH 传给 CLI）。CLI 发版前，agy 不在 App 的 PATH 上时卡片会显示「请安装 agy 并登录后重试」。
+- 只认 `agy.exe`，不认 `.cmd` / `.bat`：官方渠道只发 exe；Node 不经 shell 启动不了 `.cmd`；有报道说 Antigravity 桌面端也会注册 `agy` 这个命令名，那种启动器会打开桌面端，而不是读额度。
+- App 的「已检测」（`quota_product.rs`）：`~\.gemini\antigravity-cli`、`~\.gemini\antigravity`、上面两个固定位置（`quota_product::antigravity_cli_paths`，与 CLI 的 `antigravityInstallPaths()` 是同一份列表，改一边要改另一边）、PATH 上的 `agy`（按 PATHEXT，和其他产品一样）、桌面端 `Programs\Antigravity\Antigravity.exe`（Antigravity 2.0 桌面端和 1.x IDE 共用）和 `Programs\Antigravity IDE\Antigravity IDE.exe`（2.x 独立 IDE），根目录是 `%LOCALAPPDATA%`、`%LOCALAPPDATA%\Programs` 和 Program Files。官方文档没写桌面端装在哪，这两个位置来自 Google AI 开发者论坛的用户报告，是推断。只装了桌面端或 IDE、没装 agy 也算「已检测」（macOS 认 `Antigravity.app` 也是这样），首次启动会勾上，卡片提示去装 agy。
+- 卡片：显示名「Antigravity / AGY」。CLI 只给一个模型组的 5h / 7d（有 Gemini 组时取 Gemini）。没找到 agy 或没登录 → CLI 报 `missing_credentials` / `unauthorized` →「请安装 agy 并登录后重试」+ 重试；agy 起不来或连不上 → `retryable_error` →「暂时无法读取订阅配额」+ 重试。
 
 ## 空态判定（不猜）
 
@@ -59,7 +68,7 @@ Credential Manager 读取失败只影响 ZCode，其他产品仍可请求。CLI 
 1. 在两种区域都已配置的测试环境中，先读到 BigModel 配额，再切到 Z.ai 并模拟请求失败；不得显示 BigModel 数据。同一区域替换、删除 Key 也需复测。
 2. 在旧请求尚未结束时切换区域/Key，确认旧返回不覆盖新上下文；同时验证设置窗与托盘面板的显示一致性。
 3. 模拟 ZCode 凭据库读取失败，确认另一个已选产品仍能返回；验证失败后不会继续把过期配额显示为成功。
-4. 使用固定 CLI 验证 Kimi/ZCode/Grok/OpenCode Go 的正常、无数据和失败状态，以及旧设置迁移、首次推荐、空选择和「选择第三项后仍保留前两项」；OpenCode Go 另需用没有 Go 订阅的 Key 复测 403 对应的未订阅空态。
+4. 使用固定 CLI 验证 Kimi/ZCode/Grok/OpenCode Go 的正常、无数据和失败状态，以及旧设置迁移、首次推荐、空选择和「选择第三项后仍保留前两项」；OpenCode Go 另需用没有 Go 订阅的 Key 复测 403 对应的未订阅空态。Antigravity / AGY 另需复测：agy 只装在默认位置 `%LOCALAPPDATA%\agy\bin`、不在 App 的 PATH 上时仍能读到 5h / 7d；没装 agy、装了没登录时卡片显示「请安装 agy 并登录后重试」。
 5. 重跑生命周期准入测试：关闭准入前子进程可运行，关闭后确有 Job 限额拒绝；继续验证取消、退出、无关 Node 存活、忙时立即卸载和升级。
 
 本地 Rust 测试覆盖缓存失效、旧请求回写、请求/响应集合校验及凭据错误隔离；Mac 的通过不替代以上 Windows 实测。账户条件不满足记为 BLOCKED；ZCode Key 由用户在 GUI 输入。

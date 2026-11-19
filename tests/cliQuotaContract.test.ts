@@ -23,6 +23,8 @@ test("published CLI returns the quota contract without inherited account credent
       KIMI_CODE_HOME: join(root, "kimi-code"),
       KIMI_SHARE_DIR: join(root, "kimi"),
       GROK_HOME: join(root, "grok"),
+      // Points at nothing, so a developer's own signed-in `agy` never runs.
+      ANTIGRAVITY_CLI_PATH: join(root, "agy-absent", "agy.exe"),
     };
     const invoke = (...args: string[]) => {
       const result = spawnSync(process.execPath, [
@@ -35,20 +37,22 @@ test("published CLI returns the quota contract without inherited account credent
     expect(invoke("config", "roots")).toEqual({});
     const discovery = invoke("quota", "discover", "--json");
     expect(discovery.schemaVersion).toBe(1);
-    for (const id of ["kimi-code", "zcode", "grok"]) {
+    for (const id of ["kimi-code", "zcode", "grok", "antigravity"]) {
       expect(discovery.products.find((p: { id: string }) => p.id === id)?.fetchable).toBe(true);
     }
     // Cursor is deliberately not asserted: the app shows it as 待接入 and never
     // routes it through the CLI, while the CLI made it fetchable in
     // vibe-cafe/vibe-usage#128 — its value is not part of this app's contract.
     const quota = invoke("quota", "fetch", "--product", "kimi-code",
-      "--product", "zcode", "--product", "grok", "--json");
+      "--product", "zcode", "--product", "grok", "--product", "antigravity", "--json");
     expect(quota.schemaVersion).toBe(1);
     expect(quota.products.map((p: { id: string; status: string; meters: unknown[] }) =>
       ({ id: p.id, status: p.status, meters: p.meters }))).toEqual([
       { id: "kimi-code", status: "missing_credentials", meters: [] },
       { id: "zcode", status: "missing_credentials", meters: [] },
       { id: "grok", status: "no_data", meters: [] },
+      // No `agy` found: the card asks to install it and sign in.
+      { id: "antigravity", status: "missing_credentials", meters: [] },
     ]);
   } finally {
     rmSync(root, { recursive: true, force: true });
