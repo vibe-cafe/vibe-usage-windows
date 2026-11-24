@@ -15,15 +15,18 @@
 //! separate switches on (`QUIET_ENVIRONMENT`, passed both in the environment
 //! and in an in-memory `--settings`, which outranks the user's files): what
 //! the user switched off stays off, and the probe adds only the usage read.
-//! Measured, the probe then reaches `api.anthropic.com` only, three requests:
-//! the usage read plus two Claude Code makes at every start that no separate
-//! switch covers (its start-up configuration and the organization's fast-mode
-//! status) — same host and same account as the usage read.
+//! Measured, the probe then reaches `api.anthropic.com` only: the usage read
+//! plus the start-up configuration (`/api/claude_cli/bootstrap`), which no
+//! separate switch covers — same host and same account. For an account in an
+//! organization, Claude Code also refreshes its invite-eligibility record there
+//! when the cached one is missing or stale.
 //!
 //! Cleared only for the probe's own process and never written anywhere. An
 //! organization's managed settings outrank `--settings`; when those force the
 //! switch on (`is_forced_by_policy`), Claude Code cannot read the quota and
-//! the app does not start it.
+//! the app does not start it. Claude Code uses one managed source, in this
+//! order: the HKLM registry policy, then the managed settings files (merged
+//! in order), then the user-writable HKCU policy.
 //!
 //! Only that one key is read from policy documents. Each is parsed in memory
 //! and everything else in it is dropped right away — never kept, logged, or
@@ -38,8 +41,9 @@ pub const VARIABLE: &str = "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC";
 /// The probe's Claude Code environment: the master switch cleared (empty
 /// string — Claude Code counts any non-empty value as on, `"0"` included) and
 /// each separate off switch on. `CLAUDE_CODE_MODEL_CATALOG` is off with `"0"`.
-pub const QUIET_ENVIRONMENT: [(&str, &str); 15] = [
+pub const QUIET_ENVIRONMENT: [(&str, &str); 16] = [
     (VARIABLE, ""),
+    ("CLAUDE_CODE_DISABLE_FAST_MODE", "1"),
     ("DISABLE_TELEMETRY", "1"),
     ("DISABLE_ERROR_REPORTING", "1"),
     ("DISABLE_AUTOUPDATER", "1"),
@@ -68,53 +72,78 @@ pub fn probe_settings() -> String {
     serde_json::json!({ "env": env }).to_string()
 }
 
-/// Each managed directory's `managed-settings.json` and its
-/// `managed-settings.d` drop-ins (`*.json`, sorted, hidden files skipped).
-pub fn managed_settings_files(managed_dirs: &[PathBuf]) -> Vec<PathBuf> {
-    let mut files = Vec::new();
-    for managed in managed_dirs {
-        files.push(managed.join("managed-settings.json"));
-        let mut drop_ins: Vec<PathBuf> = std::fs::read_dir(managed.join("managed-settings.d"))
-            .map(|entries| {
-                entries
-                    .filter_map(Result::ok)
-                    .map(|entry| entry.path())
-                    .filter(|path| {
-                        path.extension()
-                            .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
-                    })
-                    .filter(|path| {
-                        !path
-                            .file_name()
-                            .and_then(OsStr::to_str)
-                            .is_some_and(|name| name.starts_with('.'))
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        drop_ins.sort();
-        files.extend(drop_ins);
-    }
+/// The managed directory's `managed-settings.json`, then its
+/// `managed-settings.d` drop-ins (`*.json`, sorted, hidden files skipped) — the
+/// order Claude Code merges them in.
+pub fn managed_settings_files(managed: &Path) -> Vec<PathBuf> {
+    let mut files = vec![managed.join("managed-settings.json")];
+    let mut drop_ins: Vec<PathBuf> = std::fs::read_dir(managed.join("managed-settings.d"))
+        .map(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .map(|entry| entry.path())
+                .filter(|path| path.extension().is_some_and(|extension| extension == "json"))
+                .filter(|path| {
+                    !path
+                        .file_name()
+                        .and_then(OsStr::to_str)
+                        .is_some_and(|name| name.starts_with('.'))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    drop_ins.sort();
+    files.extend(drop_ins);
     files
 }
 
-/// Whether the organization's managed settings force the switch on: a
-/// managed settings file (see `managed_settings_files`) or a policy document
-/// (the registry's `SOFTWARE\Policies\ClaudeCode` `Settings` value). Those
-/// outrank the probe's `--settings`, so Claude Code could not read the quota.
-/// The user's own files and environment do not count here: the probe handles
-/// those. Server-managed settings from the claude.ai console are fetched by
-/// Claude Code and are not visible here; with those, the probe runs and Claude
-/// Code answers without windows.
-pub fn is_forced_by_policy(files: &[PathBuf], policy_documents: &[String]) -> bool {
-    files.iter().any(|file| file_sets_it(file))
-        || policy_documents.iter().any(|text| document_sets_it(text))
+/// Whether the organization's managed settings force the switch on. Claude
+/// Code uses one managed source: the HKLM policy document when it holds a
+/// policy, else the managed settings files merged in order (a later file
+/// that sets the key wins, `""` included), else the user-writable HKCU
+/// document. Those outrank the probe's `--settings`, so Claude Code could not
+/// read the quota. The user's own files and environment do not count here:
+/// the probe handles those. Server-managed settings from the claude.ai
+/// console are fetched by Claude Code and are not visible here; with those,
+/// the probe runs and Claude Code answers without windows.
+pub fn is_forced_by_policy(hklm: Option<&str>, files: &[PathBuf], hkcu: Option<&str>) -> bool {
+    if let Some(policy) = hklm.and_then(policy_object) {
+        return is_on(env_value(&policy));
+    }
+    let mut files_hold_policy = false;
+    let mut value = None;
+    for policy in files
+        .iter()
+        .filter_map(|file| std::fs::read_to_string(file).ok())
+        .filter_map(|text| policy_object(&text))
+    {
+        files_hold_policy = true;
+        if let Some(set) = env_value(&policy) {
+            value = Some(set.clone());
+        }
+    }
+    if files_hold_policy {
+        return is_on(value.as_ref());
+    }
+    hkcu.and_then(policy_object)
+        .is_some_and(|policy| is_on(env_value(&policy)))
 }
 
-fn file_sets_it(file: &Path) -> bool {
-    std::fs::read_to_string(file)
-        .ok()
-        .is_some_and(|text| document_sets_it(&text))
+/// A policy document as a non-empty JSON object. A leading UTF-8 byte-order
+/// mark (Notepad writes one) is ignored.
+fn policy_object(text: &str) -> Option<serde_json::Map<String, Value>> {
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    match serde_json::from_str::<Value>(text).ok()? {
+        Value::Object(map) if !map.is_empty() => Some(map),
+        _ => None,
+    }
+}
+
+fn env_value(policy: &serde_json::Map<String, Value>) -> Option<&Value> {
+    policy
+        .get("env")
+        .and_then(Value::as_object)
+        .and_then(|env| env.get(VARIABLE))
 }
 
 /// True when a settings document's top-level `env` sets the variable to a
@@ -157,7 +186,7 @@ mod tests {
     }
 
     fn forced(managed: &Path) -> bool {
-        is_forced_by_policy(&managed_settings_files(&[managed.to_path_buf()]), &[])
+        is_forced_by_policy(None, &managed_settings_files(managed), None)
     }
 
     #[test]
@@ -207,15 +236,43 @@ mod tests {
         let managed = root.path().join("managed");
         write(&managed.join("managed-settings.d/10-base.json"), r#"{"env":{}}"#);
         write(&managed.join("managed-settings.d/notes.txt"), &settings(r#""1""#));
+        write(&managed.join("managed-settings.d/15-other.JSON"), &settings(r#""1""#));
         assert!(!forced(&managed));
-        write(&managed.join("managed-settings.d/20-privacy.JSON"), &settings(r#""1""#));
+        write(&managed.join("managed-settings.d/20-privacy.json"), &settings(r#""1""#));
         assert!(forced(&managed));
     }
 
+    /// Claude Code merges the files in order: a later drop-in that clears the
+    /// key undoes the base file.
     #[test]
-    fn registry_policy_documents_force_it() {
-        assert!(is_forced_by_policy(&[], &[r#"{"env":{}}"#.into(), settings(r#""1""#)]));
-        assert!(!is_forced_by_policy(&[], &["not json".into(), settings(r#""""#)]));
+    fn a_later_drop_in_can_clear_it() {
+        let root = tempfile::tempdir().unwrap();
+        let managed = root.path().join("managed");
+        write(&managed.join("managed-settings.json"), &settings(r#""1""#));
+        write(&managed.join("managed-settings.d/50-lift.json"), &settings(r#""""#));
+        assert!(!forced(&managed));
+        write(&managed.join("managed-settings.d/90-again.json"), &settings(r#""0""#));
+        assert!(forced(&managed));
+    }
+
+    /// One managed source: HKLM when it holds a policy, then the files, then
+    /// the user-writable HKCU fallback.
+    #[test]
+    fn registry_policy_follows_claude_codes_source_order() {
+        let root = tempfile::tempdir().unwrap();
+        let managed = root.path().join("managed");
+        let files = managed_settings_files(&managed);
+        let on = settings(r#""1""#);
+        assert!(is_forced_by_policy(Some(&on), &files, None));
+        // An HKLM policy without the key wins over a stale HKCU value.
+        assert!(!is_forced_by_policy(Some(r#"{"model":"x"}"#), &files, Some(&on)));
+        // No HKLM policy, no files: HKCU applies.
+        assert!(is_forced_by_policy(None, &files, Some(&on)));
+        assert!(is_forced_by_policy(Some("not json"), &files, Some(&on)));
+        assert!(!is_forced_by_policy(Some("{}"), &files, Some(&settings(r#""""#))));
+        // Files with a policy outrank HKCU.
+        write(&managed.join("managed-settings.json"), r#"{"model":"x"}"#);
+        assert!(!is_forced_by_policy(None, &managed_settings_files(&managed), Some(&on)));
     }
 
     #[test]

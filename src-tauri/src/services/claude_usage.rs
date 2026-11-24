@@ -213,16 +213,13 @@ fn discover_candidates(environment: &DiscoveryEnvironment) -> Vec<ClaudeLaunch> 
 /// the child's stderr and launch-error text are never kept.
 ///
 /// When the organization's policy forces Claude Code's nonessential traffic
-/// off (which also blocks its usage read), nothing is read and nothing is
-/// started: the card names the policy instead (no older numbers, no retry).
+/// off (which also blocks its usage read), Claude Code is not started: a fresh
+/// Claude Desktop record still shows (reading it is offline), otherwise the
+/// card names the policy (no older numbers, no retry).
 /// Checked on every refresh, so a policy change takes effect on the next one.
 /// A user's own switch does not stop the read: the probe keeps it off and
 /// still reads the quota (`vibe_core::claude_nonessential`).
 pub async fn fetch() -> Result<ProviderRateLimit, RateLimitLiveFailure> {
-    if nonessential_traffic_forced_by_policy() {
-        log::debug!("Claude nonessential traffic forced off by policy; not starting Claude Code");
-        return Ok(nonessential_traffic_disabled_snapshot());
-    }
     let at = (now_epoch() * 1000.0) as u64;
     let environment = DiscoveryEnvironment::live();
     // Desktop observations are local-only and must not be confused with a
@@ -239,6 +236,12 @@ pub async fn fetch() -> Result<ProviderRateLimit, RateLimitLiveFailure> {
             attempts: Vec::new(),
         });
         return Ok(snapshot);
+    }
+    // Reading Claude Desktop's record above is offline, so the policy gate
+    // sits here, right before Claude Code would be started.
+    if nonessential_traffic_forced_by_policy() {
+        log::debug!("Claude nonessential traffic forced off by policy; not starting Claude Code");
+        return Ok(nonessential_traffic_disabled_snapshot());
     }
     let candidates = discover_candidates(&environment);
     let mut record = ProbeRecord {
@@ -284,43 +287,37 @@ pub async fn fetch() -> Result<ProviderRateLimit, RateLimitLiveFailure> {
 }
 
 /// Whether the organization's managed settings force Claude Code's
-/// nonessential traffic on: `C:\Program Files\ClaudeCode\managed-settings.json`
-/// plus its `managed-settings.d\*.json`, and the `SOFTWARE\Policies\ClaudeCode`
-/// `Settings` registry value under HKLM and HKCU. Those outrank the probe's
-/// `--settings`. Only that one key is read.
+/// nonessential traffic on, read the way Claude Code picks its managed source:
+/// the HKLM `SOFTWARE\Policies\ClaudeCode` `Settings` value when it holds a
+/// policy, else `C:\Program Files\ClaudeCode\managed-settings.json` merged
+/// with its `managed-settings.d\*.json`, else the user-writable HKCU value.
+/// Those outrank the probe's `--settings`. Only that one key is read.
 fn nonessential_traffic_forced_by_policy() -> bool {
     use vibe_core::claude_nonessential::{is_forced_by_policy, managed_settings_files};
-    let mut managed_dirs = vec![PathBuf::from(r"C:\Program Files\ClaudeCode")];
-    if let Some(program_files) = std::env::var_os("ProgramFiles").filter(|v| !v.is_empty()) {
-        let directory = PathBuf::from(program_files).join("ClaudeCode");
-        if !managed_dirs.contains(&directory) {
-            managed_dirs.push(directory);
-        }
-    }
-    is_forced_by_policy(&managed_settings_files(&managed_dirs), &claude_policy_documents())
+    let (hklm, hkcu) = claude_policy_documents();
+    let files = managed_settings_files(std::path::Path::new(r"C:\Program Files\ClaudeCode"));
+    is_forced_by_policy(hklm.as_deref(), &files, hkcu.as_deref())
 }
 
-/// The managed-settings JSON Claude Code reads from the registry (HKLM, then
-/// the user-writable HKCU fallback). Missing keys or values are skipped.
+/// The managed-settings JSON Claude Code reads from the registry: HKLM, and
+/// the user-writable HKCU fallback. Missing keys or values are `None`.
 #[cfg(windows)]
-fn claude_policy_documents() -> Vec<String> {
+fn claude_policy_documents() -> (Option<String>, Option<String>) {
     use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
     use winreg::RegKey;
-    [HKEY_LOCAL_MACHINE, HKEY_CURRENT_USER]
-        .into_iter()
-        .filter_map(|root| {
-            RegKey::predef(root)
-                .open_subkey(r"SOFTWARE\Policies\ClaudeCode")
-                .ok()?
-                .get_value::<String, _>("Settings")
-                .ok()
-        })
-        .collect()
+    let read = |root| {
+        RegKey::predef(root)
+            .open_subkey(r"SOFTWARE\Policies\ClaudeCode")
+            .ok()?
+            .get_value::<String, _>("Settings")
+            .ok()
+    };
+    (read(HKEY_LOCAL_MACHINE), read(HKEY_CURRENT_USER))
 }
 
 #[cfg(not(windows))]
-fn claude_policy_documents() -> Vec<String> {
-    Vec::new()
+fn claude_policy_documents() -> (Option<String>, Option<String>) {
+    (None, None)
 }
 
 /// The card while the organization's policy forces nonessential traffic off:
