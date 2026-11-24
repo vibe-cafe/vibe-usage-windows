@@ -23,20 +23,21 @@ const CANDIDATE_TIMEOUT: Duration = Duration::from_secs(8);
 const FIVE_HOURS: f64 = 5.0 * 3600.0;
 const SEVEN_DAYS: f64 = 7.0 * 86_400.0;
 
-/// Process-local settings that unset `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`.
-/// Removing it from the child environment is not enough: Claude Code re-applies
-/// `~/.claude/settings.json` `env` after start, and with the flag set
-/// `get_usage` answers `rate_limits: null` on a subscription account. Empty
-/// string, not `"0"` (any non-empty value is truthy). Never written to disk.
-/// Mirrors macOS `ClaudeUsageProbe.nonessentialTrafficOverrideSettings`.
-const NONESSENTIAL_TRAFFIC_OVERRIDE_SETTINGS: &str =
-    r#"{"env":{"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC":""}}"#;
-
 /// Mirrors macOS `ClaudeUsageProbe.processArguments`. `--print` is required:
 /// Claude Code (2.1.246 and later) exits with "--input-format=stream-json
 /// requires --print." before the control protocol starts, so without it every
 /// probe fails (vibe-usage-windows#25, vibe-usage-app#35).
-const PROBE_ARGS: [&str; 15] = [
+///
+/// `run_probe` appends `--settings` with process-local, in-memory JSON
+/// (`vibe_core::claude_nonessential::probe_settings`): the nonessential-traffic
+/// master switch cleared — with it on, Claude Code blocks the usage read
+/// itself — and every separate off switch on, so every feature with a switch
+/// of its own stays off (what remains is listed on
+/// `vibe_core::claude_nonessential`). Claude Code re-applies
+/// `env` from the user's settings files after start; flag settings outrank
+/// them. Never written to disk, and never `--bare` (it skips the login the
+/// binary needs to fetch usage). Mirrors macOS `ClaudeUsageProbe.processArguments`.
+const PROBE_ARGS: [&str; 13] = [
     "--print",
     "--safe-mode",
     "--no-session-persistence",
@@ -50,8 +51,6 @@ const PROBE_ARGS: [&str; 15] = [
     "--input-format",
     "stream-json",
     "--verbose",
-    "--settings",
-    NONESSENTIAL_TRAFFIC_OVERRIDE_SETTINGS,
 ];
 
 /// `get_usage` control request. `skip_behaviors` stops Claude Code from first
@@ -213,6 +212,14 @@ fn discover_candidates(environment: &DiscoveryEnvironment) -> Vec<ClaudeLaunch> 
 /// Desktop record first, then a live Claude Code read; the order is unchanged.
 /// The error is the fixed reason of the last candidate tried (as on macOS);
 /// the child's stderr and launch-error text are never kept.
+///
+/// When the organization's policy forces Claude Code's nonessential traffic
+/// off (which also blocks its usage read), Claude Code is not started: a fresh
+/// Claude Desktop record still shows (reading it is offline), otherwise the
+/// card names the policy (no older numbers, no retry).
+/// Checked on every refresh, so a policy change takes effect on the next one.
+/// A user's own switch does not stop the read: the probe keeps it off and
+/// still reads the quota (`vibe_core::claude_nonessential`).
 pub async fn fetch() -> Result<ProviderRateLimit, RateLimitLiveFailure> {
     let at = (now_epoch() * 1000.0) as u64;
     let environment = DiscoveryEnvironment::live();
@@ -230,6 +237,12 @@ pub async fn fetch() -> Result<ProviderRateLimit, RateLimitLiveFailure> {
             attempts: Vec::new(),
         });
         return Ok(snapshot);
+    }
+    // Reading Claude Desktop's record above is offline, so the policy gate
+    // sits here, right before Claude Code would be started.
+    if nonessential_traffic_forced_by_policy() {
+        log::debug!("Claude nonessential traffic forced off by policy; not starting Claude Code");
+        return Ok(nonessential_traffic_disabled_snapshot());
     }
     let candidates = discover_candidates(&environment);
     let mut record = ProbeRecord {
@@ -286,6 +299,50 @@ pub async fn fetch() -> Result<ProviderRateLimit, RateLimitLiveFailure> {
     }
     remember(record);
     Err(last_error)
+}
+
+/// Whether the organization's managed settings force Claude Code's
+/// nonessential traffic on, read the way Claude Code picks its managed source:
+/// the HKLM `SOFTWARE\Policies\ClaudeCode` `Settings` value when it holds a
+/// policy, else `C:\Program Files\ClaudeCode\managed-settings.json` merged
+/// with its `managed-settings.d\*.json`, else the user-writable HKCU value.
+/// Those outrank the probe's `--settings`. Only that one key is read.
+fn nonessential_traffic_forced_by_policy() -> bool {
+    use vibe_core::claude_nonessential::{is_forced_by_policy, managed_settings_files};
+    let (hklm, hkcu) = claude_policy_documents();
+    let files = managed_settings_files(std::path::Path::new(r"C:\Program Files\ClaudeCode"));
+    is_forced_by_policy(hklm.as_deref(), &files, hkcu.as_deref())
+}
+
+/// The managed-settings JSON Claude Code reads from the registry: HKLM, and
+/// the user-writable HKCU fallback. Missing keys or values are `None`.
+#[cfg(windows)]
+fn claude_policy_documents() -> (Option<String>, Option<String>) {
+    use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
+    use winreg::RegKey;
+    let read = |root| {
+        RegKey::predef(root)
+            .open_subkey(r"SOFTWARE\Policies\ClaudeCode")
+            .ok()?
+            .get_value::<String, _>("Settings")
+            .ok()
+    };
+    (read(HKEY_LOCAL_MACHINE), read(HKEY_CURRENT_USER))
+}
+
+#[cfg(not(windows))]
+fn claude_policy_documents() -> (Option<String>, Option<String>) {
+    (None, None)
+}
+
+/// The card while the organization's policy forces nonessential traffic off:
+/// an empty state that names the policy. No source, no failure, no numbers.
+fn nonessential_traffic_disabled_snapshot() -> ProviderRateLimit {
+    let mut snapshot =
+        ProviderRateLimit::empty(RateLimitProvider::ClaudeCode, RateLimitStatus::NoData);
+    snapshot.empty_reason = Some(RateLimitEmptyReason::NonessentialTrafficDisabled);
+    snapshot.fetched_at = Some(now_epoch());
+    snapshot
 }
 
 /// The candidates a read would try right now, each with its version. Runs
@@ -383,30 +440,53 @@ pub fn after_live_failure(
     )
 }
 
-async fn run_probe(
+/// The probe's command line and environment. An npm shim resolved to a
+/// JavaScript entry runs as `node <entry> ...`, never through cmd.exe (see
+/// `vibe_core::claude_code`). The environment drops the session markers Claude
+/// Code exports into its own children (they would make the probe a nested
+/// session) and applies `QUIET_ENVIRONMENT`: the nonessential-traffic master
+/// switch removed, every separate off switch on (`--settings` carries the same
+/// set past the user's settings files), then the proxy variables that make it
+/// follow the system proxy (`system_proxy`).
+fn probe_command(
     candidate: &ClaudeLaunch,
-    attempt: &mut ProbeAttempt,
     proxy_env: &[(&'static str, String)],
-) -> Result<ProviderRateLimit, RateLimitLiveFailure> {
-    // An npm shim resolved to a JavaScript entry runs as `node <entry> ...`,
-    // never through cmd.exe (see `vibe_core::claude_code`).
+) -> tokio::process::Command {
     let mut command = tokio::process::Command::new(&candidate.program);
     if let Some(script) = &candidate.script {
         command.arg(script);
     }
     command.args(PROBE_ARGS);
     command
+        .arg("--settings")
+        .arg(vibe_core::claude_nonessential::probe_settings());
+    for (key, value) in vibe_core::claude_nonessential::QUIET_ENVIRONMENT {
+        if value.is_empty() {
+            command.env_remove(key);
+        } else {
+            command.env(key, value);
+        }
+    }
+    command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .kill_on_drop(true)
-        .env_remove("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC")
         .env_remove("CLAUDECODE")
         .env_remove("CLAUDE_CODE_ENTRYPOINT")
         .env_remove("CLAUDE_CODE_SESSION_ID")
         .env_remove("CLAUDE_CODE_CHILD_SESSION")
         .env_remove("CLAUDE_PID")
         .envs(proxy_env.iter().map(|(name, value)| (*name, value.as_str())));
+    command
+}
+
+async fn run_probe(
+    candidate: &ClaudeLaunch,
+    attempt: &mut ProbeAttempt,
+    proxy_env: &[(&'static str, String)],
+) -> Result<ProviderRateLimit, RateLimitLiveFailure> {
+    let mut command = probe_command(candidate, proxy_env);
     if let Some(home) = dirs::home_dir() {
         command.current_dir(home);
     }
@@ -744,22 +824,65 @@ mod tests {
                 "--input-format",
                 "stream-json",
                 "--verbose",
-                "--settings",
-                NONESSENTIAL_TRAFFIC_OVERRIDE_SETTINGS,
             ]
         );
         assert!(!PROBE_ARGS.contains(&"--bare"));
     }
 
-    /// The override unsets exactly one key, with an empty (falsy) string.
+    /// Network-privacy principle, rules 4 and 6: the user's nonessential-
+    /// traffic switch would block the usage read itself, so the probe clears
+    /// only that master switch for its own process and turns every separate
+    /// off switch on — in the environment and, past the user's settings files,
+    /// in `--settings`. Whatever the user turned off stays off.
     #[test]
-    fn settings_override_only_unsets_nonessential_traffic() {
-        let index = PROBE_ARGS.iter().position(|a| *a == "--settings").unwrap();
-        let settings: Value = serde_json::from_str(PROBE_ARGS[index + 1]).unwrap();
+    fn probe_keeps_the_users_traffic_off_except_the_usage_read() {
+        use std::ffi::OsStr;
+        use vibe_core::claude_nonessential::{probe_settings, QUIET_ENVIRONMENT, VARIABLE};
+        let candidate = ClaudeLaunch {
+            program: PathBuf::from(r"C:\claude.exe"),
+            script: None,
+            origin: vibe_core::claude_code::LaunchOrigin::Override,
+            via: vibe_core::claude_code::LaunchVia::Direct,
+        };
+        let command = probe_command(&candidate, &[]);
+        let std = command.as_std();
+        let args: Vec<&OsStr> = std.get_args().collect();
+        let settings = probe_settings();
+        let index = args.iter().position(|a| *a == "--settings").unwrap();
+        assert_eq!(args[index + 1], OsStr::new(&settings));
+        assert_eq!(&args[..PROBE_ARGS.len()], PROBE_ARGS.map(OsStr::new).as_slice());
+
+        let envs: std::collections::HashMap<&OsStr, Option<&OsStr>> = std.get_envs().collect();
+        assert_eq!(envs.get(OsStr::new(VARIABLE)), Some(&None));
+        for (key, value) in QUIET_ENVIRONMENT.iter().filter(|(_, v)| !v.is_empty()) {
+            assert_eq!(envs.get(OsStr::new(key)), Some(&Some(OsStr::new(value))), "{key}");
+        }
+        for marker in [
+            "CLAUDECODE",
+            "CLAUDE_CODE_ENTRYPOINT",
+            "CLAUDE_CODE_SESSION_ID",
+            "CLAUDE_CODE_CHILD_SESSION",
+            "CLAUDE_PID",
+        ] {
+            assert_eq!(envs.get(OsStr::new(marker)), Some(&None), "{marker}");
+        }
+    }
+
+    /// While the policy forces the switch on, the card is an empty state naming
+    /// it: no numbers, no source, no failure (so no retry and no stale reading).
+    #[test]
+    fn nonessential_traffic_card_names_the_setting() {
+        let snapshot = nonessential_traffic_disabled_snapshot();
+        assert_eq!(snapshot.provider, RateLimitProvider::ClaudeCode);
+        assert_eq!(snapshot.status, RateLimitStatus::NoData);
         assert_eq!(
-            settings,
-            json!({"env": {"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": ""}})
+            snapshot.empty_reason,
+            Some(RateLimitEmptyReason::NonessentialTrafficDisabled)
         );
+        assert_eq!(snapshot.source, None);
+        assert_eq!(snapshot.live_failure, None);
+        assert!(snapshot.five_hour.is_none() && snapshot.seven_day.is_none());
+        assert!(snapshot.meters.is_empty());
     }
 
     /// Without `skip_behaviors`, Claude Code scans seven days of transcripts
