@@ -251,6 +251,9 @@ async fn run_sync_once(app: AppHandle) {
         s.status = SyncStatus::Syncing;
         s.message = None;
     });
+    // A login launch: no sync, manual ones included, before the user's proxy
+    // is up (`AppCtx::wait_launch_network`).
+    ctx.wait_launch_network().await;
 
     let trigger = if ctx.sync_requested_manually.load(Ordering::SeqCst) {
         SyncTrigger::Manual

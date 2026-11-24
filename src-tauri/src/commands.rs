@@ -143,11 +143,8 @@ pub fn get_sync_state(app: AppHandle) -> SyncState {
 
 #[tauri::command]
 pub async fn get_rate_limits(app: AppHandle, force: bool) -> Vec<ProviderRateLimit> {
-    // A login launch still waiting for the user's proxy: answer from the
-    // cache; the `network-ready` event makes the window read again.
-    if !app.state::<AppCtx>().launch_network_ready() {
-        return rate_limits::cached_rate_limits(&app);
-    }
+    // During a login launch's wait for the proxy this answers once it is up
+    // (`rate_limits::get_rate_limits`); the window shows its loading state.
     rate_limits::get_rate_limits(&app, force).await
 }
 

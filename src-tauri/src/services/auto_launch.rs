@@ -1,10 +1,10 @@
 //! Launch-at-login — Windows counterpart of SMAppService (registry Run key
 //! via the `auto-launch` crate, no admin rights needed).
 //!
-//! The Run value carries `--autostart`, so a login launch can start quietly:
-//! no window, no quota reads, first sync after two minutes (the user's proxy
-//! client may not be up yet; network-privacy principle, workspace AGENTS.md).
-//! A manual launch has no argument and behaves as before.
+//! The Run value carries `--autostart`, so a login launch can wait for the
+//! user's proxy before any quota read or sync (the proxy client may not be up
+//! yet; network-privacy principle, workspace AGENTS.md). The window shows as
+//! on any launch. A manual launch has no argument and does not wait.
 
 use auto_launch::AutoLaunchBuilder;
 

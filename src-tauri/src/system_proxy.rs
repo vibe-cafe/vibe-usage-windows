@@ -114,7 +114,8 @@ pub fn read_settings() -> ProxySettings {
 /// then HTTP_PROXY, then ALL_PROXY; lowercase first, as Node and curl read).
 pub fn env_proxy(lookup: &impl Fn(&str) -> Option<String>, https: bool) -> Option<String> {
     let names: &[&str] = if https {
-        &["https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY", "all_proxy", "ALL_PROXY"]
+        // The CLI's order (curl's, with HTTP_PROXY as the last resort).
+        &["https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY", "http_proxy", "HTTP_PROXY"]
     } else {
         &["http_proxy", "HTTP_PROXY", "all_proxy", "ALL_PROXY"]
     };
@@ -243,12 +244,13 @@ pub fn no_proxy_matches(host: &str, list: &str) -> bool {
             return ipv4_in_cidr(&host, network, bits);
         }
         // `*.example.com` and `.example.com`: subdomains only; a bare
-        // `example.com`: the host itself and its subdomains (curl).
+        // `example.com`: that host only. Read narrowly, as the CLI and
+        // Node's fetch read it, so a direct exception never grows into the
+        // vendors' subdomains.
         if let Some(suffix) = entry.strip_prefix("*.").or_else(|| entry.strip_prefix('.')) {
             return host.ends_with(&format!(".{suffix}"));
         }
-        let entry = entry.trim_matches(['[', ']']);
-        host == entry || host.ends_with(&format!(".{entry}"))
+        host == entry.trim_matches(['[', ']'])
     })
 }
 
@@ -725,18 +727,24 @@ pub fn accepts(host: &str, port: u16) -> bool {
 pub async fn wait_for_proxy<R, RF, A, AF>(
     limit: Duration,
     interval: Duration,
-    mut route: R,
+    mut routes: R,
     mut accepts: A,
 ) -> bool
 where
     R: FnMut() -> RF,
-    RF: std::future::Future<Output = Route>,
+    RF: std::future::Future<Output = Vec<Route>>,
     A: FnMut(String, u16) -> AF,
     AF: std::future::Future<Output = bool>,
 {
     let started = tokio::time::Instant::now();
     loop {
-        if let Some((host, port)) = route().await.proxy_endpoint() {
+        let mut endpoints: Vec<(String, u16)> = Vec::new();
+        for endpoint in routes().await.iter().filter_map(Route::proxy_endpoint) {
+            if !endpoints.contains(&endpoint) {
+                endpoints.push(endpoint);
+            }
+        }
+        for (host, port) in endpoints {
             if accepts(host, port).await {
                 return true;
             }
@@ -748,20 +756,41 @@ where
     }
 }
 
-/// A login launch's wait for the user's proxy: the live system route for
-/// `url` (PAC included) must point at a proxy that accepts a connection, at
-/// most `LAUNCH_PROXY_WAIT_LIMIT` (network-privacy principle, rules 1, 2 and
-/// 6: the proxy client may not be up yet right after login).
-pub async fn wait_for_launch_proxy(url: Url) -> bool {
-    wait_for_proxy(
+/// The URLs whose routes tell whether the user's proxy is up: the sync
+/// server and the vendors the app reads. A PAC often sends the sync server
+/// direct and only the vendors through the proxy.
+pub fn launch_probe_urls(server: &str) -> Vec<Url> {
+    let mut urls: Vec<Url> = Url::parse(server).into_iter().collect();
+    urls.extend(host_urls(&["api.anthropic.com", "chatgpt.com", "cursor.com", "opencode.ai", "api.kimi.com"]));
+    urls
+}
+
+/// A login launch's wait for the user's proxy (network-privacy principle,
+/// rules 1, 2 and 6: the proxy client may not be up yet right after login):
+/// the app's own proxy variable, or the live route (PAC included) of any of
+/// `urls`, must point at a proxy that accepts a connection. Returns within
+/// `LAUNCH_PROXY_WAIT_LIMIT` plus a few seconds whatever DNS or PAC do.
+pub async fn wait_for_launch_proxy(urls: Vec<Url>) -> bool {
+    let own = env_proxy(&|name| std::env::var(name).ok(), true)
+        .and_then(|value| Route::Http(normalize_env_url(&value)).proxy_endpoint());
+    let waiting = wait_for_proxy(
         LAUNCH_PROXY_WAIT_LIMIT,
         LAUNCH_PROXY_POLL,
-        || {
-            let url = url.clone();
+        move || {
+            let urls = urls.clone();
+            let own = own.clone();
             async move {
-                tauri::async_runtime::spawn_blocking(move || live_route(&url))
-                    .await
-                    .unwrap_or(Route::Unresolved)
+                let mut routes: Vec<Route> = own
+                    .map(|(host, port)| Route::Http(format!("http://{host}:{port}")))
+                    .into_iter()
+                    .collect();
+                let found = tauri::async_runtime::spawn_blocking(move || {
+                    urls.iter().map(live_route).collect::<Vec<_>>()
+                })
+                .await
+                .unwrap_or_default();
+                routes.extend(found);
+                routes
             }
         },
         |host, port| async move {
@@ -769,8 +798,15 @@ pub async fn wait_for_launch_proxy(url: Url) -> bool {
                 .await
                 .unwrap_or(false)
         },
-    )
-    .await
+    );
+    tokio::time::timeout(LAUNCH_PROXY_WAIT_LIMIT + Duration::from_secs(5), waiting)
+        .await
+        .unwrap_or(false)
+}
+
+/// A proxy variable as a URL (a value without a scheme is `http://`).
+fn normalize_env_url(value: &str) -> String {
+    if value.contains("://") { value.to_string() } else { format!("http://{value}") }
 }
 
 #[cfg(test)]
@@ -806,7 +842,7 @@ mod tests {
             || {
                 let mut list = routes.lock().unwrap();
                 let next = if list.len() > 1 { list.remove(0) } else { list[0].clone() };
-                async move { next }
+                async move { vec![next] }
             },
             |host, port| async move { host == "127.0.0.1" && port == 7890 },
         )
@@ -815,12 +851,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_split_pac_is_up_as_soon_as_the_vendor_proxy_answers() {
+        let urls = launch_probe_urls("https://vibefriends.com");
+        assert!(urls.iter().any(|u| u.host_str() == Some("api.anthropic.com")));
+        let up = wait_for_proxy(
+            Duration::from_secs(5),
+            Duration::from_millis(1),
+            || async { vec![Route::Direct, Route::Http("http://127.0.0.1:7890".into())] },
+            |_, port| async move { port == 7890 },
+        )
+        .await;
+        assert!(up);
+    }
+
+    #[test]
+    fn a_bare_no_proxy_entry_is_that_host_only() {
+        assert!(no_proxy_matches("kimi.com", "kimi.com"));
+        assert!(!no_proxy_matches("api.kimi.com", "kimi.com"));
+        assert!(no_proxy_matches("api.kimi.com", ".kimi.com"));
+        assert!(no_proxy_matches("api.kimi.com", "*.kimi.com"));
+    }
+
+    #[tokio::test]
     async fn no_proxy_runs_out_the_limit_and_a_closed_port_does_not_count() {
         let started = std::time::Instant::now();
         let up = wait_for_proxy(
             Duration::from_millis(30),
             Duration::from_millis(5),
-            || async { Route::Direct },
+            || async { vec![Route::Direct] },
             |_, _| async { true },
         )
         .await;

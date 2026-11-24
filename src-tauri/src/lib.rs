@@ -12,7 +12,7 @@ mod tray;
 mod window_geometry;
 
 use state::AppCtx;
-use tauri::{Emitter, Manager, WindowEvent};
+use tauri::{Manager, WindowEvent};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -47,17 +47,24 @@ pub fn run() {
             panel::show_on_launch(app.handle());
             if launched_at_login {
                 let handle = app.handle().clone();
-                tauri::async_runtime::spawn(async move {
-                    let url = url::Url::parse(&handle.state::<AppCtx>().config.load_api_url())
-                        .unwrap_or_else(|_| url::Url::parse("https://vibefriends.com/").unwrap());
-                    let up = system_proxy::wait_for_launch_proxy(url).await;
-                    log::info!(
-                        "login launch: {} — network reads go ahead",
-                        if up { "proxy is up" } else { "proxy wait ran out" }
-                    );
-                    handle.state::<AppCtx>().launch_network.send_replace(true);
-                    let _ = handle.emit("network-ready", ());
-                });
+                let ctx = handle.state::<AppCtx>();
+                // Nothing to send (not linked, no quota product selected):
+                // no reason to look at the proxy at all.
+                let has_network_work = ctx.config.is_configured()
+                    || !ctx.settings.lock().unwrap().selected_quota_product_ids.is_empty();
+                if has_network_work {
+                    let urls = system_proxy::launch_probe_urls(&ctx.config.load_api_url());
+                    tauri::async_runtime::spawn(async move {
+                        let up = system_proxy::wait_for_launch_proxy(urls).await;
+                        log::info!(
+                            "login launch: {} — network reads go ahead",
+                            if up { "proxy is up" } else { "proxy wait ran out" }
+                        );
+                        handle.state::<AppCtx>().launch_network.send_replace(true);
+                    });
+                } else {
+                    ctx.launch_network.send_replace(true);
+                }
             }
             services::auto_launch::migrate_run_value();
             services::claude_usage::set_bundled_node(services::sync_engine::bundled_node(

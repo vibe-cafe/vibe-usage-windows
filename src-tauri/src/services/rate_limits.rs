@@ -56,6 +56,10 @@ fn store_snapshot(app: &AppHandle, snapshot: ProviderRateLimit, generation: u64)
 
 pub async fn get_rate_limits(app: &AppHandle, force: bool) -> Vec<ProviderRateLimit> {
     let ctx = app.state::<AppCtx>();
+    // A login launch: no quota is read before the user's proxy is up
+    // (`AppCtx::wait_launch_network`), whoever asks — the window, a
+    // selection change or a key change. The window shows its loading state.
+    ctx.wait_launch_network().await;
     // A caller that waited for an in-flight forced refresh consumes that
     // result instead of immediately starting the same work again.
     let (_refresh_guard, effective_force) = match ctx.rate_limit_refresh.try_lock() {

@@ -148,8 +148,8 @@ pub struct AppCtx {
     /// (cost, tokens) for the active time range, pushed by the frontend.
     pub tray_stats: Mutex<Option<(f64, i64)>>,
     /// False while a login launch (`--autostart`) waits for the user's proxy
-    /// (`system_proxy::wait_for_launch_proxy`): live quota reads answer from
-    /// the cache and the first sync waits. True otherwise.
+    /// (`system_proxy::wait_for_launch_proxy`): quota reads and syncs wait for
+    /// it (`wait_launch_network`). True otherwise.
     pub launch_network: tokio::sync::watch::Sender<bool>,
 }
 
@@ -219,10 +219,6 @@ impl AppCtx {
             tray_stats: Mutex::new(None),
             launch_network: tokio::sync::watch::channel(true).0,
         }
-    }
-
-    pub fn launch_network_ready(&self) -> bool {
-        *self.launch_network.borrow()
     }
 
     /// Returns once a login launch's proxy is up or its wait ran out; at once

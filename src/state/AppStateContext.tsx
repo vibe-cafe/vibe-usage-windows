@@ -14,7 +14,6 @@ import {
 import {
   api,
   onPanelShown,
-  onNetworkReady,
   onSettingsUpdated,
   onSyncState,
   onUpdateAvailable,
@@ -411,18 +410,19 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         // Backend startup has already initialized the default selection.
         const nextQuotaProducts = await api.getQuotaProducts();
         const request = quotaRequest.current;
-        const [nextSettings, nextSyncState, nextRateLimits, nextZCodeStatus] = await Promise.all([
+        const [nextSettings, nextSyncState, nextZCodeStatus] = await Promise.all([
           api.getSettings(),
           api.getSyncState(),
-          api.getRateLimits(false),
           api.getZCodeCredentialStatus().catch(() => EMPTY_ZCODE_CREDENTIAL_STATUS),
         ]);
         if (disposed) return;
         setQuotaProducts(nextQuotaProducts);
         if (request === quotaRequest.current) setSettings(nextSettings);
         setSyncState(nextSyncState);
-        if (request === quotaRequest.current) setRateLimits(nextRateLimits);
         setZCodeCredentialStatus(nextZCodeStatus);
+        // Quotas on their own: after a login launch they answer only once the
+        // user's proxy is up, and the rest of the window must not wait.
+        void refreshRateLimits(false);
         if (s.configured) {
           await fetchUsageData();
         }
@@ -470,9 +470,6 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         setSettings(nextSettings);
         setRateLimits([]);
         void api.getZCodeCredentialStatus().then(setZCodeCredentialStatus).catch(() => {});
-        void refreshRateLimits(false);
-      }),
-      onNetworkReady(() => {
         void refreshRateLimits(false);
       }),
       onPanelShown(() => {
