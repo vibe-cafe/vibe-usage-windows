@@ -1,28 +1,33 @@
-//! Whether the user switched off Claude Code's "nonessential traffic"
-//! (`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`).
+//! How the Claude probe treats Claude Code's "nonessential traffic" switch
+//! (`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`) — network-privacy principle,
+//! rules 4 and 6 (keep what the user switched off off, without losing the
+//! quota card). Mirrors macOS `ClaudeNonessentialTraffic`.
 //!
-//! With that switch on, Claude Code answers `get_usage` with
-//! `rate_limits: null`, so a probe cannot produce numbers; it would only add
-//! one more signed-in launch of Claude Code. The probe used to unset the switch
-//! for its own process (`--settings`), which turned back on traffic the user had
-//! turned off. The network-privacy principle (rule 4: never change a user's
-//! setting, including inside the processes we start) forbids that, so the app
-//! now checks first and, when the switch is on, does not start Claude Code at
-//! all; the card says why. Mirrors macOS `ClaudeNonessentialTraffic`.
+//! What the switch does, read from Claude Code 2.1.330 and measured with a
+//! host-logging proxy (2026-11-24): it blocks every request Claude Code calls
+//! nonessential, the usage read (`/api/oauth/usage`) included — with it on,
+//! `get_usage` only answers from Claude Code's own snapshot, which nothing
+//! refreshes. The documented equivalents (telemetry, error reporting, the
+//! auto-updater, the bug command) and every other such feature that has a
+//! switch of its own can be turned off one by one.
 //!
-//! Claude Code counts any non-empty value as "on", `"0"` and `"false"`
-//! included, so this does too. "On in any source" counts as on: Claude Code
-//! resolves the levels by precedence, so a higher level that sets the variable
-//! to an empty string would switch it back off there; treating that rare setup
-//! as "on" errs towards not starting Claude Code. Server-managed settings from
-//! the claude.ai console are fetched by Claude Code and are not visible here.
+//! So the probe always runs with the master switch cleared and all those
+//! separate switches on (`QUIET_ENVIRONMENT`, passed both in the environment
+//! and in an in-memory `--settings`, which outranks the user's files): what
+//! the user switched off stays off, and the probe adds only the usage read.
+//! Measured, the probe then reaches `api.anthropic.com` only, three requests:
+//! the usage read plus two Claude Code makes at every start that no separate
+//! switch covers (its start-up configuration and the organization's fast-mode
+//! status) — same host and same account as the usage read.
 //!
-//! Only that one key is used. Each document is parsed in memory and
-//! everything else in it (`env` can hold API keys) is dropped right away —
-//! never kept, logged, or put in diagnostics.
+//! Cleared only for the probe's own process and never written anywhere. An
+//! organization's managed settings outrank `--settings`; when those force the
+//! switch on (`is_forced_by_policy`), Claude Code cannot read the quota and
+//! the app does not start it.
 //!
-//! This gates the quota read only. Copying diagnostics still runs
-//! `claude --version` (user-initiated, no quota request), unchanged.
+//! Only that one key is read from policy documents. Each is parsed in memory
+//! and everything else in it is dropped right away — never kept, logged, or
+//! put in diagnostics.
 
 use serde_json::Value;
 use std::ffi::OsStr;
@@ -30,39 +35,43 @@ use std::path::{Path, PathBuf};
 
 pub const VARIABLE: &str = "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC";
 
-/// Where the probe's Claude Code would read the variable from. The probe runs
-/// with the home directory as its working directory, so the home directory's
-/// project files count too.
-#[derive(Debug, Default, Clone)]
-pub struct Sources {
-    /// The app's own environment value.
-    pub process_value: Option<String>,
-    /// Settings files; missing or unreadable ones are skipped.
-    pub settings_files: Vec<PathBuf>,
-    /// Managed policy documents delivered as JSON text (the Windows registry's
-    /// `SOFTWARE\Policies\ClaudeCode` `Settings` value, HKLM and HKCU).
-    pub policy_documents: Vec<String>,
+/// The probe's Claude Code environment: the master switch cleared (empty
+/// string — Claude Code counts any non-empty value as on, `"0"` included) and
+/// each separate off switch on. `CLAUDE_CODE_MODEL_CATALOG` is off with `"0"`.
+pub const QUIET_ENVIRONMENT: [(&str, &str); 15] = [
+    (VARIABLE, ""),
+    ("DISABLE_TELEMETRY", "1"),
+    ("DISABLE_ERROR_REPORTING", "1"),
+    ("DISABLE_AUTOUPDATER", "1"),
+    ("DISABLE_UPDATES", "1"),
+    ("DISABLE_BUG_COMMAND", "1"),
+    ("DISABLE_FEEDBACK_COMMAND", "1"),
+    ("CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY", "1"),
+    ("DISABLE_GROWTHBOOK", "1"),
+    ("CLAUDE_CODE_DISABLE_FEATURE_FLAGS", "1"),
+    ("CLAUDE_CODE_DISABLE_VITALS_EMITTER", "1"),
+    ("CLAUDE_CODE_MODEL_CATALOG", "0"),
+    ("DISABLE_INSTALLATION_CHECKS", "1"),
+    ("CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL", "1"),
+    ("DO_NOT_TRACK", "1"),
+];
+
+/// `--settings` for the probe: `{"env": QUIET_ENVIRONMENT}`. Claude Code
+/// re-applies `env` from the user's settings files after start, so the
+/// process environment alone is not enough; flag settings outrank those files
+/// (not managed settings) and are never written to disk.
+pub fn probe_settings() -> String {
+    let env: serde_json::Map<String, Value> = QUIET_ENVIRONMENT
+        .iter()
+        .map(|(key, value)| ((*key).to_string(), Value::String((*value).to_string())))
+        .collect();
+    serde_json::json!({ "env": env }).to_string()
 }
 
-/// User settings (`$CLAUDE_CONFIG_DIR/settings.json`, else
-/// `~/.claude/settings.json`), the home directory's project files
-/// (`~/.claude/settings.json`, `~/.claude/settings.local.json`), then each
-/// managed directory's `managed-settings.json` and its `managed-settings.d`
-/// drop-ins (`*.json`, sorted, hidden files skipped).
-pub fn settings_files(
-    home: Option<&Path>,
-    claude_config_dir: Option<&OsStr>,
-    managed_dirs: &[PathBuf],
-) -> Vec<PathBuf> {
+/// Each managed directory's `managed-settings.json` and its
+/// `managed-settings.d` drop-ins (`*.json`, sorted, hidden files skipped).
+pub fn managed_settings_files(managed_dirs: &[PathBuf]) -> Vec<PathBuf> {
     let mut files = Vec::new();
-    if let Some(dir) = claude_config_dir.filter(|dir| !dir.is_empty()) {
-        files.push(PathBuf::from(dir).join("settings.json"));
-    }
-    if let Some(home) = home {
-        let claude = home.join(".claude");
-        files.push(claude.join("settings.json"));
-        files.push(claude.join("settings.local.json"));
-    }
     for managed in managed_dirs {
         files.push(managed.join("managed-settings.json"));
         let mut drop_ins: Vec<PathBuf> = std::fs::read_dir(managed.join("managed-settings.d"))
@@ -89,22 +98,23 @@ pub fn settings_files(
     files
 }
 
-pub fn is_disabled(sources: &Sources) -> bool {
-    if sources
-        .process_value
-        .as_deref()
-        .is_some_and(|value| !value.is_empty())
-    {
-        return true;
-    }
-    sources.settings_files.iter().any(|file| {
-        std::fs::read_to_string(file)
-            .ok()
-            .is_some_and(|text| document_sets_it(&text))
-    }) || sources
-        .policy_documents
-        .iter()
-        .any(|text| document_sets_it(text))
+/// Whether the organization's managed settings force the switch on: a
+/// managed settings file (see `managed_settings_files`) or a policy document
+/// (the registry's `SOFTWARE\Policies\ClaudeCode` `Settings` value). Those
+/// outrank the probe's `--settings`, so Claude Code could not read the quota.
+/// The user's own files and environment do not count here: the probe handles
+/// those. Server-managed settings from the claude.ai console are fetched by
+/// Claude Code and are not visible here; with those, the probe runs and Claude
+/// Code answers without windows.
+pub fn is_forced_by_policy(files: &[PathBuf], policy_documents: &[String]) -> bool {
+    files.iter().any(|file| file_sets_it(file))
+        || policy_documents.iter().any(|text| document_sets_it(text))
+}
+
+fn file_sets_it(file: &Path) -> bool {
+    std::fs::read_to_string(file)
+        .ok()
+        .is_some_and(|text| document_sets_it(&text))
 }
 
 /// True when a settings document's top-level `env` sets the variable to a
@@ -123,8 +133,7 @@ pub fn document_sets_it(text: &str) -> bool {
 }
 
 /// Claude Code treats any non-empty value as set. A non-string value is not
-/// valid in `env`; it counts as set too, erring towards not starting Claude
-/// Code.
+/// valid in `env`; it counts as set too.
 pub fn is_on(value: Option<&Value>) -> bool {
     match value {
         None | Some(Value::Null) => false,
@@ -147,86 +156,66 @@ mod tests {
         fs::write(path, text).unwrap();
     }
 
-    fn disabled(home: &Path, config_dir: Option<&Path>, managed: &Path) -> bool {
-        is_disabled(&Sources {
-            process_value: None,
-            settings_files: settings_files(
-                Some(home),
-                config_dir.map(Path::as_os_str),
-                &[managed.to_path_buf()],
-            ),
-            policy_documents: Vec::new(),
-        })
+    fn forced(managed: &Path) -> bool {
+        is_forced_by_policy(&managed_settings_files(&[managed.to_path_buf()]), &[])
     }
 
     #[test]
-    fn off_when_no_source_sets_it() {
-        let root = tempfile::tempdir().unwrap();
-        let (home, managed) = (root.path().join("home"), root.path().join("managed"));
-        assert!(!disabled(&home, None, &managed));
-        write(&home.join(".claude/settings.json"), r#"{"env":{"OTHER":"1"}}"#);
-        assert!(!disabled(&home, None, &managed));
+    fn quiet_environment_clears_only_the_master_switch() {
+        let empty: Vec<_> = QUIET_ENVIRONMENT.iter().filter(|(_, v)| v.is_empty()).collect();
+        assert_eq!(empty, vec![&(VARIABLE, "")]);
+        for key in [
+            "DISABLE_TELEMETRY",
+            "DISABLE_ERROR_REPORTING",
+            "DISABLE_AUTOUPDATER",
+            "DISABLE_BUG_COMMAND",
+        ] {
+            assert!(QUIET_ENVIRONMENT.contains(&(key, "1")), "{key}");
+        }
+        assert!(QUIET_ENVIRONMENT.contains(&("CLAUDE_CODE_MODEL_CATALOG", "0")));
     }
 
     #[test]
-    fn app_environment_counts_any_non_empty_value() {
-        for (value, expected) in [("1", true), ("0", true), ("false", true), ("", false)] {
-            let sources = Sources {
-                process_value: Some(value.into()),
-                ..Sources::default()
-            };
-            assert_eq!(is_disabled(&sources), expected, "{value:?}");
+    fn probe_settings_carry_exactly_the_quiet_environment() {
+        let settings: Value = serde_json::from_str(&probe_settings()).unwrap();
+        let object = settings.as_object().unwrap();
+        assert_eq!(object.len(), 1);
+        let env = object["env"].as_object().unwrap();
+        assert_eq!(env.len(), QUIET_ENVIRONMENT.len());
+        for (key, value) in QUIET_ENVIRONMENT {
+            assert_eq!(env[key], Value::String(value.into()), "{key}");
         }
     }
 
     #[test]
-    fn user_project_local_and_config_dir_files_turn_it_on() {
+    fn no_policy_by_default() {
         let root = tempfile::tempdir().unwrap();
-        let (home, managed) = (root.path().join("home"), root.path().join("managed"));
-        write(&home.join(".claude/settings.json"), &settings(r#""1""#));
-        assert!(disabled(&home, None, &managed));
-
-        let root = tempfile::tempdir().unwrap();
-        let (home, managed) = (root.path().join("home"), root.path().join("managed"));
-        write(&home.join(".claude/settings.local.json"), &settings(r#""true""#));
-        assert!(disabled(&home, None, &managed));
-
-        let root = tempfile::tempdir().unwrap();
-        let (home, managed) = (root.path().join("home"), root.path().join("managed"));
-        let profile = root.path().join("profile");
-        write(&profile.join("settings.json"), &settings(r#""1""#));
-        assert!(disabled(&home, Some(&profile), &managed));
-        assert!(!disabled(&home, None, &managed));
+        let managed = root.path().join("managed");
+        assert!(!forced(&managed));
+        write(&managed.join("managed-settings.json"), r#"{"env":{"OTHER":"1"}}"#);
+        assert!(!forced(&managed));
     }
 
     #[test]
-    fn managed_file_and_json_drop_ins_turn_it_on() {
+    fn managed_file_and_json_drop_ins_force_it() {
         let root = tempfile::tempdir().unwrap();
-        let (home, managed) = (root.path().join("home"), root.path().join("managed"));
+        let managed = root.path().join("managed");
         write(&managed.join("managed-settings.json"), &settings(r#""1""#));
-        assert!(disabled(&home, None, &managed));
+        assert!(forced(&managed));
 
         let root = tempfile::tempdir().unwrap();
-        let (home, managed) = (root.path().join("home"), root.path().join("managed"));
+        let managed = root.path().join("managed");
         write(&managed.join("managed-settings.d/10-base.json"), r#"{"env":{}}"#);
         write(&managed.join("managed-settings.d/notes.txt"), &settings(r#""1""#));
-        assert!(!disabled(&home, None, &managed));
+        assert!(!forced(&managed));
         write(&managed.join("managed-settings.d/20-privacy.JSON"), &settings(r#""1""#));
-        assert!(disabled(&home, None, &managed));
+        assert!(forced(&managed));
     }
 
     #[test]
-    fn registry_policy_documents_turn_it_on() {
-        let on = Sources {
-            policy_documents: vec![r#"{"env":{}}"#.into(), settings(r#""1""#)],
-            ..Sources::default()
-        };
-        assert!(is_disabled(&on));
-        let off = Sources {
-            policy_documents: vec!["not json".into(), settings(r#""""#)],
-            ..Sources::default()
-        };
-        assert!(!is_disabled(&off));
+    fn registry_policy_documents_force_it() {
+        assert!(is_forced_by_policy(&[], &[r#"{"env":{}}"#.into(), settings(r#""1""#)]));
+        assert!(!is_forced_by_policy(&[], &["not json".into(), settings(r#""""#)]));
     }
 
     #[test]
@@ -241,6 +230,7 @@ mod tests {
     #[test]
     fn byte_order_mark_and_non_string_values() {
         assert!(document_sets_it(&format!("\u{feff}{}", settings(r#""1""#))));
+        assert!(document_sets_it(&settings("0")));
         assert!(document_sets_it(&settings("1")));
         assert!(document_sets_it(&settings("true")));
     }

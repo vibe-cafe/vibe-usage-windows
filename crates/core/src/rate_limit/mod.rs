@@ -96,11 +96,13 @@ pub enum RateLimitEmptyReason {
     /// The session's login method has plan windows that genuinely do not apply
     /// (Claude Code with an API key, Bedrock or Vertex).
     SessionWithoutPlanLimits,
-    /// The user switched off Claude Code's nonessential traffic, so the app did
-    /// not start Claude Code (`claude_nonessential`). Not a failure and not
-    /// something a retry can change: the card names the user's setting and
-    /// shows no older numbers. App-local (the CLI never sends it); the shared
-    /// pause vocabulary (#190) calls this `vendorTrafficDisabled`.
+    /// The organization's managed settings force Claude Code's nonessential
+    /// traffic off, which also blocks its usage read, so the app did not start
+    /// Claude Code (`claude_nonessential`). Not a failure and not something a
+    /// retry can change: the card names the policy and shows no older numbers.
+    /// A user's own switch does not lead here (the probe keeps it off and
+    /// still reads). App-local (the CLI never sends it); the shared pause
+    /// vocabulary (#190) calls this `vendorTrafficDisabled`.
     NonessentialTrafficDisabled,
 }
 

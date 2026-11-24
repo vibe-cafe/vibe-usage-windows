@@ -320,10 +320,12 @@ export type RateLimitEmptyReason =
    */
   | "sessionWithoutPlanLimits"
   /**
-   * The user switched off Claude Code's nonessential traffic, so the app did
-   * not start Claude Code. Not a failure: the card names the user's setting,
-   * shows no older numbers and offers no retry. App-local (the CLI never sends
-   * it); the shared pause vocabulary (#190) calls it `vendorTrafficDisabled`.
+   * The organization's managed settings force Claude Code's nonessential
+   * traffic off, which also blocks its usage read, so the app did not start
+   * Claude Code. Not a failure: the card names the policy, shows no older
+   * numbers and offers no retry. A user's own switch does not lead here (the
+   * probe keeps it off and still reads). App-local (the CLI never sends it);
+   * the shared pause vocabulary (#190) calls it `vendorTrafficDisabled`.
    */
   | "nonessentialTrafficDisabled";
 
