@@ -32,7 +32,7 @@
 - **ZCode**：只使用你在设置里主动填写的 Coding Plan Key，按你选的区域，发给智谱 BigModel（`open.bigmodel.cn`）或 Z.ai（`api.z.ai`），不会两边都试。这个 Key 保存在 Windows 凭据管理器里。
 - **Grok**：只读取 Grok 官方命令行工具在本机的日志末尾，不联网，不读取凭证。
 - **OpenCode Go**：读取 OpenCode 保存在本机的登录（`%USERPROFILE%\.local\share\opencode`：OpenCode Go 或 OpenCode 的 API Key，或 OpenCode 账号登录的访问令牌及其选中的工作区），向 OpenCode（`opencode.ai`）查询额度。只读，不改写也不续期 OpenCode 的登录；账号登录过期时不发请求，打开一次 OpenCode 即自动续期。
-- **Antigravity / AGY**：只在你用过 Antigravity 之后才向 Google 查询（判断方法是看本机 Antigravity 对话记录文件的大小和修改时间，不读内容；本机一条对话都没有时不查询），两次至少隔 5 分钟，读失败后最长隔 1 小时；没用过时显示上次查到的数，过了重置时间的窗口显示为已恢复。查询时依次用：你已安装、已登录的官方 agy 的 `agy -p /usage`；正在运行的 Antigravity 桌面端自己的本机服务（App 会查看本机进程列表，取这个服务自己的本机访问令牌 CSRF Token，只发到它在 `127.0.0.1` 上的端口）；前两种都不行时，临时启动桌面端自带的语言服务器，并如实报告桌面端的版本号。都不发送提示词，由 agy 或桌面端用它们自己的登录向 Google 查询；App 不读取它们保存的登录信息，读完就结束自己启动的进程。我们启动的 agy 里关闭了它的自动更新，并放了不做任何事的浏览器启动器，让它登录失败时打不开浏览器登录页（这一层在 Windows 上还没有真机验证）；agy 要求登录或卡住之后，直到你再用 agy 之前都不再运行它。你自己运行的 agy 不受影响。上次查到的额度保存在本机 `%USERPROFILE%\.vibe-usage\antigravity-quota.json`。Google 表示不支持第三方应用读取额度。
+- **Antigravity / AGY**：只在你用过 Antigravity 之后才向 Google 查询（判断方法是看本机 Antigravity 对话记录文件的大小和修改时间，不读内容；本机一条对话都没有时不查询），两次至少隔 5 分钟，读失败后最长隔 1 小时；没用过时显示上次查到的数，过了重置时间的窗口显示为已恢复。查询时依次用：你已安装、已登录的官方 agy 的 `agy -p /usage`；正在运行的 Antigravity 桌面端自己的本机服务（App 会查看本机进程列表，取这个服务自己的本机访问令牌 CSRF Token，只发到它在 `127.0.0.1` 上的端口）；前两种都不行时，临时启动桌面端自带的语言服务器，并如实报告桌面端的版本号。都不发送提示词，由 agy 或桌面端用它们自己的登录向 Google 查询；App 不读取它们保存的登录信息，读完就结束自己启动的进程。我们启动的 agy 里关闭了它的自动更新，并放了不做任何事的浏览器启动器，让它登录失败时无法经这些启动器打开浏览器登录页（它若直接调用系统接口打开浏览器，这一层拦不住；Windows 上也还没有真机验证）；agy 要求登录或卡住之后，直到你再用 agy 之前都不再运行它。你自己运行的 agy 不受影响。上次查到的额度保存在本机 `%USERPROFILE%\.vibe-usage\antigravity-quota.json`。Google 表示不支持第三方应用读取额度。
 
 查询到的额度只显示在 App 里，并缓存在本机，不会上传到 VibeCafé 服务器。
 
