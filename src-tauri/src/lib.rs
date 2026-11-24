@@ -2,6 +2,7 @@
 //! Windows port of the macOS Vibe Usage app (vibe-usage-app).
 
 mod commands;
+mod egress_check;
 mod panel;
 mod process_utils;
 mod process_lifecycle;

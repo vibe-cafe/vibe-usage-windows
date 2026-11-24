@@ -365,12 +365,19 @@ export type RateLimitLiveFailureCode =
   | "cliUnrecognizedOutput"
   | "cliSchemaMismatch"
   | "cliNoResult"
-  | "cliReportedFailure";
+  | "cliReportedFailure"
+  // Paused on purpose (network-privacy principle, rule 3): the read would go
+  // out direct and the egress check said no. Nothing was sent; no retry.
+  | "egressRegionUnsupported"
+  | "egressUnconfirmed"
+  | "proxyNotDetected";
 
 export interface RateLimitLiveFailure {
   code: RateLimitLiveFailureCode;
   /** HTTP status number, only for `endpointHttpStatus`. */
   status?: number;
+  /** Where the egress is (`CN` / `HK` / `MO` / `Other`), only for `egressRegionUnsupported`. */
+  region?: string;
 }
 
 export interface ProviderRateLimit {
@@ -456,6 +463,10 @@ export interface AppSettings {
   quotaSelectedTabId?: RateLimitProvider | null;
   quotaSelectionInitialized: boolean;
   zCodeQuotaRegion: ZCodeQuotaRegion;
+  /** 「检测网络出口」, default on (the egress check, `egress_check.rs`). */
+  egressCheckEnabled: boolean;
+  /** 「这台电脑上网靠本机代理软件」, default off. */
+  egressRequireLocalProxy: boolean;
 }
 
 export type ExtraRoots = Partial<Record<"codex" | "grok" | "antigravity", string[]>>;

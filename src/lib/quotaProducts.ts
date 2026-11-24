@@ -191,8 +191,28 @@ export function quotaFailureText(
       return "配额 CLI 没有返回这个产品";
     case "cliReportedFailure":
       return "实时读取失败";
+    case "egressRegionUnsupported":
+      return `网络出口${egressPlace(failure.region)}，已暂停读取`;
+    case "egressUnconfirmed":
+      return "无法确认网络出口，已暂停读取";
+    case "proxyNotDetected":
+      return "未检测到代理，已暂停读取";
     default:
       return "暂时无法读取订阅配额";
+  }
+}
+
+/** Where an unsupported egress is, in the card's words (same as macOS). */
+export function egressPlace(region?: string): string {
+  switch (region) {
+    case "CN":
+      return "在中国大陆";
+    case "HK":
+      return "在香港";
+    case "MO":
+      return "在澳门";
+    default:
+      return "不在支持地区";
   }
 }
 

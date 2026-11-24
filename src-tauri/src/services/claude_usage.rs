@@ -220,7 +220,9 @@ fn discover_candidates(environment: &DiscoveryEnvironment) -> Vec<ClaudeLaunch> 
 /// Checked on every refresh, so a policy change takes effect on the next one.
 /// A user's own switch does not stop the read: the probe keeps it off and
 /// still reads the quota (`vibe_core::claude_nonessential`).
-pub async fn fetch() -> Result<ProviderRateLimit, RateLimitLiveFailure> {
+pub async fn fetch(
+    egress: crate::egress_check::Settings,
+) -> Result<ProviderRateLimit, RateLimitLiveFailure> {
     let at = (now_epoch() * 1000.0) as u64;
     let environment = DiscoveryEnvironment::live();
     // Desktop observations are local-only and must not be confused with a
@@ -254,6 +256,12 @@ pub async fn fetch() -> Result<ProviderRateLimit, RateLimitLiveFailure> {
     if candidates.is_empty() {
         remember(record);
         return Err(RateLimitLiveFailure::ClaudeBinaryNotFound);
+    }
+    // Claude Code would reach Anthropic direct: confirm the egress before it
+    // starts with the user's login (`egress_check`).
+    if let Err(pause) = crate::egress_check::check_claude(egress).await {
+        remember(record);
+        return Err(pause.live_failure());
     }
     // Claude Code reads proxy variables, never Windows settings: hand it the
     // system proxy for Anthropic's hosts (HTTP only; it does not support
@@ -424,7 +432,8 @@ pub fn after_live_failure(
         snapshot.live_failure = Some(failure);
         return snapshot;
     }
-    if failure == RateLimitLiveFailure::ClaudeBinaryNotFound {
+    // Nothing to retry: no program, or a read paused on purpose.
+    if failure == RateLimitLiveFailure::ClaudeBinaryNotFound || failure.is_pause() {
         return ProviderRateLimit::failed(
             RateLimitProvider::ClaudeCode,
             RateLimitStatus::NoData,
@@ -1017,6 +1026,16 @@ mod tests {
             missing.live_failure,
             Some(RateLimitLiveFailure::ClaudeBinaryNotFound)
         );
+        // A read paused by the egress check is not retried: the card says why.
+        for paused in [
+            RateLimitLiveFailure::EgressRegionUnsupported { region: vibe_core::EgressRegion::CN },
+            RateLimitLiveFailure::EgressUnconfirmed,
+            RateLimitLiveFailure::ProxyNotDetected,
+        ] {
+            let shown = after_live_failure(paused, None);
+            assert_eq!(shown.status, RateLimitStatus::NoData);
+            assert_eq!(shown.live_failure, Some(paused));
+        }
     }
 
     #[test]

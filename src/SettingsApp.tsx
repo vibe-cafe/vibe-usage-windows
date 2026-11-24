@@ -539,6 +539,32 @@ export function SettingsApp() {
           )}
         </Section>
 
+        {/* 网络 — the egress check (`egress_check.rs`): Codex, Claude and
+            Antigravity read without a detected proxy only after an anonymous
+            check of the egress country, unless it is off; the manual switch
+            pauses them whenever no proxy is detected. */}
+        <Section
+          title="网络"
+          footer={
+            settings?.egressCheckEnabled === false
+              ? "关闭后，未检测到代理时直接读取。"
+              : "未检测到代理时，先匿名确认出口地区再读取 Codex、Claude、Antigravity。"
+          }
+        >
+          <Row label="检测网络出口">
+            <Toggle
+              checked={settings?.egressCheckEnabled ?? true}
+              onChange={(v) => patchSettings({ egressCheckEnabled: v })}
+            />
+          </Row>
+          <Row label="这台电脑上网靠本机代理软件">
+            <Toggle
+              checked={settings?.egressRequireLocalProxy ?? false}
+              onChange={(v) => patchSettings({ egressRequireLocalProxy: v })}
+            />
+          </Row>
+        </Section>
+
         {/* 常规 — tray and startup preferences cover the same subject: how the
             app behaves outside this window. */}
         <Section title="常规">
