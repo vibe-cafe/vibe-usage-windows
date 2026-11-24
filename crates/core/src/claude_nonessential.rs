@@ -109,7 +109,8 @@ pub fn managed_settings_files(managed: &Path) -> Vec<PathBuf> {
 /// read the quota. The user's own files and environment do not count here:
 /// the probe handles those. Server-managed settings from the claude.ai
 /// console are fetched by Claude Code and are not visible here; with those,
-/// the probe runs and Claude Code answers without windows.
+/// the probe runs and Claude Code may answer from a recent snapshot of its
+/// own or without windows.
 pub fn is_forced_by_policy(hklm: Option<&str>, files: &[PathBuf], hkcu: Option<&str>) -> bool {
     // A managed `env` is merged key by key: the highest source that sets
     // this key decides (an explicit "" included); one that does not set it
@@ -148,11 +149,15 @@ fn policy_object(text: &str) -> Option<serde_json::Map<String, Value>> {
     }
 }
 
+/// The key as Claude Code reads a managed `env` on Windows: the name in any
+/// case (it upper-cases names when merging).
 fn env_value(policy: &serde_json::Map<String, Value>) -> Option<&Value> {
-    policy
-        .get("env")
-        .and_then(Value::as_object)
-        .and_then(|env| env.get(VARIABLE))
+    let env = policy.get("env").and_then(Value::as_object)?;
+    env.get(VARIABLE).or_else(|| {
+        env.iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(VARIABLE))
+            .map(|(_, value)| value)
+    })
 }
 
 /// Claude Code treats any non-empty value as set. A non-string value is not
@@ -298,6 +303,19 @@ mod tests {
             ("DO_NOT_TRACK", "1"),
         ];
         assert_eq!(QUIET_ENVIRONMENT, expected);
+    }
+
+    #[test]
+    fn the_variable_name_counts_in_any_case() {
+        let root = tempfile::tempdir().unwrap();
+        let managed = root.path().join("managed");
+        std::fs::create_dir_all(&managed).unwrap();
+        write(&managed.join("managed-settings.json"), r#"{"env":{"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC":"1"}}"#);
+        let files = managed_settings_files(&managed);
+        // HKLM lifts it with a lower-case name: lifted, as in Claude Code.
+        assert!(!is_forced_by_policy(Some(r#"{"env":{"claude_code_disable_nonessential_traffic":""}}"#), &files, None));
+        // Forced with a lower-case name only.
+        assert!(is_forced_by_policy(Some(r#"{"env":{"Claude_Code_Disable_Nonessential_Traffic":"1"}}"#), &[], None));
     }
 
     #[test]
