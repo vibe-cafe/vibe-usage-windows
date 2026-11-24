@@ -243,6 +243,16 @@ pub async fn fetch() -> Result<ProviderRateLimit, RateLimitLiveFailure> {
         log::debug!("Claude nonessential traffic forced off by policy; not starting Claude Code");
         return Ok(nonessential_traffic_disabled_snapshot());
     }
+    // Bedrock / Vertex / …: no plan quota to read, and starting Claude Code
+    // could send a model request with the user's cloud account.
+    if third_party_provider_configured() {
+        log::debug!("Claude Code uses a third-party provider; not starting it");
+        let mut snapshot =
+            ProviderRateLimit::empty(RateLimitProvider::ClaudeCode, RateLimitStatus::NoData);
+        snapshot.empty_reason = Some(RateLimitEmptyReason::SessionWithoutPlanLimits);
+        snapshot.fetched_at = Some(now_epoch());
+        return Ok(snapshot);
+    }
     let candidates = discover_candidates(&environment);
     let mut record = ProbeRecord {
         at,
@@ -297,6 +307,26 @@ fn nonessential_traffic_forced_by_policy() -> bool {
     let (hklm, hkcu) = claude_policy_documents();
     let files = managed_settings_files(std::path::Path::new(r"C:\Program Files\ClaudeCode"));
     is_forced_by_policy(hklm.as_deref(), &files, hkcu.as_deref())
+}
+
+/// Whether Claude Code is set up for a third-party provider, from the app's
+/// environment, `%CLAUDE_CONFIG_DIR%\settings.json` (else
+/// `~\.claude\settings.json`), `~\.claude\settings.local.json`, the managed
+/// settings files and the registry policies (`vibe_core::claude_nonessential`).
+fn third_party_provider_configured() -> bool {
+    use vibe_core::claude_nonessential::{managed_settings_files, third_party_provider_configured};
+    let mut files = Vec::new();
+    if let Some(dir) = std::env::var_os("CLAUDE_CONFIG_DIR").filter(|v| !v.is_empty()) {
+        files.push(PathBuf::from(dir).join("settings.json"));
+    }
+    if let Some(home) = dirs::home_dir() {
+        files.push(home.join(".claude").join("settings.json"));
+        files.push(home.join(".claude").join("settings.local.json"));
+    }
+    files.extend(managed_settings_files(std::path::Path::new(r"C:\Program Files\ClaudeCode")));
+    let (hklm, hkcu) = claude_policy_documents();
+    let policies: Vec<&str> = hklm.iter().chain(hkcu.iter()).map(String::as_str).collect();
+    third_party_provider_configured(&|name| std::env::var(name).ok(), &files, &policies)
 }
 
 /// The managed-settings JSON Claude Code reads from the registry: HKLM, and

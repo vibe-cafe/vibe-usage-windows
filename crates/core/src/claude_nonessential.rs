@@ -135,6 +135,56 @@ pub fn is_forced_by_policy(hklm: Option<&str>, files: &[PathBuf], hkcu: Option<&
         .is_some_and(|policy| is_on(env_value(&policy)))
 }
 
+/// The variables that set Claude Code up for a third-party model provider.
+pub const THIRD_PARTY_PROVIDER_VARIABLES: [&str; 6] = [
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_VERTEX",
+    "CLAUDE_CODE_USE_FOUNDRY",
+    "CLAUDE_CODE_USE_ANTHROPIC_AWS",
+    "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD",
+    "CLAUDE_CODE_USE_MANTLE",
+];
+
+/// Whether the user's Claude Code is set up for a third-party provider
+/// (Bedrock, Vertex, Foundry, …): any of those variables non-empty in the
+/// app's environment (`process_value`), a settings file (user, home-local,
+/// managed) or a policy document. Such a login has no plan quota, and
+/// starting Claude Code could send a model-availability request with the
+/// user's cloud account, so the probe is not started. Only these keys are
+/// read; each document is parsed in memory and the rest dropped.
+pub fn third_party_provider_configured(
+    process_value: &dyn Fn(&str) -> Option<String>,
+    files: &[PathBuf],
+    policy_documents: &[&str],
+) -> bool {
+    if THIRD_PARTY_PROVIDER_VARIABLES
+        .iter()
+        .any(|name| process_value(name).is_some_and(|value| !value.is_empty()))
+    {
+        return true;
+    }
+    let documents = files
+        .iter()
+        .filter_map(|file| std::fs::read_to_string(file).ok())
+        .chain(policy_documents.iter().map(|text| text.to_string()));
+    for text in documents {
+        let text = text.strip_prefix('\u{feff}').unwrap_or(&text).to_string();
+        let Ok(root) = serde_json::from_str::<Value>(&text) else {
+            continue;
+        };
+        let Some(env) = root.get("env").and_then(Value::as_object) else {
+            continue;
+        };
+        if THIRD_PARTY_PROVIDER_VARIABLES
+            .iter()
+            .any(|name| is_on(env.get(*name)))
+        {
+            return true;
+        }
+    }
+    false
+}
+
 /// A policy document as a non-empty JSON object. A leading UTF-8 byte-order
 /// mark (Notepad writes one) is ignored.
 fn policy_object(text: &str) -> Option<serde_json::Map<String, Value>> {
@@ -272,6 +322,28 @@ mod tests {
         // Files with a policy outrank HKCU.
         write(&managed.join("managed-settings.json"), r#"{"model":"x"}"#);
         assert!(!is_forced_by_policy(None, &managed_settings_files(&managed), Some(&on)));
+    }
+
+    #[test]
+    fn a_third_party_provider_setup_is_recognised_from_any_source() {
+        let none = |_: &str| None;
+        assert!(!third_party_provider_configured(&none, &[], &[]));
+        assert!(third_party_provider_configured(
+            &|name| (name == "CLAUDE_CODE_USE_BEDROCK").then(|| "1".to_string()),
+            &[],
+            &[]
+        ));
+        assert!(!third_party_provider_configured(
+            &|name| (name == "CLAUDE_CODE_USE_BEDROCK").then(String::new),
+            &[],
+            &[]
+        ));
+        let root = tempfile::tempdir().unwrap();
+        let file = root.path().join("settings.json");
+        write(&file, r#"{"env":{"AWS_REGION":"us-east-1","CLAUDE_CODE_USE_VERTEX":"0"}}"#);
+        assert!(third_party_provider_configured(&none, &[file], &[]));
+        assert!(third_party_provider_configured(&none, &[], &[r#"{"env":{"CLAUDE_CODE_USE_FOUNDRY":"1"}}"#]));
+        assert!(!third_party_provider_configured(&none, &[], &[r#"{"env":{"OTHER":"1"}}"#]));
     }
 
     #[test]
