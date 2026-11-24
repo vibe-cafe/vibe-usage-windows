@@ -115,7 +115,7 @@ Rust (Tauri 2)
   └─ resources/node      node.exe 22 LTS（scripts/fetch-node.mjs, 构建时下载）
 ```
 
-联网行为的最高原则见 [docs/NETWORK_PRIVACY.md](docs/NETWORK_PRIVACY.md)：不绕开用户的代理设置，不暴露用户的真实 IP。
+联网行为的最高原则、承诺边界和现有缺口见 [docs/NETWORK_PRIVACY.md](docs/NETWORK_PRIVACY.md)。
 
 ## 相关项目
 
