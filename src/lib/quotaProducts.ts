@@ -103,6 +103,15 @@ export function quotaProductStatusText(
   }
   // Never-requested products and another provider's snapshot are not no-data.
   const result = snapshot?.provider === product.provider ? snapshot : undefined;
+  // OpenCode Go reads OpenCode's own login, so the words say where to act
+  // (same as the macOS 状态 column).
+  if (result && product.provider === "opencode-go" && result.status.kind !== "ok" && !result.emptyReason) {
+    const failure = result.liveFailure?.code;
+    if (failure === "credentialsExpired") return `${detected} · 需打开 OpenCode`;
+    if (failure === "credentialsNotFound" || failure === "credentialsRejected" || result.status.kind === "unauthorized") {
+      return `${detected} · 需登录 OpenCode`;
+    }
+  }
   const reading = result ? {
     ok: "读取成功",
     noData: "无数据",
@@ -132,7 +141,11 @@ export function compactQuotaStatus(status: string): string {
  * Claude Desktop record and Credential Manager lines exist only on Windows.
  * An unknown code (a newer backend) falls back to a neutral sentence.
  */
-export function quotaFailureText(failure: RateLimitLiveFailure, providerName: string): string {
+export function quotaFailureText(
+  failure: RateLimitLiveFailure,
+  providerName: string,
+  provider?: RateLimitProvider,
+): string {
   switch (failure.code) {
     case "claudeBinaryNotFound":
       return "未找到 Claude Code 程序";
@@ -153,9 +166,14 @@ export function quotaFailureText(failure: RateLimitLiveFailure, providerName: st
     case "desktopRecordUnreadable":
       return "Claude 桌面端记录无法解析";
     case "credentialsNotFound":
+      // OpenCode Go has no login of its own here: the card reads OpenCode's.
+      if (provider === "opencode-go") return "在 OpenCode 里登录后自动显示";
       return `未找到 ${providerName} 登录信息`;
     case "credentialsRejected":
       return `${providerName} 登录已失效`;
+    case "credentialsExpired":
+      if (provider === "opencode-go") return "打开 OpenCode 后自动显示";
+      return `${providerName} 登录已过期`;
     case "endpointTimedOut":
       return `${providerName} 配额接口请求超时`;
     case "endpointUnreachable":
@@ -232,7 +250,7 @@ export function quotaEmptyStateText(
     case "nonessentialTrafficDisabled":
       return "组织策略关闭了 Claude Code 非必要流量 · 无法读取";
   }
-  if (snapshot.liveFailure) return quotaFailureText(snapshot.liveFailure, name);
+  if (snapshot.liveFailure) return quotaFailureText(snapshot.liveFailure, name, snapshot.provider);
   // A Desktop record from an older backend that did not name its reason.
   if (snapshot.sourceLabel) return "桌面额度记录缺失、过期或账号不明确";
   return isDetected ? "暂未读取到订阅配额数据" : "未检测到本机安装或登录";
@@ -241,7 +259,7 @@ export function quotaEmptyStateText(
 /** First line of a retryable card: the fixed reason when the read named one. */
 export function quotaRetryableText(snapshot: ProviderRateLimit, providerName: string): string {
   return snapshot.liveFailure
-    ? quotaFailureText(snapshot.liveFailure, providerName)
+    ? quotaFailureText(snapshot.liveFailure, providerName, snapshot.provider)
     : "暂时无法读取订阅配额";
 }
 
@@ -261,7 +279,7 @@ export function quotaProvenanceText(
   switch (snapshot.status.kind) {
     case "ok":
       return snapshot.liveFailure
-        ? `${source} · ${quotaFailureText(snapshot.liveFailure, providerName)}`
+        ? `${source} · ${quotaFailureText(snapshot.liveFailure, providerName, snapshot.provider)}`
         : null;
     case "retryableError":
       return source;
