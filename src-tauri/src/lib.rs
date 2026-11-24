@@ -7,6 +7,7 @@ mod process_utils;
 mod process_lifecycle;
 mod services;
 mod state;
+mod system_proxy;
 mod tray;
 mod window_geometry;
 
@@ -14,6 +15,10 @@ use state::AppCtx;
 use tauri::{Manager, WindowEvent};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+/// The first sync of a login launch waits this long, so the user's proxy
+/// client can start first.
+const LOGIN_LAUNCH_FIRST_SYNC_DELAY: std::time::Duration = std::time::Duration::from_secs(120);
+
 pub fn run() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
@@ -22,20 +27,33 @@ pub fn run() {
         .map(|dir| dir.join(&context.config().identifier))
         .unwrap_or_else(|| std::path::PathBuf::from("."));
 
+    let launched_at_login = services::auto_launch::launched_at_login(std::env::args());
     let ctx = AppCtx::new(app_config_dir);
     commands::initialize_quota_selection(&ctx);
     tauri::Builder::default()
         .manage(ctx)
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            // Second launch → surface the main window.
-            panel::show(app);
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            // Second launch → surface the main window. A second login launch
+            // (the Run value while already running) stays quiet.
+            if !services::auto_launch::launched_at_login(args) {
+                panel::show(app);
+            }
         }))
-        .setup(|app| {
+        .setup(move |app| {
             tray::create_tray(app.handle())?;
-            // Created hidden in tauri.conf.json so the remembered size is in
-            // place before the first paint.
-            panel::show_on_launch(app.handle());
+            // Started by the Run value: stay in the tray, read no quotas and
+            // wait before the first sync (`auto_launch`). Otherwise show the
+            // window, created hidden in tauri.conf.json so the remembered size
+            // is in place before the first paint.
+            if launched_at_login {
+                app.state::<AppCtx>()
+                    .quiet_start
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+            } else {
+                panel::show_on_launch(app.handle());
+            }
+            services::auto_launch::migrate_run_value();
             services::claude_usage::set_bundled_node(services::sync_engine::bundled_node(
                 app.handle(),
             ));
@@ -52,9 +70,15 @@ pub fn run() {
                         services::rate_limits::statusline_hook(&retirement_handle).retire_legacy();
                 });
 
-                // Configured → immediate sync + 30-minute schedule.
+                // Configured → sync now (two minutes after a login launch)
+                // + 30-minute schedule.
                 if ctx.config.is_configured() {
-                    services::scheduler::start(handle.clone());
+                    let delay = if launched_at_login {
+                        LOGIN_LAUNCH_FIRST_SYNC_DELAY
+                    } else {
+                        std::time::Duration::ZERO
+                    };
+                    services::scheduler::start_after(handle.clone(), delay);
                 }
             }
             services::scheduler::start_update_checks(handle);

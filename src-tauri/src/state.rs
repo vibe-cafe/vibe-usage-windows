@@ -147,6 +147,9 @@ pub struct AppCtx {
     pub update_info: Mutex<Option<UpdateInfo>>,
     /// (cost, tokens) for the active time range, pushed by the frontend.
     pub tray_stats: Mutex<Option<(f64, i64)>>,
+    /// Launched by Windows at login (`--autostart`) and the window not shown
+    /// since: quota cards read nothing until the user opens the window.
+    pub quiet_start: AtomicBool,
 }
 
 impl AppCtx {
@@ -188,8 +191,13 @@ impl AppCtx {
             config: ConfigManager::new(IS_DEV),
             http: reqwest::Client::builder()
                 .user_agent(format!("VibeUsageWindows/{}", env!("CARGO_PKG_VERSION")))
-                // system-proxy feature honors the Windows proxy; a hung
-                // connect must fail fast instead of pinning spinners.
+                // The proxy is resolved for every request (`system_proxy`):
+                // the app follows the user's current settings, PAC included,
+                // instead of the ones in place when it started.
+                .proxy(reqwest::Proxy::custom(|url| {
+                    crate::system_proxy::live_route(url).reqwest_proxy()
+                }))
+                // A hung connect must fail fast instead of pinning spinners.
                 .connect_timeout(std::time::Duration::from_secs(10))
                 .build()
                 .expect("http client"),
@@ -205,6 +213,7 @@ impl AppCtx {
             rate_limits: Mutex::new(RateLimitCache::default()),
             update_info: Mutex::new(None),
             tray_stats: Mutex::new(None),
+            quiet_start: AtomicBool::new(false),
         }
     }
 

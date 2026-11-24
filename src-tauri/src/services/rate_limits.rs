@@ -133,10 +133,20 @@ pub async fn get_rate_limits(app: &AppHandle, force: bool) -> Vec<ProviderRateLi
         }
     }
 
+    let result = cached_rate_limits(app);
+    for snapshot in &result {
+        test_diagnostics::record_result(snapshot);
+    }
+    result
+}
+
+/// What the cards show without reading anything: the last results, or an
+/// empty placeholder per selected product.
+pub fn cached_rate_limits(app: &AppHandle) -> Vec<ProviderRateLimit> {
     let ctx = app.state::<AppCtx>();
     let selected = selected_providers(app);
     let cache = ctx.rate_limits.lock().unwrap();
-    let result = selected
+    selected
         .into_iter()
         .map(|provider| {
             if provider == RateLimitProvider::Cursor {
@@ -148,12 +158,7 @@ pub async fn get_rate_limits(app: &AppHandle, force: bool) -> Vec<ProviderRateLi
                 .map(|(snapshot, _)| snapshot.clone())
                 .unwrap_or_else(|| ProviderRateLimit::empty(provider, RateLimitStatus::NoData))
         })
-        .collect::<Vec<_>>();
-    drop(cache);
-    for snapshot in &result {
-        test_diagnostics::record_result(snapshot);
-    }
-    result
+        .collect::<Vec<_>>()
 }
 
 /// Compatibility command retained for older frontends. New UI uses the

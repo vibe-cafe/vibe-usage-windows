@@ -76,6 +76,7 @@ pub fn show_on_launch(app: &AppHandle) {
     let Some(window) = app.get_webview_window(PANEL_LABEL) else {
         return;
     };
+    end_quiet_start(app);
     if let Some(size) = read_size(&size_file(app)) {
         *LAST_SAVED.lock().unwrap() = size;
         let _ = window.set_size(LogicalSize::new(size.width, size.height));
@@ -90,6 +91,7 @@ pub fn show(app: &AppHandle) {
     let Some(window) = app.get_webview_window(PANEL_LABEL) else {
         return;
     };
+    end_quiet_start(app);
     window_geometry::present(&window);
     let _ = app.emit("panel-shown", ());
 }
@@ -181,4 +183,12 @@ mod tests {
         std::fs::write(&path, "{\"width\":10,\"height\":10}").unwrap();
         assert_eq!(read_size(&path), None);
     }
+}
+
+/// The user opened the window: quota cards may read again (see
+/// `AppCtx::quiet_start`).
+fn end_quiet_start(app: &AppHandle) {
+    app.state::<AppCtx>()
+        .quiet_start
+        .store(false, std::sync::atomic::Ordering::SeqCst);
 }

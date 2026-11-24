@@ -242,6 +242,19 @@ pub async fn fetch() -> Result<ProviderRateLimit, RateLimitLiveFailure> {
         remember(record);
         return Err(RateLimitLiveFailure::ClaudeBinaryNotFound);
     }
+    // Claude Code reads proxy variables, never Windows settings: hand it the
+    // system proxy for Anthropic's hosts (HTTP only; it does not support
+    // SOCKS). Resolved off the async threads (a PAC is evaluated by WinHTTP).
+    let proxy_env = tauri::async_runtime::spawn_blocking(|| {
+        crate::system_proxy::proxy_variables(
+            &crate::system_proxy::live_routes(&crate::system_proxy::CLAUDE_HOSTS),
+            &|name: &str| std::env::var(name).ok(),
+            false,
+            false,
+        )
+    })
+    .await
+    .unwrap_or_default();
     let mut last_error = RateLimitLiveFailure::ClaudeNoResponse;
     for candidate in candidates.into_iter().take(MAX_CANDIDATES) {
         let mut attempt = ProbeAttempt {
@@ -253,7 +266,7 @@ pub async fn fetch() -> Result<ProviderRateLimit, RateLimitLiveFailure> {
             exit: ProcessExit::NotStarted,
             answer: None,
         };
-        let result = run_probe(&candidate, &mut attempt).await;
+        let result = run_probe(&candidate, &mut attempt, &proxy_env).await;
         attempt.failure = result.as_ref().err().copied();
         record.attempts.push(attempt);
         match result {
@@ -372,6 +385,7 @@ pub fn after_live_failure(
 async fn run_probe(
     candidate: &ClaudeLaunch,
     attempt: &mut ProbeAttempt,
+    proxy_env: &[(&'static str, String)],
 ) -> Result<ProviderRateLimit, RateLimitLiveFailure> {
     // An npm shim resolved to a JavaScript entry runs as `node <entry> ...`,
     // never through cmd.exe (see `vibe_core::claude_code`).
@@ -390,7 +404,8 @@ async fn run_probe(
         .env_remove("CLAUDE_CODE_ENTRYPOINT")
         .env_remove("CLAUDE_CODE_SESSION_ID")
         .env_remove("CLAUDE_CODE_CHILD_SESSION")
-        .env_remove("CLAUDE_PID");
+        .env_remove("CLAUDE_PID")
+        .envs(proxy_env.iter().map(|(name, value)| (*name, value.as_str())));
     if let Some(home) = dirs::home_dir() {
         command.current_dir(home);
     }

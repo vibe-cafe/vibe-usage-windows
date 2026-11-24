@@ -127,8 +127,8 @@ pub struct AccountInfo {
 #[serde(rename_all = "camelCase")]
 pub struct NetworkInfo {
     pub system_proxy: ProxyKind,
-    /// The system proxy is handed to the sync CLI only when the app's own
-    /// environment has no `HTTPS_PROXY`; the Claude probe never gets it.
+    /// The system proxy is handed to the CLI and the Claude probe only when
+    /// the app's own environment has no `HTTPS_PROXY` (`system_proxy`).
     pub system_proxy_passed_to_sync: bool,
     /// An automatic proxy script (PAC, 「使用设置脚本」) is configured. Only
     /// its presence; the address is never read out.

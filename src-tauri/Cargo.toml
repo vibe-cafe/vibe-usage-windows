@@ -27,7 +27,7 @@ tokio = { version = "1", features = ["full"] }
 # for cross-checks; rustls would pull in `ring`'s C build).
 # system-proxy: honor the Windows system proxy — critical for users behind
 # proxies (macOS URLSession does this implicitly; reqwest needs the feature).
-reqwest = { version = "0.12", default-features = false, features = ["json", "native-tls", "gzip", "system-proxy"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "native-tls", "gzip", "socks"] }
 auto-launch = "0.5"
 open = "5"
 dirs = "5"
@@ -53,6 +53,9 @@ windows-sys = { version = "0.59", features = [
     "Win32_Security_Credentials",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
+    # PAC evaluation by the system (WinHttpGetProxyForUrl); a network API,
+    # not an input hook. Approved 2026-11-24 (privacy fix plan, item 9).
+    "Win32_Networking_WinHttp",
 ] }
 winreg = "0.52"
 
