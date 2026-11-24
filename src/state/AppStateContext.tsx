@@ -14,6 +14,7 @@ import {
 import {
   api,
   onPanelShown,
+  onNetworkReady,
   onSettingsUpdated,
   onSyncState,
   onUpdateAvailable,
@@ -469,6 +470,9 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         setSettings(nextSettings);
         setRateLimits([]);
         void api.getZCodeCredentialStatus().then(setZCodeCredentialStatus).catch(() => {});
+        void refreshRateLimits(false);
+      }),
+      onNetworkReady(() => {
         void refreshRateLimits(false);
       }),
       onPanelShown(() => {

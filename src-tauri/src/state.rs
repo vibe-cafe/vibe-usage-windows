@@ -147,9 +147,10 @@ pub struct AppCtx {
     pub update_info: Mutex<Option<UpdateInfo>>,
     /// (cost, tokens) for the active time range, pushed by the frontend.
     pub tray_stats: Mutex<Option<(f64, i64)>>,
-    /// Launched by Windows at login (`--autostart`) and the window not shown
-    /// since: quota cards read nothing until the user opens the window.
-    pub quiet_start: AtomicBool,
+    /// False while a login launch (`--autostart`) waits for the user's proxy
+    /// (`system_proxy::wait_for_launch_proxy`): live quota reads answer from
+    /// the cache and the first sync waits. True otherwise.
+    pub launch_network: tokio::sync::watch::Sender<bool>,
 }
 
 impl AppCtx {
@@ -216,8 +217,19 @@ impl AppCtx {
             rate_limits: Mutex::new(RateLimitCache::default()),
             update_info: Mutex::new(None),
             tray_stats: Mutex::new(None),
-            quiet_start: AtomicBool::new(false),
+            launch_network: tokio::sync::watch::channel(true).0,
         }
+    }
+
+    pub fn launch_network_ready(&self) -> bool {
+        *self.launch_network.borrow()
+    }
+
+    /// Returns once a login launch's proxy is up or its wait ran out; at once
+    /// for any other launch.
+    pub async fn wait_launch_network(&self) {
+        let mut ready = self.launch_network.subscribe();
+        let _ = ready.wait_for(|ready| *ready).await;
     }
 
     pub fn save_settings(&self) {

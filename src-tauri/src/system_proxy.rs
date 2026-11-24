@@ -49,6 +49,18 @@ pub enum Route {
 pub const FAIL_CLOSED_PROXY: &str = "http://127.0.0.1:1";
 
 impl Route {
+    /// The proxy's `host:port`, for a reachability check; `None` when there is
+    /// no proxy to check (direct, or a PAC that cannot be resolved yet).
+    pub fn proxy_endpoint(&self) -> Option<(String, u16)> {
+        let url = match self {
+            Route::Http(url) => Url::parse(url).ok()?,
+            Route::Socks(endpoint) => Url::parse(&format!("socks5://{endpoint}")).ok()?,
+            Route::Direct | Route::Unresolved => return None,
+        };
+        let host = url.host_str()?.trim_matches(['[', ']']).to_string();
+        Some((host, url.port_or_known_default().unwrap_or(1080)))
+    }
+
     /// The proxy URL reqwest should use, or `None` for a direct connection.
     pub fn reqwest_proxy(&self) -> Option<String> {
         match self {
@@ -690,8 +702,135 @@ fn most_common(values: impl Iterator<Item = String>) -> Option<String> {
     best.map(|(value, _)| value.clone())
 }
 
+/// The longest a login launch waits for the user's proxy, and how often it
+/// looks (`wait_for_launch_proxy`).
+pub const LAUNCH_PROXY_WAIT_LIMIT: Duration = Duration::from_secs(120);
+pub const LAUNCH_PROXY_POLL: Duration = Duration::from_secs(2);
+
+/// Whether a TCP connection to `host:port` opens within a second.
+pub fn accepts(host: &str, port: u16) -> bool {
+    use std::net::{TcpStream, ToSocketAddrs};
+    let Ok(addresses) = (host, port).to_socket_addrs() else {
+        return false;
+    };
+    addresses
+        .take(4)
+        .any(|address| TcpStream::connect_timeout(&address, Duration::from_secs(1)).is_ok())
+}
+
+/// Polls `route` every `interval` until it names a proxy that `accepts` a
+/// connection (true), or until `limit` (false). With no proxy yet it keeps
+/// polling: many proxy clients set the system proxy only once they have
+/// started, and whether this user relies on a proxy at all is not known here.
+pub async fn wait_for_proxy<R, RF, A, AF>(
+    limit: Duration,
+    interval: Duration,
+    mut route: R,
+    mut accepts: A,
+) -> bool
+where
+    R: FnMut() -> RF,
+    RF: std::future::Future<Output = Route>,
+    A: FnMut(String, u16) -> AF,
+    AF: std::future::Future<Output = bool>,
+{
+    let started = tokio::time::Instant::now();
+    loop {
+        if let Some((host, port)) = route().await.proxy_endpoint() {
+            if accepts(host, port).await {
+                return true;
+            }
+        }
+        if started.elapsed() >= limit {
+            return false;
+        }
+        tokio::time::sleep(interval).await;
+    }
+}
+
+/// A login launch's wait for the user's proxy: the live system route for
+/// `url` (PAC included) must point at a proxy that accepts a connection, at
+/// most `LAUNCH_PROXY_WAIT_LIMIT` (network-privacy principle, rules 1, 2 and
+/// 6: the proxy client may not be up yet right after login).
+pub async fn wait_for_launch_proxy(url: Url) -> bool {
+    wait_for_proxy(
+        LAUNCH_PROXY_WAIT_LIMIT,
+        LAUNCH_PROXY_POLL,
+        || {
+            let url = url.clone();
+            async move {
+                tauri::async_runtime::spawn_blocking(move || live_route(&url))
+                    .await
+                    .unwrap_or(Route::Unresolved)
+            }
+        },
+        |host, port| async move {
+            tauri::async_runtime::spawn_blocking(move || accepts(&host, port))
+                .await
+                .unwrap_or(false)
+        },
+    )
+    .await
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_proxy_route_names_the_endpoint_to_check() {
+        assert_eq!(
+            Route::Http("http://127.0.0.1:7890".into()).proxy_endpoint(),
+            Some(("127.0.0.1".into(), 7890))
+        );
+        assert_eq!(
+            Route::Http("http://user:pw@proxy.lan".into()).proxy_endpoint(),
+            Some(("proxy.lan".into(), 80))
+        );
+        assert_eq!(
+            Route::Socks("[::1]:1080".into()).proxy_endpoint(),
+            Some(("::1".into(), 1080))
+        );
+        assert_eq!(Route::Direct.proxy_endpoint(), None);
+        assert_eq!(Route::Unresolved.proxy_endpoint(), None);
+    }
+
+    #[tokio::test]
+    async fn a_login_launch_goes_ahead_once_the_proxy_answers() {
+        let routes = std::sync::Mutex::new(vec![
+            Route::Direct,
+            Route::Unresolved,
+            Route::Http("http://127.0.0.1:7890".into()),
+        ]);
+        let up = wait_for_proxy(
+            Duration::from_secs(5),
+            Duration::from_millis(1),
+            || {
+                let mut list = routes.lock().unwrap();
+                let next = if list.len() > 1 { list.remove(0) } else { list[0].clone() };
+                async move { next }
+            },
+            |host, port| async move { host == "127.0.0.1" && port == 7890 },
+        )
+        .await;
+        assert!(up);
+    }
+
+    #[tokio::test]
+    async fn no_proxy_runs_out_the_limit_and_a_closed_port_does_not_count() {
+        let started = std::time::Instant::now();
+        let up = wait_for_proxy(
+            Duration::from_millis(30),
+            Duration::from_millis(5),
+            || async { Route::Direct },
+            |_, _| async { true },
+        )
+        .await;
+        assert!(!up);
+        assert!(started.elapsed() >= Duration::from_millis(30));
+        assert!(!accepts("127.0.0.1", 1));
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        assert!(accepts("127.0.0.1", listener.local_addr().unwrap().port()));
+    }
+
     use super::*;
 
     fn no_env(_: &str) -> Option<String> {

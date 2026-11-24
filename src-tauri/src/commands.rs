@@ -143,11 +143,9 @@ pub fn get_sync_state(app: AppHandle) -> SyncState {
 
 #[tauri::command]
 pub async fn get_rate_limits(app: AppHandle, force: bool) -> Vec<ProviderRateLimit> {
-    // Started at login and the window not shown yet: read nothing (the
-    // hidden window's first load would otherwise query every product at
-    // boot, possibly before the proxy client is up). Showing the window
-    // clears this and refreshes.
-    if app.state::<AppCtx>().quiet_start.load(std::sync::atomic::Ordering::SeqCst) {
+    // A login launch still waiting for the user's proxy: answer from the
+    // cache; the `network-ready` event makes the window read again.
+    if !app.state::<AppCtx>().launch_network_ready() {
         return rate_limits::cached_rate_limits(&app);
     }
     rate_limits::get_rate_limits(&app, force).await

@@ -76,13 +76,11 @@ pub fn show_on_launch(app: &AppHandle) {
     let Some(window) = app.get_webview_window(PANEL_LABEL) else {
         return;
     };
-    end_quiet_start(app);
     restore_size_once(app, &window);
     window_geometry::present(&window);
 }
 
-/// The remembered size, applied before the first show only — at launch, or
-/// on the first tray click after a quiet login launch.
+/// The remembered size, applied before the first show only.
 fn restore_size_once(app: &AppHandle, window: &tauri::WebviewWindow) {
     if SIZE_RESTORED.swap(true, std::sync::atomic::Ordering::SeqCst) {
         return;
@@ -102,7 +100,6 @@ pub fn show(app: &AppHandle) {
     let Some(window) = app.get_webview_window(PANEL_LABEL) else {
         return;
     };
-    end_quiet_start(app);
     restore_size_once(app, &window);
     window_geometry::present(&window);
     let _ = app.emit("panel-shown", ());
@@ -119,8 +116,8 @@ pub fn hide_now(app: &AppHandle) {
 /// Write the panel's current size to disk if it changed. Called when the panel
 /// is hidden and when the app is about to exit.
 pub fn remember_size(app: &AppHandle) {
-    // Before the first show restores the saved size (a quiet login launch),
-    // the hidden window's size is not the user's: keep the saved one.
+    // Before the first show restores the saved size, the hidden window's
+    // size is not the user's: keep the saved one.
     if !SIZE_RESTORED.load(std::sync::atomic::Ordering::SeqCst) {
         return;
     }
@@ -202,10 +199,3 @@ mod tests {
     }
 }
 
-/// The user opened the window: quota cards may read again (see
-/// `AppCtx::quiet_start`).
-fn end_quiet_start(app: &AppHandle) {
-    app.state::<AppCtx>()
-        .quiet_start
-        .store(false, std::sync::atomic::Ordering::SeqCst);
-}
