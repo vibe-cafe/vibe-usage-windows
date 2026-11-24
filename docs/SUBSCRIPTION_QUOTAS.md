@@ -31,9 +31,9 @@ Codex 付费套餐（Plus / Pro / Prolite / Business / Business ProLite）没有
 
 2026-11-19 接入（vibe-cafe/vibe-usage-windows#54），对齐 macOS 0.7.4（vibe-cafe/vibe-usage-app#53）。读取全部由 CLI 完成（`quota fetch --product antigravity`）。2026-11-24 按 Hogan 批准的新办法改过（工作区《交接笔记/隐私修复/Antigravity额度读取-封号风险与新做法》）：
 
-- **用过才问 Google。** CLI 比较本机三个对话库（`~\.gemini\antigravity`、`antigravity-cli`、`antigravity-ide` 下的 `conversations`）里 `.db` / `.db-wal` / `.pb` 的文件名、大小、修改时间，不读内容。上次读完之后没变化就不问，显示上次读到的数（记录在 `~\.vibe-usage\antigravity-quota.json`，不含任何令牌或账号），过了重置时间的窗口显示用了 0%。两次问之间至少 5 分钟；读失败后按 5、10、20、40、60 分钟退避，退避期间点「重试」不会马上重读。
+- **用过才问 Google。** CLI 比较本机三个对话库（`~\.gemini\antigravity`、`antigravity-cli`、`antigravity-ide` 下的 `conversations`）里 `.db` / `.db-wal` / `.pb` 的文件名、大小、修改时间，不读内容。本机一条对话都没有就不问；上次读完之后没变化也不问，显示上次读到的数（记录在 `~\.vibe-usage\antigravity-quota.json`，不含任何令牌或账号）。过了重置时间的窗口：期间没用过就显示用了 0%，用过就先不显示，等下次读。确认需要登录时丢掉旧数。两次问之间至少 5 分钟；读失败后按 5、10、20、40、60 分钟退避，退避期间点「重试」不会马上重读。
 - **问的顺序。** ① 官方的 `agy -p /usage --output-format json`（只给 1.1.11 及以后，版本检查结果按程序记住）；② 正在运行的桌面端自己的本机服务：一条 PowerShell 查本会话里路径带 antigravity 的 `language_server` 进程和它监听的端口，用它命令行里自己的本机 CSRF 令牌，只发到这个进程的 `127.0.0.1` 端口；③ 前两步都不行才临时启动桌面端自带的 `language_server`，版本号读安装目录 `resources\app\package.json`，没有就读 `resources\app.asar` 里的 `package.json`，读不到就不启动（不再写死 `2.33.0`）。
-- **agy 子进程。** 只在我们启动的 agy 里设 `AGY_CLI_DISABLE_AUTO_UPDATE=true`；它的 PATH 最前面放一个什么都不做的 `rundll32.bat`，静默登录失败时 agy 想打开浏览器会先碰到它，CLI 随即结束 agy。agy 若不经 PATH 直接调系统接口打开浏览器，这一层拦不住；CLI 会在 agy 报「需要登录」后停用 agy 这一步，直到 agy 自己的对话库有变化或 agy 换了版本，所以最多弹一次。Windows 上没有真机验证过。
+- **agy 子进程。** 只在我们启动的 agy 里设 `AGY_CLI_DISABLE_AUTO_UPDATE=true`；它的 PATH 最前面放什么都不做的 `rundll32.bat`，`BROWSER` 指向 `browser.bat`，静默登录失败时 agy 想打开浏览器会先碰到它们，CLI 随即结束 agy。agy 若不经这两条路、直接调系统接口打开浏览器，这一层拦不住；CLI 会在 agy 报「需要登录」或 `/usage` 超时（交互登录会等一分钟）后停用 agy 这一步，直到 agy 自己的对话库有变化或 agy 换了版本。Windows 上没有真机验证过。
 - **App 这边。** AGY 卡片的重读间隔是 5 分钟（`rate_limits.rs` 的 `ANTIGRAVITY_MAX_AGE`），窗口可见时的 60 秒定时轮到 AGY 不满 5 分钟就不调 CLI；手动刷新照样调 CLI，问不问由 CLI 决定。设置里 AGY 那一行多一行灰字「Google 表示不支持第三方读取额度」（`quotaProductNote`，与 macOS 一致）。
 - CLI 给这一轮最多 20 秒，在 App 30 秒的 CLI 总预算以内；它和 Kimi / ZCode / Grok / OpenCode Go 同一批读取，最慢的一个决定这一批什么时候回来（与 macOS 相同）。
 
