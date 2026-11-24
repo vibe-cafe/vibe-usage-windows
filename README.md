@@ -115,6 +115,8 @@ Rust (Tauri 2)
   └─ resources/node      node.exe 22 LTS（scripts/fetch-node.mjs, 构建时下载）
 ```
 
+联网行为的最高原则、承诺边界和现有缺口见 [docs/NETWORK_PRIVACY.md](docs/NETWORK_PRIVACY.md)。
+
 ## 相关项目
 
 - [vibe-usage-app](https://github.com/vibe-cafe/vibe-usage-app) — macOS 版（本项目的功能与视觉基准）
