@@ -38,11 +38,16 @@ fn selected_providers(app: &AppHandle) -> Vec<RateLimitProvider> {
 fn needs_refresh(app: &AppHandle, provider: RateLimitProvider, force: bool) -> bool {
     let ctx = app.state::<AppCtx>();
     let cache = ctx.rate_limits.lock().unwrap();
+    // A read the egress check paused is tried again at the next refresh (the
+    // check keeps its own one-minute answer, so nothing extra goes out while
+    // the route stays direct).
     force
         || cache
             .snapshots
             .get(&provider)
-            .map(|(_, at)| at.elapsed() > MAX_AGE)
+            .map(|(snapshot, at)| {
+                at.elapsed() > MAX_AGE || snapshot.live_failure.is_some_and(|failure| failure.is_pause())
+            })
             .unwrap_or(true)
 }
 

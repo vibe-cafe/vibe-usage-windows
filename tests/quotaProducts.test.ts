@@ -376,6 +376,18 @@ describe("read failure reasons and sources", () => {
         "Codex",
       ),
     ).toBe("来源：本地日志 · 网络出口在中国大陆，已暂停读取");
+    // The tab warns while those numbers are kept.
+    expect(
+      quotaTabShowsWarning(
+        "codex",
+        ["codex"],
+        { provider: "codex", status: { kind: "ok" }, liveFailure: { code: "egressUnconfirmed" } },
+        false,
+      ),
+    ).toBe(true);
+    expect(
+      quotaTabShowsWarning("codex", ["codex"], { provider: "codex", status: { kind: "ok" } }, false),
+    ).toBe(false);
   });
 
   it("never echoes anything but the fixed wording", () => {

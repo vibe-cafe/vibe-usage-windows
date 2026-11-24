@@ -416,5 +416,16 @@ export function quotaTabShowsWarning(
   if (isRefreshing) return false;
   if (!enabled.includes(provider)) return false;
   if (!snapshot) return false;
-  return snapshot.status.kind !== "ok";
+  // Numbers kept on the card while the egress check pauses the read still
+  // warn: they are not being refreshed (same as macOS).
+  return snapshot.status.kind !== "ok" || isEgressPause(snapshot.liveFailure);
+}
+
+/** A read paused by the egress check (`egress_check.rs`). */
+export function isEgressPause(failure?: RateLimitLiveFailure | null): boolean {
+  return (
+    failure?.code === "egressRegionUnsupported" ||
+    failure?.code === "egressUnconfirmed" ||
+    failure?.code === "proxyNotDetected"
+  );
 }
