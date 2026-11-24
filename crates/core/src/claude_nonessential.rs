@@ -146,21 +146,6 @@ fn env_value(policy: &serde_json::Map<String, Value>) -> Option<&Value> {
         .and_then(|env| env.get(VARIABLE))
 }
 
-/// True when a settings document's top-level `env` sets the variable to a
-/// non-empty value. A leading UTF-8 byte-order mark (Notepad writes one) is
-/// ignored; anything that is not a JSON object counts as not set.
-pub fn document_sets_it(text: &str) -> bool {
-    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
-    let Ok(root) = serde_json::from_str::<Value>(text) else {
-        return false;
-    };
-    is_on(
-        root.get("env")
-            .and_then(Value::as_object)
-            .and_then(|env| env.get(VARIABLE)),
-    )
-}
-
 /// Claude Code treats any non-empty value as set. A non-string value is not
 /// valid in `env`; it counts as set too.
 pub fn is_on(value: Option<&Value>) -> bool {
@@ -194,6 +179,7 @@ mod tests {
         let empty: Vec<_> = QUIET_ENVIRONMENT.iter().filter(|(_, v)| v.is_empty()).collect();
         assert_eq!(empty, vec![&(VARIABLE, "")]);
         for key in [
+            "CLAUDE_CODE_DISABLE_FAST_MODE",
             "DISABLE_TELEMETRY",
             "DISABLE_ERROR_REPORTING",
             "DISABLE_AUTOUPDATER",
@@ -277,18 +263,20 @@ mod tests {
 
     #[test]
     fn empty_missing_or_unreadable_values_do_not_count() {
-        assert!(!document_sets_it(&settings(r#""""#)));
-        assert!(!document_sets_it(&settings("null")));
-        assert!(!document_sets_it("{ not json"));
-        assert!(!document_sets_it(r#"{"env":"not an object"}"#));
-        assert!(!document_sets_it("[]"));
+        let forced = |text: &str| is_forced_by_policy(Some(text), &[], None);
+        assert!(!forced(&settings(r#""""#)));
+        assert!(!forced(&settings("null")));
+        assert!(!forced("{ not json"));
+        assert!(!forced(r#"{"env":"not an object"}"#));
+        assert!(!forced("[]"));
     }
 
     #[test]
     fn byte_order_mark_and_non_string_values() {
-        assert!(document_sets_it(&format!("\u{feff}{}", settings(r#""1""#))));
-        assert!(document_sets_it(&settings("0")));
-        assert!(document_sets_it(&settings("1")));
-        assert!(document_sets_it(&settings("true")));
+        let forced = |text: &str| is_forced_by_policy(Some(text), &[], None);
+        assert!(forced(&format!("\u{feff}{}", settings(r#""1""#))));
+        assert!(forced(&settings(r#""0""#)));
+        assert!(forced(&settings("1")));
+        assert!(forced(&settings("true")));
     }
 }
