@@ -103,15 +103,6 @@ export function quotaProductStatusText(
   }
   // Never-requested products and another provider's snapshot are not no-data.
   const result = snapshot?.provider === product.provider ? snapshot : undefined;
-  // OpenCode Go reads OpenCode's own login, so the words say where to act
-  // (same as the macOS 状态 column).
-  if (result && product.provider === "opencode-go" && result.status.kind !== "ok" && !result.emptyReason) {
-    const failure = result.liveFailure?.code;
-    if (failure === "credentialsExpired") return `${detected} · 需打开 OpenCode`;
-    if (failure === "credentialsNotFound" || failure === "credentialsRejected" || result.status.kind === "unauthorized") {
-      return `${detected} · 需登录 OpenCode`;
-    }
-  }
   const reading = result ? {
     ok: "读取成功",
     noData: "无数据",

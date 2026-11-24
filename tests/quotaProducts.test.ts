@@ -196,7 +196,6 @@ describe("tab strip model", () => {
 });
 
 describe("OpenCode Go login states", () => {
-  const product: QuotaProduct = { provider: "opencode-go", displayName: "OpenCode Go", availability: "ready", isDetected: true };
   const snapshot = (extra: Partial<ProviderRateLimit>): ProviderRateLimit => ({
     provider: "opencode-go",
     status: { kind: "noData" },
@@ -206,24 +205,16 @@ describe("OpenCode Go login states", () => {
   it("tells where to log in instead of saying the login is missing", () => {
     const missing = snapshot({ liveFailure: { code: "credentialsNotFound" } });
     expect(quotaEmptyStateText(missing, true, false, "OpenCode Go")).toBe("在 OpenCode 里登录后自动显示");
-    expect(quotaProductStatusText(product, undefined, "bigModel", missing)).toBe("已检测 · 需登录 OpenCode");
   });
 
   it("asks to open OpenCode when its account sign-in has expired", () => {
     const expired = snapshot({ liveFailure: { code: "credentialsExpired" } });
     expect(quotaEmptyStateText(expired, true, false, "OpenCode Go")).toBe("打开 OpenCode 后自动显示");
-    expect(quotaProductStatusText(product, undefined, "bigModel", expired)).toBe("已检测 · 需打开 OpenCode");
-  });
-
-  it("keeps a rejected login as a re-login in OpenCode", () => {
-    const rejected = snapshot({ status: { kind: "unauthorized" } });
-    expect(quotaProductStatusText(product, undefined, "bigModel", rejected)).toBe("已检测 · 需登录 OpenCode");
   });
 
   it("leaves a subscription answer and other products' wording alone", () => {
     const notEntitled = snapshot({ emptyReason: "notEntitled", liveFailure: { code: "credentialsNotFound" } });
     expect(quotaEmptyStateText(notEntitled, true, false, "OpenCode Go")).toBe("未订阅 OpenCode Go");
-    expect(quotaProductStatusText(product, undefined, "bigModel", notEntitled)).toBe("已检测 · 无数据");
     expect(quotaFailureText({ code: "credentialsNotFound" }, "Codex", "codex")).toBe("未找到 Codex 登录信息");
     expect(quotaFailureText({ code: "credentialsExpired" }, "Kimi Code", "kimi-code")).toBe("Kimi Code 登录已过期");
   });
