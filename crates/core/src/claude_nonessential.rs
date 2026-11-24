@@ -13,13 +13,16 @@
 //!
 //! So the probe always runs with the master switch cleared and all those
 //! separate switches on (`QUIET_ENVIRONMENT`, passed both in the environment
-//! and in an in-memory `--settings`, which outranks the user's files): what
-//! the user switched off stays off, and the probe adds only the usage read.
-//! Measured, the probe then reaches `api.anthropic.com` only: the usage read
-//! plus the start-up configuration (`/api/claude_cli/bootstrap`), which no
-//! separate switch covers — same host and same account. For an account in an
-//! organization, Claude Code also refreshes its invite-eligibility record there
-//! when the cached one is missing or stale.
+//! and in an in-memory `--settings`, which outranks the user's files): every
+//! feature with a switch of its own stays off. Measured through a proxy, only
+//! connections to `api.anthropic.com` showed up, matching in the code the
+//! usage read plus the start-up configuration (`/api/claude_cli/bootstrap`),
+//! which no separate switch covers. From the code, Claude Code may also
+//! preconnect, refresh the account profile, read a Team / Enterprise
+//! organization's remote settings and policy limits, refresh an eligible
+//! Pro / Max account's invite eligibility, and renew an expired login (see
+//! PRIVACY.md). Set up for Bedrock / Vertex, it may also check model
+//! availability with the user's cloud account at start.
 //!
 //! Cleared only for the probe's own process and never written anywhere. An
 //! organization's managed settings outrank `--settings`; when those force the
@@ -133,56 +136,6 @@ pub fn is_forced_by_policy(hklm: Option<&str>, files: &[PathBuf], hkcu: Option<&
     }
     hkcu.and_then(policy_object)
         .is_some_and(|policy| is_on(env_value(&policy)))
-}
-
-/// The variables that set Claude Code up for a third-party model provider.
-pub const THIRD_PARTY_PROVIDER_VARIABLES: [&str; 6] = [
-    "CLAUDE_CODE_USE_BEDROCK",
-    "CLAUDE_CODE_USE_VERTEX",
-    "CLAUDE_CODE_USE_FOUNDRY",
-    "CLAUDE_CODE_USE_ANTHROPIC_AWS",
-    "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD",
-    "CLAUDE_CODE_USE_MANTLE",
-];
-
-/// Whether the user's Claude Code is set up for a third-party provider
-/// (Bedrock, Vertex, Foundry, …): any of those variables non-empty in the
-/// app's environment (`process_value`), a settings file (user, home-local,
-/// managed) or a policy document. Such a login has no plan quota, and
-/// starting Claude Code could send a model-availability request with the
-/// user's cloud account, so the probe is not started. Only these keys are
-/// read; each document is parsed in memory and the rest dropped.
-pub fn third_party_provider_configured(
-    process_value: &dyn Fn(&str) -> Option<String>,
-    files: &[PathBuf],
-    policy_documents: &[&str],
-) -> bool {
-    if THIRD_PARTY_PROVIDER_VARIABLES
-        .iter()
-        .any(|name| process_value(name).is_some_and(|value| !value.is_empty()))
-    {
-        return true;
-    }
-    let documents = files
-        .iter()
-        .filter_map(|file| std::fs::read_to_string(file).ok())
-        .chain(policy_documents.iter().map(|text| text.to_string()));
-    for text in documents {
-        let text = text.strip_prefix('\u{feff}').unwrap_or(&text).to_string();
-        let Ok(root) = serde_json::from_str::<Value>(&text) else {
-            continue;
-        };
-        let Some(env) = root.get("env").and_then(Value::as_object) else {
-            continue;
-        };
-        if THIRD_PARTY_PROVIDER_VARIABLES
-            .iter()
-            .any(|name| is_on(env.get(*name)))
-        {
-            return true;
-        }
-    }
-    false
 }
 
 /// A policy document as a non-empty JSON object. A leading UTF-8 byte-order
@@ -325,25 +278,26 @@ mod tests {
     }
 
     #[test]
-    fn a_third_party_provider_setup_is_recognised_from_any_source() {
-        let none = |_: &str| None;
-        assert!(!third_party_provider_configured(&none, &[], &[]));
-        assert!(third_party_provider_configured(
-            &|name| (name == "CLAUDE_CODE_USE_BEDROCK").then(|| "1".to_string()),
-            &[],
-            &[]
-        ));
-        assert!(!third_party_provider_configured(
-            &|name| (name == "CLAUDE_CODE_USE_BEDROCK").then(String::new),
-            &[],
-            &[]
-        ));
-        let root = tempfile::tempdir().unwrap();
-        let file = root.path().join("settings.json");
-        write(&file, r#"{"env":{"AWS_REGION":"us-east-1","CLAUDE_CODE_USE_VERTEX":"0"}}"#);
-        assert!(third_party_provider_configured(&none, &[file], &[]));
-        assert!(third_party_provider_configured(&none, &[], &[r#"{"env":{"CLAUDE_CODE_USE_FOUNDRY":"1"}}"#]));
-        assert!(!third_party_provider_configured(&none, &[], &[r#"{"env":{"OTHER":"1"}}"#]));
+    fn the_probe_environment_is_exactly_the_master_switch_cleared_and_fifteen_switches_off() {
+        let expected = [
+            ("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", ""),
+            ("CLAUDE_CODE_DISABLE_FAST_MODE", "1"),
+            ("DISABLE_TELEMETRY", "1"),
+            ("DISABLE_ERROR_REPORTING", "1"),
+            ("DISABLE_AUTOUPDATER", "1"),
+            ("DISABLE_UPDATES", "1"),
+            ("DISABLE_BUG_COMMAND", "1"),
+            ("DISABLE_FEEDBACK_COMMAND", "1"),
+            ("CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY", "1"),
+            ("DISABLE_GROWTHBOOK", "1"),
+            ("CLAUDE_CODE_DISABLE_FEATURE_FLAGS", "1"),
+            ("CLAUDE_CODE_DISABLE_VITALS_EMITTER", "1"),
+            ("CLAUDE_CODE_MODEL_CATALOG", "0"),
+            ("DISABLE_INSTALLATION_CHECKS", "1"),
+            ("CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL", "1"),
+            ("DO_NOT_TRACK", "1"),
+        ];
+        assert_eq!(QUIET_ENVIRONMENT, expected);
     }
 
     #[test]
