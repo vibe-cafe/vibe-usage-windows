@@ -4,6 +4,7 @@
 //! Tauri shell (`src-tauri`) wires these pieces to windows/tray/network.
 
 pub mod claude_code;
+pub mod claude_nonessential;
 pub mod config;
 pub mod quota_product;
 pub mod rate_limit;

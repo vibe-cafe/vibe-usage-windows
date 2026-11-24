@@ -229,6 +229,8 @@ export function quotaEmptyStateText(
       return `未订阅 ${name}`;
     case "sessionWithoutPlanLimits":
       return "当前登录方式不含订阅额度（API Key / Bedrock / Vertex）";
+    case "nonessentialTrafficDisabled":
+      return "组织策略关闭了 Claude Code 非必要流量 · 无法读取";
   }
   if (snapshot.liveFailure) return quotaFailureText(snapshot.liveFailure, name);
   // A Desktop record from an older backend that did not name its reason.
