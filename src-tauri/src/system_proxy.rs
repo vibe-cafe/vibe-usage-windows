@@ -573,11 +573,20 @@ pub fn proxy_variables(
                 out.push(("NODE_USE_ENV_PROXY", "0".to_string()));
             }
         } else {
+            // Lowercase spellings too: Node prefers them when both exist.
             if let Some(value) = https {
-                out.push(("HTTPS_PROXY", with_scheme(value)));
+                let value = with_scheme(value);
+                if lookup("https_proxy").is_some() {
+                    out.push(("https_proxy", value.clone()));
+                }
+                out.push(("HTTPS_PROXY", value));
             }
             if let Some(value) = http {
-                out.push(("HTTP_PROXY", with_scheme(value)));
+                let value = with_scheme(value);
+                if lookup("http_proxy").is_some() {
+                    out.push(("http_proxy", value.clone()));
+                }
+                out.push(("HTTP_PROXY", value));
             }
             if node_switch {
                 out.push(("NODE_USE_ENV_PROXY", "1".to_string()));
@@ -989,6 +998,7 @@ mod tests {
         assert_eq!(
             out,
             vec![
+                ("https_proxy", "http://corp:8080".into()),
                 ("HTTPS_PROXY", "http://corp:8080".into()),
                 ("NODE_USE_ENV_PROXY", "1".into()),
                 ("no_proxy", "corp.invalid,localhost,127.0.0.1,::1,[::1]".into()),
