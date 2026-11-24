@@ -24,9 +24,9 @@
 //! Cleared only for the probe's own process and never written anywhere. An
 //! organization's managed settings outrank `--settings`; when those force the
 //! switch on (`is_forced_by_policy`), Claude Code cannot read the quota and
-//! the app does not start it. Claude Code uses one managed source, in this
-//! order: the HKLM registry policy, then the managed settings files (merged
-//! in order), then the user-writable HKCU policy.
+//! the app does not start it. A managed `env` merges key by key: the HKLM
+//! registry policy, then the managed settings files (merged in order), and
+//! the user-writable HKCU policy only as a fallback.
 //!
 //! Only that one key is read from policy documents. Each is parsed in memory
 //! and everything else in it is dropped right away — never kept, logged, or
@@ -97,18 +97,24 @@ pub fn managed_settings_files(managed: &Path) -> Vec<PathBuf> {
     files
 }
 
-/// Whether the organization's managed settings force the switch on. Claude
-/// Code uses one managed source: the HKLM policy document when it holds a
-/// policy, else the managed settings files merged in order (a later file
-/// that sets the key wins, `""` included), else the user-writable HKCU
-/// document. Those outrank the probe's `--settings`, so Claude Code could not
+/// Whether the organization's managed settings force the switch on, read the
+/// way Claude Code 2.1.330 merges a managed `env` — key by key, the highest
+/// source that sets the key winning, `""` included: the HKLM policy
+/// document, then the managed settings files merged in order (a later file
+/// that sets the key wins), and the user-writable HKCU document only when
+/// neither holds a policy. Those outrank the probe's `--settings`, so Claude Code could not
 /// read the quota. The user's own files and environment do not count here:
 /// the probe handles those. Server-managed settings from the claude.ai
 /// console are fetched by Claude Code and are not visible here; with those,
 /// the probe runs and Claude Code answers without windows.
 pub fn is_forced_by_policy(hklm: Option<&str>, files: &[PathBuf], hkcu: Option<&str>) -> bool {
-    if let Some(policy) = hklm.and_then(policy_object) {
-        return is_on(env_value(&policy));
+    // A managed `env` is merged key by key: the highest source that sets
+    // this key decides (an explicit "" included); one that does not set it
+    // leaves the decision to the next. HKCU is only a fallback, used when no
+    // machine source holds a policy at all.
+    let hklm = hklm.and_then(policy_object);
+    if let Some(set) = hklm.as_ref().and_then(|policy| env_value(policy)) {
+        return is_on(Some(set));
     }
     let mut files_hold_policy = false;
     let mut value = None;
@@ -122,7 +128,7 @@ pub fn is_forced_by_policy(hklm: Option<&str>, files: &[PathBuf], hkcu: Option<&
             value = Some(set.clone());
         }
     }
-    if files_hold_policy {
+    if value.is_some() || files_hold_policy || hklm.is_some() {
         return is_on(value.as_ref());
     }
     hkcu.and_then(policy_object)
@@ -252,6 +258,13 @@ mod tests {
         assert!(is_forced_by_policy(Some(&on), &files, None));
         // An HKLM policy without the key wins over a stale HKCU value.
         assert!(!is_forced_by_policy(Some(r#"{"model":"x"}"#), &files, Some(&on)));
+        // `env` merges key by key: HKLM that sets only other keys leaves the
+        // decision to the files; an explicit "" in HKLM lifts the files' "1".
+        write(&managed.join("managed-settings.json"), &on);
+        let with_file = managed_settings_files(&managed);
+        assert!(is_forced_by_policy(Some(r#"{"env":{"HTTPS_PROXY":"http://p:1"}}"#), &with_file, None));
+        assert!(!is_forced_by_policy(Some(&settings(r#""""#)), &with_file, None));
+        std::fs::remove_file(managed.join("managed-settings.json")).unwrap();
         // No HKLM policy, no files: HKCU applies.
         assert!(is_forced_by_policy(None, &files, Some(&on)));
         assert!(is_forced_by_policy(Some("not json"), &files, Some(&on)));
