@@ -9,6 +9,7 @@ import {
   moveQuotaProduct,
   quotaEmptyStateText,
   quotaFailureText,
+  quotaProductNote,
   quotaProductStatusText,
   quotaProvenanceText,
   quotaRetryableText,
@@ -427,5 +428,14 @@ describe("Codex 5h slot wording (macOS rule, 2026-10-24)", () => {
     const card = readFileSync("src/components/RateLimitCard.tsx", "utf-8");
     expect(card).not.toContain("官方当前未启用");
     expect(card).toContain("codexFiveHourPlaceholder(snapshot)");
+  });
+});
+
+describe("settings product notes", () => {
+  it("adds Google's own statement under Antigravity only, as on macOS", () => {
+    expect(quotaProductNote("antigravity")).toBe("Google 表示不支持第三方读取额度");
+    for (const provider of ["codex", "claudeCode", "kimi-code", "zcode", "grok", "opencode-go", "cursor"] as RateLimitProvider[]) {
+      expect(quotaProductNote(provider)).toBeNull();
+    }
   });
 });
