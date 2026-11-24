@@ -209,6 +209,17 @@ describe("empty state reasons", () => {
         true),
     ).toBe("当前登录方式不含订阅额度（API Key / Bedrock / Vertex）");
   });
+
+  it("names the user's own Claude Code setting instead of reading like a failure", () => {
+    const off: ProviderRateLimit = {
+      provider: "claudeCode",
+      status: { kind: "noData" },
+      emptyReason: "nonessentialTrafficDisabled",
+    };
+    expect(quotaEmptyStateText(off, true)).toBe("已关闭 Claude Code 非必要流量 · 按你的设置不读取");
+    // The setting is not about installation, so detection does not change it.
+    expect(quotaEmptyStateText(off, false)).toBe("已关闭 Claude Code 非必要流量 · 按你的设置不读取");
+  });
 });
 
 describe("read failure reasons and sources", () => {

@@ -23,20 +23,16 @@ const CANDIDATE_TIMEOUT: Duration = Duration::from_secs(8);
 const FIVE_HOURS: f64 = 5.0 * 3600.0;
 const SEVEN_DAYS: f64 = 7.0 * 86_400.0;
 
-/// Process-local settings that unset `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`.
-/// Removing it from the child environment is not enough: Claude Code re-applies
-/// `~/.claude/settings.json` `env` after start, and with the flag set
-/// `get_usage` answers `rate_limits: null` on a subscription account. Empty
-/// string, not `"0"` (any non-empty value is truthy). Never written to disk.
-/// Mirrors macOS `ClaudeUsageProbe.nonessentialTrafficOverrideSettings`.
-const NONESSENTIAL_TRAFFIC_OVERRIDE_SETTINGS: &str =
-    r#"{"env":{"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC":""}}"#;
-
 /// Mirrors macOS `ClaudeUsageProbe.processArguments`. `--print` is required:
 /// Claude Code (2.1.246 and later) exits with "--input-format=stream-json
 /// requires --print." before the control protocol starts, so without it every
 /// probe fails (vibe-usage-windows#25, vibe-usage-app#35).
-const PROBE_ARGS: [&str; 15] = [
+///
+/// No `--settings`: the probe never overrides the user's Claude Code settings.
+/// It used to pass one that unset `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`,
+/// turning back on traffic the user had switched off; `fetch` now checks that
+/// switch and starts nothing when it is on (`vibe_core::claude_nonessential`).
+const PROBE_ARGS: [&str; 13] = [
     "--print",
     "--safe-mode",
     "--no-session-persistence",
@@ -50,8 +46,6 @@ const PROBE_ARGS: [&str; 15] = [
     "--input-format",
     "stream-json",
     "--verbose",
-    "--settings",
-    NONESSENTIAL_TRAFFIC_OVERRIDE_SETTINGS,
 ];
 
 /// `get_usage` control request. `skip_behaviors` stops Claude Code from first
@@ -213,7 +207,16 @@ fn discover_candidates(environment: &DiscoveryEnvironment) -> Vec<ClaudeLaunch> 
 /// Desktop record first, then a live Claude Code read; the order is unchanged.
 /// The error is the fixed reason of the last candidate tried (as on macOS);
 /// the child's stderr and launch-error text are never kept.
+///
+/// When the user switched off Claude Code's nonessential traffic, nothing is
+/// read and nothing is started: the card names the setting instead (no older
+/// numbers, no retry). Checked on every refresh, so changing the setting takes
+/// effect on the next one.
 pub async fn fetch() -> Result<ProviderRateLimit, RateLimitLiveFailure> {
+    if nonessential_traffic_disabled() {
+        log::debug!("Claude nonessential traffic is off; not starting Claude Code");
+        return Ok(nonessential_traffic_disabled_snapshot());
+    }
     let at = (now_epoch() * 1000.0) as u64;
     let environment = DiscoveryEnvironment::live();
     // Desktop observations are local-only and must not be confused with a
@@ -272,6 +275,67 @@ pub async fn fetch() -> Result<ProviderRateLimit, RateLimitLiveFailure> {
     }
     remember(record);
     Err(last_error)
+}
+
+/// Whether the user switched off Claude Code's nonessential traffic, read
+/// from every place the probe's Claude Code would read it: the app's
+/// environment, `%CLAUDE_CONFIG_DIR%\settings.json` (else
+/// `~/.claude\settings.json`), the home directory's project files (the probe
+/// runs there), `C:\Program Files\ClaudeCode\managed-settings.json` plus its
+/// `managed-settings.d\*.json`, and the `SOFTWARE\Policies\ClaudeCode`
+/// `Settings` registry value under HKLM and HKCU. Only that one key is read.
+fn nonessential_traffic_disabled() -> bool {
+    use vibe_core::claude_nonessential::{is_disabled, settings_files, Sources, VARIABLE};
+    let mut managed_dirs = vec![PathBuf::from(r"C:\Program Files\ClaudeCode")];
+    if let Some(program_files) = std::env::var_os("ProgramFiles").filter(|v| !v.is_empty()) {
+        let directory = PathBuf::from(program_files).join("ClaudeCode");
+        if !managed_dirs.contains(&directory) {
+            managed_dirs.push(directory);
+        }
+    }
+    let home = dirs::home_dir();
+    is_disabled(&Sources {
+        process_value: std::env::var_os(VARIABLE).map(|value| value.to_string_lossy().into_owned()),
+        settings_files: settings_files(
+            home.as_deref(),
+            std::env::var_os("CLAUDE_CONFIG_DIR").as_deref(),
+            &managed_dirs,
+        ),
+        policy_documents: claude_policy_documents(),
+    })
+}
+
+/// The managed-settings JSON Claude Code reads from the registry (HKLM, then
+/// the user-writable HKCU fallback). Missing keys or values are skipped.
+#[cfg(windows)]
+fn claude_policy_documents() -> Vec<String> {
+    use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
+    use winreg::RegKey;
+    [HKEY_LOCAL_MACHINE, HKEY_CURRENT_USER]
+        .into_iter()
+        .filter_map(|root| {
+            RegKey::predef(root)
+                .open_subkey(r"SOFTWARE\Policies\ClaudeCode")
+                .ok()?
+                .get_value::<String, _>("Settings")
+                .ok()
+        })
+        .collect()
+}
+
+#[cfg(not(windows))]
+fn claude_policy_documents() -> Vec<String> {
+    Vec::new()
+}
+
+/// The card while the user's nonessential-traffic switch is on: an empty
+/// state that names the setting. No source, no failure, no numbers.
+fn nonessential_traffic_disabled_snapshot() -> ProviderRateLimit {
+    let mut snapshot =
+        ProviderRateLimit::empty(RateLimitProvider::ClaudeCode, RateLimitStatus::NoData);
+    snapshot.empty_reason = Some(RateLimitEmptyReason::NonessentialTrafficDisabled);
+    snapshot.fetched_at = Some(now_epoch());
+    snapshot
 }
 
 /// The candidates a read would try right now, each with its version. Runs
@@ -385,7 +449,9 @@ async fn run_probe(
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .kill_on_drop(true)
-        .env_remove("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC")
+        // Session markers only. `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` is
+        // the user's setting and is never removed (`fetch` does not start
+        // Claude Code when it is on).
         .env_remove("CLAUDECODE")
         .env_remove("CLAUDE_CODE_ENTRYPOINT")
         .env_remove("CLAUDE_CODE_SESSION_ID")
@@ -728,22 +794,35 @@ mod tests {
                 "--input-format",
                 "stream-json",
                 "--verbose",
-                "--settings",
-                NONESSENTIAL_TRAFFIC_OVERRIDE_SETTINGS,
             ]
         );
         assert!(!PROBE_ARGS.contains(&"--bare"));
     }
 
-    /// The override unsets exactly one key, with an empty (falsy) string.
+    /// Network-privacy principle, rule 4: the probe never overrides the user's
+    /// Claude Code settings, so no `--settings` and nothing about the
+    /// nonessential-traffic switch on the command line.
     #[test]
-    fn settings_override_only_unsets_nonessential_traffic() {
-        let index = PROBE_ARGS.iter().position(|a| *a == "--settings").unwrap();
-        let settings: Value = serde_json::from_str(PROBE_ARGS[index + 1]).unwrap();
+    fn probe_never_overrides_the_users_claude_settings() {
+        assert!(!PROBE_ARGS.contains(&"--settings"));
+        assert!(!PROBE_ARGS.iter().any(|arg| arg.contains("NONESSENTIAL")));
+    }
+
+    /// While the switch is on, the card is an empty state naming the setting:
+    /// no numbers, no source, no failure (so no retry and no stale reading).
+    #[test]
+    fn nonessential_traffic_card_names_the_setting() {
+        let snapshot = nonessential_traffic_disabled_snapshot();
+        assert_eq!(snapshot.provider, RateLimitProvider::ClaudeCode);
+        assert_eq!(snapshot.status, RateLimitStatus::NoData);
         assert_eq!(
-            settings,
-            json!({"env": {"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": ""}})
+            snapshot.empty_reason,
+            Some(RateLimitEmptyReason::NonessentialTrafficDisabled)
         );
+        assert_eq!(snapshot.source, None);
+        assert_eq!(snapshot.live_failure, None);
+        assert!(snapshot.five_hour.is_none() && snapshot.seven_day.is_none());
+        assert!(snapshot.meters.is_empty());
     }
 
     /// Without `skip_behaviors`, Claude Code scans seven days of transcripts

@@ -318,7 +318,14 @@ export type RateLimitEmptyReason =
    * genuinely do not apply. Also a definitive answer — the card explains
    * instead of offering a retry that cannot produce windows.
    */
-  | "sessionWithoutPlanLimits";
+  | "sessionWithoutPlanLimits"
+  /**
+   * The user switched off Claude Code's nonessential traffic, so the app did
+   * not start Claude Code. Not a failure: the card names the user's setting,
+   * shows no older numbers and offers no retry. App-local (the CLI never sends
+   * it); the shared pause vocabulary (#190) calls it `vendorTrafficDisabled`.
+   */
+  | "nonessentialTrafficDisabled";
 
 /**
  * Which kind of channel produced the card (mirrors RateLimit.swift's Source):
