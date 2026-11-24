@@ -17,8 +17,12 @@
 //! as "on" errs towards not starting Claude Code. Server-managed settings from
 //! the claude.ai console are fetched by Claude Code and are not visible here.
 //!
-//! Only the one key is read. Nothing else in these documents (which can hold
-//! API keys in `env`) is kept, logged, or put in diagnostics.
+//! Only that one key is used. Each document is parsed in memory and
+//! everything else in it (`env` can hold API keys) is dropped right away —
+//! never kept, logged, or put in diagnostics.
+//!
+//! This gates the quota read only. Copying diagnostics still runs
+//! `claude --version` (user-initiated, no quota request), unchanged.
 
 use serde_json::Value;
 use std::ffi::OsStr;
