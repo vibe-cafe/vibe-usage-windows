@@ -60,7 +60,7 @@
 | `MenuBarController`（NSStatusItem + NSPanel） | `tray.rs` + `panel.rs`（托盘 + 标准主窗口，可调整大小）+ `window_geometry.rs`（再次打开时缩到屏幕放得下再居中） |
 | Sparkle | `services/updater.rs`（latest.json + SHA-256 + NSIS 被动模式覆盖升级，见 `docs/WINDOWS_UPDATE.md`） |
 | `SMAppService`（登录项） | `auto-launch` crate（HKCU Run 注册表键，值带 `--autostart`；带它启动时窗口照常出现；有同步或配额要读时，读配额和每一次同步（手动的也算）都等到代理就绪——应用自己的代理变量，或同步服务器、各厂商主机的系统路由（含 PAC）指向的端口能连上——最多等 2 分钟，等待期间配额卡显示「正在读取」，与 macOS `LoginLaunch` 对齐；旧注册值在启动时补上参数，不碰任务管理器的启用开关） |
-| `SystemProxy`（按网址解析系统代理，PAC 由系统求值，交给 CLI、Claude Code 和厂商请求） | `src-tauri/src/system_proxy.rs`（注册表手动代理含按协议分开的写法和例外列表、PAC 由 WinHTTP 求值；reqwest 每次请求现解析；CLI 和 Claude 探测拿到同样的变量） |
+| `SystemProxy`（按网址解析系统代理，PAC 由系统求值，交给 CLI、Claude Code 和厂商请求） | `src-tauri/src/system_proxy.rs`（注册表手动代理含按协议分开的写法和例外列表、PAC 由 WinHTTP 求值；reqwest 每次请求现解析；CLI 和 Claude 探测按同一份系统代理拿变量，Claude Code 只拿 HTTP 代理，纯 SOCKS 系统代理下目前不经代理，Mac 用本机中转解决、Windows 待做） |
 
 ## 平台差异（有意为之）
 

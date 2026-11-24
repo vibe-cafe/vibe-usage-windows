@@ -62,10 +62,27 @@ pub fn migrate_run_value() {
         let Ok(current) = key.get_value::<String, _>(APP_NAME) else {
             return;
         };
+        // The release and the external-test build share the value name: only
+        // the build the value starts is rewritten.
+        let Some(exe) = std::env::current_exe().ok().and_then(|p| p.to_str().map(str::to_string)) else {
+            return;
+        };
+        if !starts_this_build(&current, &exe) {
+            return;
+        }
         if let Some(updated) = with_autostart_arg(&current) {
             let _ = key.set_value(APP_NAME, &updated);
         }
     }
+}
+
+/// Whether the Run value starts `exe` (quoted or not; Windows paths ignore
+/// case).
+#[cfg_attr(not(windows), allow(dead_code))]
+fn starts_this_build(current: &str, exe: &str) -> bool {
+    let program = current.trim_start().trim_start_matches('"').to_lowercase();
+    let exe = exe.to_lowercase();
+    program.starts_with(&exe) && program[exe.len()..].chars().next().is_none_or(|c| c == '"' || c.is_whitespace())
 }
 
 /// The Run value with `--autostart` appended, or `None` when it already has
@@ -81,6 +98,16 @@ fn with_autostart_arg(current: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_this_builds_run_value_is_migrated() {
+        let release = r"C:\Users\a\AppData\Local\Vibe Usage\vibe-usage-app.exe";
+        let test = r"C:\Users\a\AppData\Local\Vibe Usage Test\vibe-usage-app.exe";
+        assert!(starts_this_build(&format!("{release} "), release));
+        assert!(starts_this_build(&format!("\"{release}\" --autostart"), &release.to_uppercase()));
+        assert!(!starts_this_build(&format!("{release} "), test));
+        assert!(!starts_this_build(&format!("{test} "), release));
+    }
 
     #[test]
     fn an_older_run_value_gains_the_argument_once() {

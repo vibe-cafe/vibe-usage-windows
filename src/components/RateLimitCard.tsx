@@ -325,13 +325,14 @@ function unauthorizedText(provider: RateLimitProvider, region: "bigModel" | "zAI
 /** Local discovery result only — never a credential or network read. It
  *  separates "installed but nothing to show yet" from "not on this machine". */
 function emptyStateText(snapshot: ProviderRateLimit, state: AppStateValue): string {
-  if (state.isRefreshingRateLimits) return "正在读取订阅配额…";
+  // Cursor is a placeholder on Windows: nothing is read for it.
   if (snapshot.provider === "cursor") {
     const detected = state.quotaProducts.find((item) => item.provider === "cursor")?.isDetected;
     return detected
       ? "已识别 Cursor · 等待官方配额接口"
       : "未检测到 Cursor · 等待官方配额接口";
   }
+  if (state.isRefreshingRateLimits) return "正在读取订阅配额…";
   const detected =
     state.quotaProducts.find((item) => item.provider === snapshot.provider)?.isDetected === true;
   return quotaEmptyStateText(
