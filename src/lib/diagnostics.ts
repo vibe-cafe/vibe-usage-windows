@@ -838,7 +838,7 @@ export function formatDiagnosticsReport(
   }[network.systemProxy] ?? "系统代理：未知";
   const handedOn =
     network.systemProxy === "loopback" || network.systemProxy === "remote"
-      ? ` · ${network.systemProxyPassedToSync ? "已传给同步和 Claude 配额读取" : "未传给同步和 Claude 配额读取（App 环境里已有 HTTPS_PROXY）"}`
+      ? ` · ${network.systemProxyPassedToSync ? "已传给同步和 Claude 配额读取" : "未传给同步和 Claude 配额读取（App 环境里已有代理变量）"}`
       : "";
   const pac = network.autoConfigScript ? " · 自动代理脚本：有" : "";
   lines.push(`网络：${proxy}${handedOn}${pac}`);

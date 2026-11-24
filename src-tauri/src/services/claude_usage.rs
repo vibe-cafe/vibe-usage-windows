@@ -250,9 +250,7 @@ pub async fn fetch() -> Result<ProviderRateLimit, RateLimitLiveFailure> {
         let routes = if crate::system_proxy::has_own_proxy(&lookup) {
             Vec::new()
         } else {
-            let hosts: Vec<String> =
-                crate::system_proxy::CLAUDE_HOSTS.iter().map(|host| host.to_string()).collect();
-            crate::system_proxy::live_routes(&hosts)
+            crate::system_proxy::live_routes(&crate::system_proxy::host_urls(&crate::system_proxy::CLAUDE_HOSTS))
         };
         crate::system_proxy::proxy_variables(&routes, &lookup, false, false)
     })

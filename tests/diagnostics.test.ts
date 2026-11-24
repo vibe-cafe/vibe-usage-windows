@@ -241,7 +241,7 @@ describe("copyable diagnostics report", () => {
     const text = buildDiagnosticsText(hostile, products);
     for (const secret of SECRETS) expect(text).not.toContain(secret);
     expect(text).toContain("ANTHROPIC_BASE_URL、另有 3 个名字格式特殊，未列出");
-    expect(text).toContain("未传给同步和 Claude 配额读取（App 环境里已有 HTTPS_PROXY）");
+    expect(text).toContain("未传给同步和 Claude 配额读取（App 环境里已有代理变量）");
   });
 
   it("the final scrub removes each synthetic secret from raw text", () => {

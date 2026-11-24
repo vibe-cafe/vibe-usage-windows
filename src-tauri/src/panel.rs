@@ -119,6 +119,11 @@ pub fn hide_now(app: &AppHandle) {
 /// Write the panel's current size to disk if it changed. Called when the panel
 /// is hidden and when the app is about to exit.
 pub fn remember_size(app: &AppHandle) {
+    // Before the first show restores the saved size (a quiet login launch),
+    // the hidden window's size is not the user's: keep the saved one.
+    if !SIZE_RESTORED.load(std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
     let Some(window) = app.get_webview_window(PANEL_LABEL) else {
         return;
     };
