@@ -115,58 +115,21 @@ fn cli_command(app: &AppHandle, args: &[&str]) -> Result<tokio::process::Command
     if crate::state::IS_DEV {
         cmd.env("VIBE_USAGE_DEV", "1");
     }
-    for (name, value) in proxy_env(
-        |name| std::env::var(name).ok(),
-        process_utils::system_proxy_url,
-    ) {
+    // The system proxy (manual list, per-protocol entries, PAC evaluated by
+    // WinHTTP), read now for the hosts the CLI reaches (`system_proxy`).
+    let lookup = |name: &str| std::env::var(name).ok();
+    let routes = if crate::system_proxy::has_own_proxy(&lookup) {
+        Vec::new()
+    } else {
+        let npmrc = dirs::home_dir().and_then(|home| std::fs::read_to_string(home.join(".npmrc")).ok());
+        let api_url = app.state::<AppCtx>().config.load_api_url();
+        crate::system_proxy::live_routes(&crate::system_proxy::cli_urls(npmrc.as_deref(), Some(&api_url)))
+    };
+    for (name, value) in crate::system_proxy::proxy_variables(&routes, &lookup, true, true) {
         cmd.env(name, value);
     }
     process_utils::hide_tokio_command_window(&mut cmd);
     Ok(cmd)
-}
-
-/// Loopback hosts the CLI must reach directly: it reads agy's quota (and
-/// Antigravity's legacy history) from a local port. Under NODE_USE_ENV_PROXY,
-/// Node 22.21+/24 sends even 127.0.0.1 through HTTPS_PROXY unless NO_PROXY
-/// lists it, and a remote proxy (or Clash in global mode) cannot reach it.
-const LOOPBACK_NO_PROXY: [&str; 3] = ["localhost", "127.0.0.1", "::1"];
-
-/// Proxy variables for every CLI run (sync, quota, doctor, config — they all
-/// go through `cli_command`). The system proxy is injected only when the user
-/// has no HTTPS_PROXY of their own; NO_PROXY always gains the loopback hosts,
-/// because an inherited HTTPS_PROXY is honoured under NODE_USE_ENV_PROXY too.
-/// The user's own NO_PROXY entries are kept.
-fn proxy_env(
-    lookup: impl Fn(&str) -> Option<String>,
-    system_proxy: impl FnOnce() -> Option<String>,
-) -> Vec<(&'static str, String)> {
-    let mut env = Vec::new();
-    if lookup("HTTPS_PROXY").is_none() && lookup("https_proxy").is_none() {
-        if let Some(proxy) = system_proxy() {
-            env.push(("HTTPS_PROXY", proxy.clone()));
-            env.push(("HTTP_PROXY", proxy));
-        }
-    }
-    env.push(("NODE_USE_ENV_PROXY", "1".into()));
-    let existing = lookup("NO_PROXY").or_else(|| lookup("no_proxy"));
-    env.push(("NO_PROXY", no_proxy_with_loopback(existing.as_deref())));
-    env
-}
-
-fn no_proxy_with_loopback(existing: Option<&str>) -> String {
-    let mut entries = existing
-        .unwrap_or_default()
-        .split(',')
-        .map(str::trim)
-        .filter(|entry| !entry.is_empty())
-        .map(str::to_string)
-        .collect::<Vec<_>>();
-    for host in LOOPBACK_NO_PROXY {
-        if !entries.iter().any(|entry| entry.eq_ignore_ascii_case(host)) {
-            entries.push(host.to_string());
-        }
-    }
-    entries.join(",")
 }
 
 /// Build a command for the typed quota bridge. Arguments are owned by the
@@ -288,6 +251,18 @@ async fn run_sync_once(app: AppHandle) {
         s.status = SyncStatus::Syncing;
         s.message = None;
     });
+    // A login launch: no sync, manual ones included, before the user's proxy
+    // is up (`AppCtx::wait_launch_network`). A reset or relink meanwhile
+    // drops this run.
+    let account = ctx.config.load().and_then(|config| config.api_key);
+    ctx.wait_launch_network().await;
+    if ctx.config.load().and_then(|config| config.api_key) != account {
+        set_state(&app, |s| {
+            s.status = SyncStatus::Idle;
+            s.message = None;
+        });
+        return;
+    }
 
     let trigger = if ctx.sync_requested_manually.load(Ordering::SeqCst) {
         SyncTrigger::Manual
@@ -582,55 +557,10 @@ fn append_sync_log(app: &AppHandle, entry: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::{proxy_env, read_both, run_with_follow_up, timeout_entry};
-    use std::collections::HashMap;
+    use super::{read_both, run_with_follow_up, timeout_entry};
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Arc;
     use tokio::sync::{Mutex, Notify};
-
-    fn proxy_env_for(
-        user: &[(&str, &str)],
-        system: Option<&str>,
-    ) -> HashMap<&'static str, String> {
-        let user = user
-            .iter()
-            .map(|(name, value)| (name.to_string(), value.to_string()))
-            .collect::<HashMap<_, _>>();
-        proxy_env(
-            |name| user.get(name).cloned(),
-            || system.map(str::to_string),
-        )
-        .into_iter()
-        .collect()
-    }
-
-    #[test]
-    fn injected_system_proxy_never_carries_loopback() {
-        let env = proxy_env_for(&[], Some("http://10.0.0.5:7890"));
-        assert_eq!(env["HTTPS_PROXY"], "http://10.0.0.5:7890");
-        assert_eq!(env["HTTP_PROXY"], "http://10.0.0.5:7890");
-        assert_eq!(env["NODE_USE_ENV_PROXY"], "1");
-        assert_eq!(env["NO_PROXY"], "localhost,127.0.0.1,::1");
-    }
-
-    #[test]
-    fn a_users_own_proxy_also_gets_loopback_and_their_no_proxy_survives() {
-        let env = proxy_env_for(
-            &[
-                ("HTTPS_PROXY", "http://corp:8080"),
-                ("NO_PROXY", " .corp.example , 127.0.0.1"),
-            ],
-            Some("http://10.0.0.5:7890"),
-        );
-        // The user's proxy stays theirs: nothing injected over it.
-        assert!(!env.contains_key("HTTPS_PROXY"));
-        assert!(!env.contains_key("HTTP_PROXY"));
-        assert_eq!(env["NO_PROXY"], ".corp.example,127.0.0.1,localhost,::1");
-
-        let lower = proxy_env_for(&[("no_proxy", "LOCALHOST")], None);
-        assert_eq!(lower["NO_PROXY"], "LOCALHOST,127.0.0.1,::1");
-        assert!(!lower.contains_key("HTTPS_PROXY"));
-    }
 
     async fn wait_true(flag: &AtomicBool) {
         let start = std::time::Instant::now();

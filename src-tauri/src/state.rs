@@ -147,6 +147,10 @@ pub struct AppCtx {
     pub update_info: Mutex<Option<UpdateInfo>>,
     /// (cost, tokens) for the active time range, pushed by the frontend.
     pub tray_stats: Mutex<Option<(f64, i64)>>,
+    /// False while a login launch (`--autostart`) waits for the user's proxy
+    /// (`system_proxy::wait_for_launch_proxy`): quota reads and syncs wait for
+    /// it (`wait_launch_network`). True otherwise.
+    pub launch_network: tokio::sync::watch::Sender<bool>,
 }
 
 impl AppCtx {
@@ -188,8 +192,16 @@ impl AppCtx {
             config: ConfigManager::new(IS_DEV),
             http: reqwest::Client::builder()
                 .user_agent(format!("VibeUsageWindows/{}", env!("CARGO_PKG_VERSION")))
-                // system-proxy feature honors the Windows proxy; a hung
-                // connect must fail fast instead of pinning spinners.
+                // The proxy is resolved for every request (`system_proxy`):
+                // the app follows the user's current settings, PAC included,
+                // instead of the ones in place when it started.
+                .proxy(reqwest::Proxy::custom(|url| {
+                    crate::system_proxy::live_route(url).reqwest_proxy()
+                }))
+                // No pooled connections: a connection opened before the user
+                // switched the proxy on must not carry the next request.
+                .pool_max_idle_per_host(0)
+                // A hung connect must fail fast instead of pinning spinners.
                 .connect_timeout(std::time::Duration::from_secs(10))
                 .build()
                 .expect("http client"),
@@ -205,7 +217,21 @@ impl AppCtx {
             rate_limits: Mutex::new(RateLimitCache::default()),
             update_info: Mutex::new(None),
             tray_stats: Mutex::new(None),
+            launch_network: tokio::sync::watch::channel(true).0,
         }
+    }
+
+    /// Returns once a login launch's proxy is up or its wait ran out; at once
+    /// for any other launch.
+    /// Whether a login launch's wait for the proxy is over (always true for
+    /// any other start).
+    pub fn launch_network_ready(&self) -> bool {
+        *self.launch_network.borrow()
+    }
+
+    pub async fn wait_launch_network(&self) {
+        let mut ready = self.launch_network.subscribe();
+        let _ = ready.wait_for(|ready| *ready).await;
     }
 
     pub fn save_settings(&self) {

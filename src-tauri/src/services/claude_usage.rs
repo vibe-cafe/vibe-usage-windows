@@ -255,6 +255,20 @@ pub async fn fetch() -> Result<ProviderRateLimit, RateLimitLiveFailure> {
         remember(record);
         return Err(RateLimitLiveFailure::ClaudeBinaryNotFound);
     }
+    // Claude Code reads proxy variables, never Windows settings: hand it the
+    // system proxy for Anthropic's hosts (HTTP only; it does not support
+    // SOCKS). Resolved off the async threads (a PAC is evaluated by WinHTTP).
+    let proxy_env = tauri::async_runtime::spawn_blocking(|| {
+        let lookup = |name: &str| std::env::var(name).ok();
+        let routes = if crate::system_proxy::has_own_proxy(&lookup) {
+            Vec::new()
+        } else {
+            crate::system_proxy::live_routes(&crate::system_proxy::host_urls(&crate::system_proxy::CLAUDE_HOSTS))
+        };
+        crate::system_proxy::proxy_variables(&routes, &lookup, false, false)
+    })
+    .await
+    .unwrap_or_default();
     let mut last_error = RateLimitLiveFailure::ClaudeNoResponse;
     for candidate in candidates.into_iter().take(MAX_CANDIDATES) {
         let mut attempt = ProbeAttempt {
@@ -266,7 +280,7 @@ pub async fn fetch() -> Result<ProviderRateLimit, RateLimitLiveFailure> {
             exit: ProcessExit::NotStarted,
             answer: None,
         };
-        let result = run_probe(&candidate, &mut attempt).await;
+        let result = run_probe(&candidate, &mut attempt, &proxy_env).await;
         attempt.failure = result.as_ref().err().copied();
         record.attempts.push(attempt);
         match result {
@@ -432,8 +446,12 @@ pub fn after_live_failure(
 /// Code exports into its own children (they would make the probe a nested
 /// session) and applies `QUIET_ENVIRONMENT`: the nonessential-traffic master
 /// switch removed, every separate off switch on (`--settings` carries the same
-/// set past the user's settings files).
-fn probe_command(candidate: &ClaudeLaunch) -> tokio::process::Command {
+/// set past the user's settings files), then the proxy variables that make it
+/// follow the system proxy (`system_proxy`).
+fn probe_command(
+    candidate: &ClaudeLaunch,
+    proxy_env: &[(&'static str, String)],
+) -> tokio::process::Command {
     let mut command = tokio::process::Command::new(&candidate.program);
     if let Some(script) = &candidate.script {
         command.arg(script);
@@ -458,15 +476,17 @@ fn probe_command(candidate: &ClaudeLaunch) -> tokio::process::Command {
         .env_remove("CLAUDE_CODE_ENTRYPOINT")
         .env_remove("CLAUDE_CODE_SESSION_ID")
         .env_remove("CLAUDE_CODE_CHILD_SESSION")
-        .env_remove("CLAUDE_PID");
+        .env_remove("CLAUDE_PID")
+        .envs(proxy_env.iter().map(|(name, value)| (*name, value.as_str())));
     command
 }
 
 async fn run_probe(
     candidate: &ClaudeLaunch,
     attempt: &mut ProbeAttempt,
+    proxy_env: &[(&'static str, String)],
 ) -> Result<ProviderRateLimit, RateLimitLiveFailure> {
-    let mut command = probe_command(candidate);
+    let mut command = probe_command(candidate, proxy_env);
     if let Some(home) = dirs::home_dir() {
         command.current_dir(home);
     }
@@ -824,7 +844,7 @@ mod tests {
             origin: vibe_core::claude_code::LaunchOrigin::Override,
             via: vibe_core::claude_code::LaunchVia::Direct,
         };
-        let command = probe_command(&candidate);
+        let command = probe_command(&candidate, &[]);
         let std = command.as_std();
         let args: Vec<&OsStr> = std.get_args().collect();
         let settings = probe_settings();

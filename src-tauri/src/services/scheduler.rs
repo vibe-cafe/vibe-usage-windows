@@ -27,6 +27,8 @@ fn now_ms() -> u64 {
 pub const UPDATE_INTERVAL: Duration = Duration::from_secs(24 * 3600);
 
 /// Immediate sync, then adapt to panel visibility.
+/// The first sync of a login launch waits for the user's proxy
+/// (`AppCtx::wait_launch_network`); any other start syncs at once.
 pub fn start(app: AppHandle) {
     let ctx = app.state::<AppCtx>();
     if let Some(old) = ctx.scheduler_task.lock().unwrap().take() {
@@ -35,6 +37,7 @@ pub fn start(app: AppHandle) {
 
     let app2 = app.clone();
     let handle = tauri::async_runtime::spawn(async move {
+        app2.state::<AppCtx>().wait_launch_network().await;
         crate::services::sync_engine::run_sync(app2.clone(), SyncTrigger::Scheduled).await;
         let mut last_attempt = now_ms();
         loop {

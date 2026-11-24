@@ -76,12 +76,22 @@ pub fn show_on_launch(app: &AppHandle) {
     let Some(window) = app.get_webview_window(PANEL_LABEL) else {
         return;
     };
+    restore_size_once(app, &window);
+    window_geometry::present(&window);
+}
+
+/// The remembered size, applied before the first show only.
+fn restore_size_once(app: &AppHandle, window: &tauri::WebviewWindow) {
+    if SIZE_RESTORED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
     if let Some(size) = read_size(&size_file(app)) {
         *LAST_SAVED.lock().unwrap() = size;
         let _ = window.set_size(LogicalSize::new(size.width, size.height));
     }
-    window_geometry::present(&window);
 }
+
+static SIZE_RESTORED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Show the normal app window and bring it to the foreground. If it was hidden
 /// to the tray, fit it to the screen and center it so a relaunch has a
@@ -90,6 +100,7 @@ pub fn show(app: &AppHandle) {
     let Some(window) = app.get_webview_window(PANEL_LABEL) else {
         return;
     };
+    restore_size_once(app, &window);
     window_geometry::present(&window);
     let _ = app.emit("panel-shown", ());
 }
@@ -105,6 +116,11 @@ pub fn hide_now(app: &AppHandle) {
 /// Write the panel's current size to disk if it changed. Called when the panel
 /// is hidden and when the app is about to exit.
 pub fn remember_size(app: &AppHandle) {
+    // Before the first show restores the saved size, the hidden window's
+    // size is not the user's: keep the saved one.
+    if !SIZE_RESTORED.load(std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
     let Some(window) = app.get_webview_window(PANEL_LABEL) else {
         return;
     };
@@ -182,3 +198,4 @@ mod tests {
         assert_eq!(read_size(&path), None);
     }
 }
+

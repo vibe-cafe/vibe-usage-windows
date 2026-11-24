@@ -127,8 +127,8 @@ pub struct AccountInfo {
 #[serde(rename_all = "camelCase")]
 pub struct NetworkInfo {
     pub system_proxy: ProxyKind,
-    /// The system proxy is handed to the sync CLI only when the app's own
-    /// environment has no `HTTPS_PROXY`; the Claude probe never gets it.
+    /// The system proxy is handed to the CLI and the Claude probe only when
+    /// the app's own environment has no `HTTPS_PROXY` (`system_proxy`).
     pub system_proxy_passed_to_sync: bool,
     /// An automatic proxy script (PAC, 「使用设置脚本」) is configured. Only
     /// its presence; the address is never read out.
@@ -304,9 +304,13 @@ fn collect_local(app: &AppHandle) -> DiagnosticsReport {
         device_tag: gethostname::gethostname().to_str().map(device_tag),
         network: NetworkInfo {
             system_proxy: proxy_kind(system_proxy.as_deref(), registry::system_proxy_enabled()),
+            // Same rule the CLI and Claude probe environments follow
+            // (`system_proxy::proxy_variables`): any proxy variable of the
+            // app's own, ALL_PROXY included, wins over the system's.
             system_proxy_passed_to_sync: system_proxy.is_some()
-                && !app_has("HTTPS_PROXY")
-                && !app_has("https_proxy"),
+                && !["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"]
+                    .iter()
+                    .any(|name| app_has(name)),
             auto_config_script: registry::auto_config_script_set(),
             variables: proxy_variables(&user_names, &system_names, app_has),
         },

@@ -135,7 +135,7 @@ fn parse_proxy_server(raw: &str) -> Option<String> {
     })
 }
 
-fn normalize_proxy_entry(entry: &str) -> Option<String> {
+pub(crate) fn normalize_proxy_entry(entry: &str) -> Option<String> {
     let entry = entry.trim();
     let (scheme, rest) = match entry.split_once("://") {
         Some((s, r)) if s.eq_ignore_ascii_case("http") => ("http", r),

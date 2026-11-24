@@ -56,6 +56,10 @@ fn store_snapshot(app: &AppHandle, snapshot: ProviderRateLimit, generation: u64)
 
 pub async fn get_rate_limits(app: &AppHandle, force: bool) -> Vec<ProviderRateLimit> {
     let ctx = app.state::<AppCtx>();
+    // A login launch: no quota is read before the user's proxy is up
+    // (`AppCtx::wait_launch_network`), whoever asks — the window, a
+    // selection change or a key change. The window shows its loading state.
+    ctx.wait_launch_network().await;
     // A caller that waited for an in-flight forced refresh consumes that
     // result instead of immediately starting the same work again.
     let (_refresh_guard, effective_force) = match ctx.rate_limit_refresh.try_lock() {
@@ -133,10 +137,20 @@ pub async fn get_rate_limits(app: &AppHandle, force: bool) -> Vec<ProviderRateLi
         }
     }
 
+    let result = cached_rate_limits(app);
+    for snapshot in &result {
+        test_diagnostics::record_result(snapshot);
+    }
+    result
+}
+
+/// What the cards show without reading anything: the last results, or an
+/// empty placeholder per selected product.
+pub fn cached_rate_limits(app: &AppHandle) -> Vec<ProviderRateLimit> {
     let ctx = app.state::<AppCtx>();
     let selected = selected_providers(app);
     let cache = ctx.rate_limits.lock().unwrap();
-    let result = selected
+    selected
         .into_iter()
         .map(|provider| {
             if provider == RateLimitProvider::Cursor {
@@ -148,12 +162,27 @@ pub async fn get_rate_limits(app: &AppHandle, force: bool) -> Vec<ProviderRateLi
                 .map(|(snapshot, _)| snapshot.clone())
                 .unwrap_or_else(|| ProviderRateLimit::empty(provider, RateLimitStatus::NoData))
         })
-        .collect::<Vec<_>>();
-    drop(cache);
-    for snapshot in &result {
-        test_diagnostics::record_result(snapshot);
+        .collect::<Vec<_>>()
+}
+
+/// A settings command's answer (product selection, ZCode region or key):
+/// a fresh forced read, or — while a login launch still waits for the user's
+/// proxy — the cards as they are right away, so the settings window is not
+/// held for up to two minutes with a stale copy of the settings. The panel
+/// reads again on `settings-updated`; that read waits for the proxy and
+/// picks up the new product or key (its cache entry is missing or cleared).
+pub async fn after_settings_change(app: &AppHandle) -> Vec<ProviderRateLimit> {
+    if !app.state::<AppCtx>().launch_network_ready() {
+        return cached_rate_limits(app);
     }
-    result
+    get_rate_limits(app, true).await
+}
+
+/// Products whose card starts network work: all but Cursor, a placeholder on
+/// Windows (Grok's meters come from a local log, but the CLI that reads it
+/// may check npm first).
+pub fn reads_network(provider: RateLimitProvider) -> bool {
+    provider != RateLimitProvider::Cursor
 }
 
 /// Compatibility command retained for older frontends. New UI uses the
@@ -173,5 +202,5 @@ pub async fn enable_claude(app: &AppHandle) -> Result<Vec<ProviderRateLimit>, St
         let settings = ctx.settings.lock().unwrap().clone();
         let _ = app.emit("settings-updated", &settings);
     }
-    Ok(get_rate_limits(app, true).await)
+    Ok(after_settings_change(app).await)
 }

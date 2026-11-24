@@ -116,6 +116,7 @@ export function onPanelShown(handler: () => void): Promise<UnlistenFn> {
   return listen("panel-shown", () => handler());
 }
 
+
 /** Fired by Rust just before hiding so the frontend can play the close animation. */
 export function onPanelWillHide(handler: () => void): Promise<UnlistenFn> {
   return listen("panel-will-hide", () => handler());

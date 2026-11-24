@@ -143,6 +143,8 @@ pub fn get_sync_state(app: AppHandle) -> SyncState {
 
 #[tauri::command]
 pub async fn get_rate_limits(app: AppHandle, force: bool) -> Vec<ProviderRateLimit> {
+    // During a login launch's wait for the proxy this answers once it is up
+    // (`rate_limits::get_rate_limits`); the window shows its loading state.
     rate_limits::get_rate_limits(&app, force).await
 }
 
@@ -216,7 +218,7 @@ pub async fn set_quota_product_selected(
         test_diagnostics::record_selection_changed(settings.selected_quota_product_ids.clone());
         let _ = app.emit("settings-updated", &settings);
     }
-    Ok(rate_limits::get_rate_limits(&app, true).await)
+    Ok(rate_limits::after_settings_change(&app).await)
 }
 
 #[tauri::command]
@@ -258,7 +260,7 @@ pub async fn set_zcode_quota_region(
         }
         let _ = app.emit("settings-updated", &settings);
     }
-    Ok(rate_limits::get_rate_limits(&app, true).await)
+    Ok(rate_limits::after_settings_change(&app).await)
 }
 
 #[tauri::command]
@@ -298,7 +300,7 @@ pub async fn set_zcode_api_key(
         }
         let _ = app.emit("settings-updated", &settings);
     }
-    Ok(rate_limits::get_rate_limits(&app, true).await)
+    Ok(rate_limits::after_settings_change(&app).await)
 }
 
 // -- Settings -------------------------------------------------------------------

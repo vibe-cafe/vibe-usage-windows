@@ -7,6 +7,7 @@ mod process_utils;
 mod process_lifecycle;
 mod services;
 mod state;
+mod system_proxy;
 mod tray;
 mod window_geometry;
 
@@ -22,7 +23,14 @@ pub fn run() {
         .map(|dir| dir.join(&context.config().identifier))
         .unwrap_or_else(|| std::path::PathBuf::from("."));
 
+    let launched_at_login = services::auto_launch::launched_at_login(std::env::args());
     let ctx = AppCtx::new(app_config_dir);
+    // A login launch waits for the user's proxy before its network reads.
+    // Set before any window can ask for quotas (the hidden webviews load
+    // before `setup` runs).
+    if launched_at_login {
+        ctx.launch_network.send_replace(false);
+    }
     commands::initialize_quota_selection(&ctx);
     tauri::Builder::default()
         .manage(ctx)
@@ -31,11 +39,40 @@ pub fn run() {
             // Second launch → surface the main window.
             panel::show(app);
         }))
-        .setup(|app| {
+        .setup(move |app| {
             tray::create_tray(app.handle())?;
             // Created hidden in tauri.conf.json so the remembered size is in
-            // place before the first paint.
+            // place before the first paint. A login launch shows it too; only
+            // its network reads wait for the proxy (below).
             panel::show_on_launch(app.handle());
+            if launched_at_login {
+                let handle = app.handle().clone();
+                let ctx = handle.state::<AppCtx>();
+                // Nothing to send (not linked, no selected product that
+                // reads the network): no reason to look at the proxy at all.
+                let has_network_work = ctx.config.is_configured()
+                    || ctx
+                        .settings
+                        .lock()
+                        .unwrap()
+                        .selected_quota_product_ids
+                        .iter()
+                        .any(|provider| services::rate_limits::reads_network(*provider));
+                if has_network_work {
+                    let urls = system_proxy::launch_probe_urls(&ctx.config.load_api_url());
+                    tauri::async_runtime::spawn(async move {
+                        let up = system_proxy::wait_for_launch_proxy(urls).await;
+                        log::info!(
+                            "login launch: {} — network reads go ahead",
+                            if up { "proxy is up" } else { "proxy wait ran out" }
+                        );
+                        handle.state::<AppCtx>().launch_network.send_replace(true);
+                    });
+                } else {
+                    ctx.launch_network.send_replace(true);
+                }
+            }
+            services::auto_launch::migrate_run_value();
             services::claude_usage::set_bundled_node(services::sync_engine::bundled_node(
                 app.handle(),
             ));
@@ -52,7 +89,8 @@ pub fn run() {
                         services::rate_limits::statusline_hook(&retirement_handle).retire_legacy();
                 });
 
-                // Configured → immediate sync + 30-minute schedule.
+                // Configured → sync now (a login launch once its proxy is up)
+                // + 30-minute schedule.
                 if ctx.config.is_configured() {
                     services::scheduler::start(handle.clone());
                 }
