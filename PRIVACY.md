@@ -1,6 +1,6 @@
 # 隐私政策：Vibe Usage for Windows
 
-最后更新：2026-11-12
+最后更新：2026-11-24
 
 本文说明 Vibe Usage Windows 版（下称「App」），以及它在你电脑上运行的命令行组件 `@vibe-cafe/vibe-usage`（下称「CLI」），会读取什么、保存什么、把什么发到哪里。本文按代码的实际行为编写；代码改变时会同步更新，历史版本见本仓库的提交记录。
 
@@ -10,7 +10,7 @@
 - **上传的是统计数字，不是内容。** 上传的是按半小时汇总的 token 数、模型名、项目名、计算机名和会话时长等统计，不上传对话、提示词、代码、文件内容，也不上传任何 AI 工具的登录凭证。项目名默认不上传；你在网页上打开「上传项目名称」后，多数工具只传文件夹名，但 Kiro 命令行版目前传的是完整的工作目录路径，见第 2 节。
 - **上传的用量默认会在 VibeCafé 网站上公开展示**：排行榜上显示你的昵称、token 数和费用，个人主页显示每天的 token 数热力图。两项都可以在网页设置里关闭，见第 2 节。
 - **订阅配额卡用的是你自己的登录信息，只发给那个工具自己的服务。** 例如，Codex 的额度只向 OpenAI 查询，查到的结果只在本机显示，不上传。
-- 用量数据上传到 VibeCafé 运营的 Vibe Usage 服务器（下称「VibeCafé 服务器」）。服务器地址可能随服务调整而变化，以 App 实际连接的地址为准；如果你在配置文件里指定了别的服务器地址，数据会发到你指定的地址。
+- 用量数据默认上传到 VibeCafé 运营的 `https://vibefriends.com`（下称「VibeCafé 服务器」）。旧生产地址也会连接到该站。如果你在配置文件里指定了自定义服务器，数据会发到你指定的地址。
 
 ## 1. 不登录也会发生的网络请求
 
@@ -35,7 +35,7 @@
 
 ## 2. 登录之后，上传什么
 
-**链接设备时。** 你点「登录并链接数据」后，App 把应用名和这台电脑的计算机名发给 VibeCafé 服务器，并打开浏览器让你登录、确认。确认后，App 拿到一个 API Key，用来上传和读取你的数据。这个 Key 存在和 CLI 共用的配置文件里（见第 4 节）；App 启动时只要发现这里已有 Key，不管它是 App 还是 CLI 写的，都会开始自动同步。
+**链接设备时。** 你点「登录并链接数据」后，App 把应用名和这台电脑的计算机名发给所用的服务器（默认是 VibeCafé 服务器），并打开该服务器提供的审批页。确认后，App 拿到一个 API Key，用来上传和读取你的数据。这个 Key 存在和 CLI 共用的配置文件里（见第 4 节）；App 启动时只要发现这里已有 Key，不管它是 App 还是 CLI 写的，都会开始自动同步。
 
 **每次同步时**（App 在托盘里时每 30 分钟一次，面板打开时约每分钟一次，也可以手动「更新数据」），CLI 会读取本机支持的 AI 编程工具的日志和数据库，在本机算出用量，只上传新增或有变化的部分：
 
@@ -118,6 +118,8 @@ App 和 CLI 会连接上文提到的第三方服务。这些请求按各服务�
 ## English summary
 
 This summary is a translation of the Chinese text above, which is the authoritative version.
+
+The production app uses `https://vibefriends.com` for device linking and usage data. If you configure a custom server, the app uses that address.
 
 - **No usage data is uploaded unless this computer has been signed in.** Signing in means clicking 「登录并链接数据」 (sign in and link) in the app, or having signed in with the CLI on this computer before. The app and the CLI share one configuration file, so an existing CLI sign-in is reused and the app starts syncing automatically.
 - **After sign-in**, each sync uploads, to the Vibe Usage server operated by VibeCafé: per-30-minute token counts by tool, model, project name and computer name; per-session statistics (tool, project name, a one-way hash of the session id, first/last message time, duration, active time, message counts, an hourly histogram of your prompts); and client metadata (CLI and app versions, Node.js version, OS, computer name, a random per-sync id).

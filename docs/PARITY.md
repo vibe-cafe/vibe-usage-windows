@@ -92,7 +92,7 @@
 
 | 文件 | 说明 |
 |---|---|
-| `%USERPROFILE%\.vibe-usage\config.json` | `apiKey` / `apiUrl` / `hostname`（camelCase，与 CLI 互写） |
+| `%USERPROFILE%\.vibe-usage\config.json` | `apiKey` / `apiUrl` / `hostname`（camelCase，与 CLI 共享）。正式版默认地址为 `https://vibefriends.com`，开发版默认使用 `http://localhost:3000`。App 在内存中将旧生产地址映射到新站，自定义地址沿用原值。设备绑定、手动 Key 校验、面板用量、「详情」和「排行榜」都使用解析后的地址。绑定成功时，若服务端返回旧生产地址则保存新地址，未返回地址则保存本次绑定所用地址。 |
 | `%USERPROFILE%\.vibe-usage\state.json` | CLI 增量同步状态；「重置配置」时一并删除（修复 macOS/CLI 的 reset 不清 state 问题） |
 | `%USERPROFILE%\.vibe-usage\claude-rate-limits.json` | 旧版本 statusline 留下的抓取文件；当前版本不再读取（`crates/core/rate_limit/claude.rs` 的旧解析器已无调用方），也不安装 statusline |
 | `%USERPROFILE%\.codex\sessions\` | Codex 配额读取（只读） |

@@ -72,7 +72,7 @@ test("saveConfig repairs a directory occupying config.json", async () => {
     pathToFileURL(cliPath("src/config.js")).href,
     dir,
   );
-  config.saveConfig({ apiKey: "vbu_test", apiUrl: "https://vibecafe.ai" });
+  config.saveConfig({ apiKey: "vbu_test", apiUrl: "https://vibefriends.com" });
 
   const parsed = JSON.parse(readFileSync(join(dir, "config.json"), "utf-8"));
   expect(parsed.apiKey).toBe("vbu_test");

@@ -1,4 +1,4 @@
-//! vibecafe.ai HTTP client — port of Services/APIClient.swift.
+//! Vibe Usage HTTP client — port of Services/APIClient.swift.
 
 use serde::Deserialize;
 use serde_json::Value;
@@ -56,7 +56,7 @@ pub async fn fetch_usage(
     params.push(("tz".into(), tz));
 
     let res = http
-        .get(format!("{base_url}/api/usage"))
+        .get(format!("{}/api/usage", base_url.trim_end_matches('/')))
         .query(&params)
         .bearer_auth(api_key)
         .timeout(Duration::from_secs(30))
@@ -108,7 +108,7 @@ pub async fn request_device_code(
         body["hostname"] = Value::String(h.to_string());
     }
     let res = http
-        .post(format!("{base_url}/api/usage/device/code"))
+        .post(format!("{}/api/usage/device/code", base_url.trim_end_matches('/')))
         .json(&body)
         .timeout(Duration::from_secs(15))
         .send()
@@ -128,7 +128,7 @@ pub async fn poll_device_code(
     device_code: &str,
 ) -> Result<DevicePollResponse, ApiError> {
     let res = http
-        .post(format!("{base_url}/api/usage/device/poll"))
+        .post(format!("{}/api/usage/device/poll", base_url.trim_end_matches('/')))
         .json(&serde_json::json!({ "deviceCode": device_code }))
         .timeout(Duration::from_secs(15))
         .send()

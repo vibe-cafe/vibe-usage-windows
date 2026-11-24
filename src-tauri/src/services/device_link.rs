@@ -7,7 +7,7 @@ use crate::state::AppCtx;
 use serde_json::json;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
-use vibe_core::config::VibeUsageConfig;
+use vibe_core::config::{resolve_api_url, verification_url, VibeUsageConfig};
 
 pub const CLIENT_NAME: &str = "Vibe Usage for Windows";
 
@@ -22,7 +22,7 @@ pub async fn start(app: AppHandle) -> Result<String, String> {
 
     let (http, base_url) = {
         let ctx = app.state::<AppCtx>();
-        (ctx.http.clone(), ctx.config.default_api_url().to_string())
+        (ctx.http.clone(), ctx.config.load_api_url())
     };
 
     let device = request_device_code(&http, &base_url, CLIENT_NAME, AppCtx::hostname().as_deref())
@@ -31,7 +31,8 @@ pub async fn start(app: AppHandle) -> Result<String, String> {
 
     // System default browser. On Windows this goes through an isolated helper
     // process so shell/browser handler crashes cannot take down the tray app.
-    if let Err(e) = crate::process_utils::shell_open(&device.verification_uri_complete) {
+    let approval_url = verification_url(&base_url, &device.verification_uri_complete);
+    if let Err(e) = crate::process_utils::shell_open(&approval_url) {
         log::error!("open browser failed: {e}");
     }
 
@@ -72,7 +73,8 @@ async fn poll_loop(app: AppHandle, base_url: String, device_code: String, interv
         };
 
         if let Some(api_key) = res.api_key {
-            configure(&app, api_key, res.api_url.unwrap_or(base_url));
+            let api_url = resolve_api_url(res.api_url.as_deref(), &base_url);
+            configure(&app, api_key, api_url.to_owned());
             emit(&app, json!({ "status": "success" }));
             return;
         }
