@@ -48,10 +48,16 @@ pub fn run() {
             if launched_at_login {
                 let handle = app.handle().clone();
                 let ctx = handle.state::<AppCtx>();
-                // Nothing to send (not linked, no quota product selected):
-                // no reason to look at the proxy at all.
+                // Nothing to send (not linked, no selected product that
+                // reads the network): no reason to look at the proxy at all.
                 let has_network_work = ctx.config.is_configured()
-                    || !ctx.settings.lock().unwrap().selected_quota_product_ids.is_empty();
+                    || ctx
+                        .settings
+                        .lock()
+                        .unwrap()
+                        .selected_quota_product_ids
+                        .iter()
+                        .any(|provider| services::rate_limits::reads_network(*provider));
                 if has_network_work {
                     let urls = system_proxy::launch_probe_urls(&ctx.config.load_api_url());
                     tauri::async_runtime::spawn(async move {

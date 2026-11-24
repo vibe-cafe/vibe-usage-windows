@@ -130,7 +130,7 @@ describe("copyable diagnostics report", () => {
     expect(text).toContain("环境：Windows 11 23H2（build 22631） · x86_64 · App 0.7.5 正式版 · 运行环境：App 内置 Node 22.23.1");
     expect(text).toContain("CLI：启动脚本正常 · 引导器已缓存 0.14.9");
     expect(text).toContain("账号：已配置 Key · 最近一次同步未被服务器拒绝 · 设备标签 7c2e");
-    expect(text).toContain("网络：系统代理：有（本机地址） · 已传给同步和 Claude 配额读取");
+    expect(text).toContain("网络：系统代理：有（本机地址） · 按当前设置交给同步和 Claude 配额读取");
     expect(text).toContain("代理变量：HTTPS_PROXY 用户变量有 · HTTP_PROXY 无 · ALL_PROXY 系统变量有");
     expect(text).toContain("定时 · 成功 · 18s");
     expect(text).toContain("手动 · 超时，2m00s 时被 App 结束");
@@ -241,7 +241,7 @@ describe("copyable diagnostics report", () => {
     const text = buildDiagnosticsText(hostile, products);
     for (const secret of SECRETS) expect(text).not.toContain(secret);
     expect(text).toContain("ANTHROPIC_BASE_URL、另有 3 个名字格式特殊，未列出");
-    expect(text).toContain("未传给同步和 Claude 配额读取（App 环境里已有代理变量）");
+    expect(text).toContain("同步和 Claude 配额读取用 App 环境里的代理变量");
   });
 
   it("the final scrub removes each synthetic secret from raw text", () => {
@@ -485,7 +485,7 @@ describe("Rust ↔ TypeScript diagnostics contract", () => {
       "环境：Windows 11 23H2（build 22631） · x86_64 · App 0.7.5 正式版 · 运行环境：App 内置 Node 22.23.1",
       "CLI：启动正常 · 本次运行 0.14.11 · 引导器已缓存 0.14.9",
       "账号：已配置 Key · 最近一次同步无法判断 Key 是否被拒 · 设备标签 7c2e",
-      "网络：系统代理：有（本机地址） · 已传给同步和 Claude 配额读取 · 自动代理脚本：有",
+      "网络：系统代理：有（本机地址） · 按当前设置交给同步和 Claude 配额读取 · 自动代理脚本：有",
       "代理变量：HTTPS_PROXY 用户变量有 · HTTP_PROXY 无 · ALL_PROXY 系统变量有",
       "定时 · 成功 · 用了本机缓存的 CLI（连不上 npm 源） · 14s",
       "定时 · CLI 启动阶段失败（引导器连不上 npm 源） · 21s",

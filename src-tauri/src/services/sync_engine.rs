@@ -252,8 +252,17 @@ async fn run_sync_once(app: AppHandle) {
         s.message = None;
     });
     // A login launch: no sync, manual ones included, before the user's proxy
-    // is up (`AppCtx::wait_launch_network`).
+    // is up (`AppCtx::wait_launch_network`). A reset or relink meanwhile
+    // drops this run.
+    let account = ctx.config.load().and_then(|config| config.api_key);
     ctx.wait_launch_network().await;
+    if ctx.config.load().and_then(|config| config.api_key) != account {
+        set_state(&app, |s| {
+            s.status = SyncStatus::Idle;
+            s.message = None;
+        });
+        return;
+    }
 
     let trigger = if ctx.sync_requested_manually.load(Ordering::SeqCst) {
         SyncTrigger::Manual

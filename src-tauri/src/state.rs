@@ -223,6 +223,12 @@ impl AppCtx {
 
     /// Returns once a login launch's proxy is up or its wait ran out; at once
     /// for any other launch.
+    /// Whether a login launch's wait for the proxy is over (always true for
+    /// any other start).
+    pub fn launch_network_ready(&self) -> bool {
+        *self.launch_network.borrow()
+    }
+
     pub async fn wait_launch_network(&self) {
         let mut ready = self.launch_network.subscribe();
         let _ = ready.wait_for(|ready| *ready).await;

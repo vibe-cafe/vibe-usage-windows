@@ -230,9 +230,9 @@ fn route_from_proxy_server(server: &str, https: bool) -> Route {
     Route::Direct
 }
 
-/// curl-style `NO_PROXY` matching: `*`, an exact host or IP, a domain and its
-/// subdomains (`example.com` and `.example.com` both match
-/// `api.example.com`), or an IPv4 CIDR.
+/// `NO_PROXY` matching as the CLI does it: `*`, an exact host or IP (a bare
+/// `example.com` is that host only), a domain's subdomains (`.example.com` or
+/// `*.example.com` match `api.example.com`), or an IPv4 CIDR.
 pub fn no_proxy_matches(host: &str, list: &str) -> bool {
     let host = host.trim_matches(['[', ']']).to_ascii_lowercase();
     list.split([',', ' ']).map(str::trim).filter(|e| !e.is_empty()).any(|entry| {
@@ -572,9 +572,13 @@ pub fn proxy_variables(
         // ALL_PROXY, and for https an HTTP_PROXY last) and write those two out
         // explicitly, so Node's startup switch and older CLIs see what the CLI
         // itself would choose; a value without a scheme becomes `http://…`
-        // (Node with the switch refuses to start on it). A SOCKS choice gets
-        // no switch (overriding an inherited one): the CLI refuses vendor
-        // requests it cannot route.
+        // (Node with the switch refuses to start on it). A SOCKS choice for
+        // https, or a SOCKS value in the http variables themselves, gets no
+        // switch (overriding an inherited one; Node's https cannot follow
+        // SOCKS, and the CLI tunnels or refuses those requests). An HTTP
+        // https proxy next to a SOCKS ALL_PROXY keeps the switch and its
+        // HTTPS_PROXY, as before, so an older cached CLI still sends its
+        // https requests through it.
         let pick = |names: &[&str]| {
             names.iter().filter_map(|name| lookup(name)).map(|v| v.trim().to_string()).find(|v| !v.is_empty())
         };
@@ -582,11 +586,15 @@ pub fn proxy_variables(
         let http = pick(&["http_proxy", "HTTP_PROXY", "all_proxy", "ALL_PROXY"]);
         let is_socks = |value: &Option<String>| value.as_deref().is_some_and(|v| v.to_ascii_lowercase().starts_with("socks"));
         let with_scheme = |value: String| if value.contains("://") { value } else { format!("http://{value}") };
-        if is_socks(&https) || is_socks(&http) {
+        let http_own_socks = is_socks(&pick(&["http_proxy", "HTTP_PROXY"]));
+        if is_socks(&https) || http_own_socks {
             if node_switch {
                 out.push(("NODE_USE_ENV_PROXY", "0".to_string()));
             }
         } else {
+            // http may be a SOCKS ALL_PROXY here: not written, Node's switch
+            // reads only HTTP(S)_PROXY.
+            let http = http.filter(|value| !value.to_ascii_lowercase().starts_with("socks"));
             // Lowercase spellings too: Node prefers them when both exist.
             if let Some(value) = https {
                 let value = with_scheme(value);
@@ -757,11 +765,19 @@ where
 }
 
 /// The URLs whose routes tell whether the user's proxy is up: the sync
-/// server and the vendors the app reads. A PAC often sends the sync server
-/// direct and only the vendors through the proxy.
+/// server and every host the app, the CLI and Claude Code reach. A PAC often
+/// sends the sync server direct and only some vendors through the proxy.
 pub fn launch_probe_urls(server: &str) -> Vec<Url> {
     let mut urls: Vec<Url> = Url::parse(server).into_iter().collect();
-    urls.extend(host_urls(&["api.anthropic.com", "chatgpt.com", "cursor.com", "opencode.ai", "api.kimi.com"]));
+    urls.extend(host_urls(&CLI_HOSTS));
+    urls.extend(host_urls(&CLAUDE_HOSTS));
+    urls.extend(host_urls(&["chatgpt.com"]));
+    let mut seen: Vec<String> = Vec::new();
+    urls.retain(|url| {
+        let fresh = !seen.iter().any(|key| key == url.as_str());
+        seen.push(url.as_str().to_string());
+        fresh
+    });
     urls
 }
 
@@ -853,7 +869,10 @@ mod tests {
     #[tokio::test]
     async fn a_split_pac_is_up_as_soon_as_the_vendor_proxy_answers() {
         let urls = launch_probe_urls("https://vibefriends.com");
-        assert!(urls.iter().any(|u| u.host_str() == Some("api.anthropic.com")));
+        for host in ["api.anthropic.com", "chatgpt.com", "daily-cloudcode-pa.googleapis.com", "open.bigmodel.cn", "api.z.ai"] {
+            assert!(urls.iter().any(|u| u.host_str() == Some(host)), "{host}");
+        }
+        assert_eq!(urls.iter().filter(|u| u.host_str() == Some("vibefriends.com")).count(), 1);
         let up = wait_for_proxy(
             Duration::from_secs(5),
             Duration::from_millis(1),
@@ -1182,6 +1201,15 @@ mod tests {
         let socks = vars(&[], &[("http_proxy", "http://a:1"), ("ALL_PROXY", "socks5://b:2")], true, true);
         assert!(socks.contains(&("NODE_USE_ENV_PROXY", "0".into())));
         assert!(!socks.iter().any(|(name, _)| *name == "HTTPS_PROXY"));
+        // An HTTP HTTPS_PROXY next to a SOCKS ALL_PROXY: https keeps its proxy
+        // and the switch (an older cached CLI relies on it); http is not written.
+        let https_http = vars(&[], &[("HTTPS_PROXY", "http://a:1"), ("ALL_PROXY", "socks5://b:2")], true, true);
+        assert!(https_http.contains(&("HTTPS_PROXY", "http://a:1".into())));
+        assert!(https_http.contains(&("NODE_USE_ENV_PROXY", "1".into())));
+        assert!(!https_http.iter().any(|(name, _)| *name == "HTTP_PROXY"));
+        // A SOCKS value in HTTP_PROXY itself: the switch stays off.
+        let http_socks = vars(&[], &[("HTTPS_PROXY", "http://a:1"), ("HTTP_PROXY", "socks5://b:2")], true, true);
+        assert!(http_socks.contains(&("NODE_USE_ENV_PROXY", "0".into())));
     }
 
     #[test]

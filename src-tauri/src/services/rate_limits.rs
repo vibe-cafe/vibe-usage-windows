@@ -165,6 +165,26 @@ pub fn cached_rate_limits(app: &AppHandle) -> Vec<ProviderRateLimit> {
         .collect::<Vec<_>>()
 }
 
+/// A settings command's answer (product selection, ZCode region or key):
+/// a fresh forced read, or — while a login launch still waits for the user's
+/// proxy — the cards as they are right away, so the settings window is not
+/// held for up to two minutes with a stale copy of the settings. The panel
+/// reads again on `settings-updated`; that read waits for the proxy and
+/// picks up the new product or key (its cache entry is missing or cleared).
+pub async fn after_settings_change(app: &AppHandle) -> Vec<ProviderRateLimit> {
+    if !app.state::<AppCtx>().launch_network_ready() {
+        return cached_rate_limits(app);
+    }
+    get_rate_limits(app, true).await
+}
+
+/// Products whose card starts network work: all but Cursor, a placeholder on
+/// Windows (Grok's meters come from a local log, but the CLI that reads it
+/// may check npm first).
+pub fn reads_network(provider: RateLimitProvider) -> bool {
+    provider != RateLimitProvider::Cursor
+}
+
 /// Compatibility command retained for older frontends. New UI uses the
 /// shared product selector.
 pub async fn enable_claude(app: &AppHandle) -> Result<Vec<ProviderRateLimit>, String> {
@@ -182,5 +202,5 @@ pub async fn enable_claude(app: &AppHandle) -> Result<Vec<ProviderRateLimit>, St
         let settings = ctx.settings.lock().unwrap().clone();
         let _ = app.emit("settings-updated", &settings);
     }
-    Ok(get_rate_limits(app, true).await)
+    Ok(after_settings_change(app).await)
 }
