@@ -293,9 +293,12 @@ fn application_paths(
                 paths.push(root.join("cursor").join("Cursor.exe"));
             }
             RateLimitProvider::KimiCode | RateLimitProvider::Grok => {}
-            // OpenCode keeps its data + credential store under
-            // `%LOCALAPPDATA%\opencode` on Windows, which the home-relative
-            // `relative_paths` cannot express.
+            // Detection only. OpenCode keeps its data and logins under
+            // `%USERPROFILE%\.local\share\opencode` on Windows too (the
+            // home-relative path above; official troubleshooting docs and
+            // anomalyco/opencode `global-roots.ts`), and the CLI reads them
+            // there. A per-user folder here only counts as a sign that
+            // OpenCode is installed; nothing is read from it.
             RateLimitProvider::OpenCodeGo => paths.push(root.join("opencode")),
             // Not in Antigravity's docs (they give no desktop install folder):
             // community reports put the per-user Antigravity 2.0 desktop app
@@ -457,8 +460,9 @@ mod tests {
             RateLimitProvider::OpenCodeGo
         ));
 
-        // Windows keeps OpenCode's data and credential store in
-        // `%LOCALAPPDATA%\opencode`, outside the home-relative roots.
+        // A per-user `%LOCALAPPDATA%\opencode` folder counts as installed
+        // (detection only; OpenCode's data and logins live in the
+        // home-relative root checked below).
         fs::create_dir_all(store_env.local_app_data.as_ref().unwrap().join("opencode")).unwrap();
         assert!(detected(
             &discover_with(&store_env),

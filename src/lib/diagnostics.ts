@@ -883,7 +883,7 @@ export function formatDiagnosticsReport(
         ),
       );
     }
-    if (card.liveFailure) parts.push(quotaFailureText(card.liveFailure, name));
+    if (card.liveFailure) parts.push(quotaFailureText(card.liveFailure, name, card.provider));
     if (card.source) parts.push(`来源：${quotaSourceText(card.source)}`);
     const asOf = number(card.dataAsOf);
     if (asOf != null && card.source && card.source !== "live") {

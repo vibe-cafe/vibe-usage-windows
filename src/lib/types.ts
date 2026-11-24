@@ -353,6 +353,7 @@ export type RateLimitLiveFailureCode =
   | "desktopRecordUnreadable"
   | "credentialsNotFound"
   | "credentialsRejected"
+  | "credentialsExpired"
   | "endpointTimedOut"
   | "endpointUnreachable"
   | "endpointHttpStatus"

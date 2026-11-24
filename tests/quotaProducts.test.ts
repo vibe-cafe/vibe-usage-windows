@@ -195,6 +195,31 @@ describe("tab strip model", () => {
   });
 });
 
+describe("OpenCode Go login states", () => {
+  const snapshot = (extra: Partial<ProviderRateLimit>): ProviderRateLimit => ({
+    provider: "opencode-go",
+    status: { kind: "noData" },
+    ...extra,
+  });
+
+  it("tells where to log in instead of saying the login is missing", () => {
+    const missing = snapshot({ liveFailure: { code: "credentialsNotFound" } });
+    expect(quotaEmptyStateText(missing, true, false, "OpenCode Go")).toBe("在 OpenCode 里登录后自动显示");
+  });
+
+  it("asks to open OpenCode when its account sign-in has expired", () => {
+    const expired = snapshot({ liveFailure: { code: "credentialsExpired" } });
+    expect(quotaEmptyStateText(expired, true, false, "OpenCode Go")).toBe("打开 OpenCode 后自动显示");
+  });
+
+  it("leaves a subscription answer and other products' wording alone", () => {
+    const notEntitled = snapshot({ emptyReason: "notEntitled", liveFailure: { code: "credentialsNotFound" } });
+    expect(quotaEmptyStateText(notEntitled, true, false, "OpenCode Go")).toBe("未订阅 OpenCode Go");
+    expect(quotaFailureText({ code: "credentialsNotFound" }, "Codex", "codex")).toBe("未找到 Codex 登录信息");
+    expect(quotaFailureText({ code: "credentialsExpired" }, "Kimi Code", "kimi-code")).toBe("Kimi Code 登录已过期");
+  });
+});
+
 describe("empty state reasons", () => {
   it("names the product for a missing subscription", () => {
     expect(

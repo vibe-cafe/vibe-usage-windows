@@ -233,7 +233,20 @@ fn map_product(product: Product) -> Result<ProviderRateLimit, FetchError> {
             window_duration: meter.window_seconds.filter(|value| *value > 0.0),
         })
         .collect::<Vec<_>>();
+    // OpenCode Go reads OpenCode's own login, which the user cannot fix here:
+    // no login and an expired account sign-in are settled empty states with
+    // their own reason (same as the macOS card), not a re-login request.
+    let opencode_login = match (provider, product.status.as_str()) {
+        (RateLimitProvider::OpenCodeGo, "missing_credentials") => {
+            Some(RateLimitLiveFailure::CredentialsNotFound)
+        }
+        (RateLimitProvider::OpenCodeGo, "expired_credentials") => {
+            Some(RateLimitLiveFailure::CredentialsExpired)
+        }
+        _ => None,
+    };
     let status = match product.status.as_str() {
+        _ if opencode_login.is_some() => RateLimitStatus::NoData,
         "ok" if !meters.is_empty() => RateLimitStatus::Ok,
         "ok" | "no_data" | "unsupported" => RateLimitStatus::NoData,
         "missing_credentials" | "expired_credentials" | "unauthorized" => {
@@ -261,8 +274,10 @@ fn map_product(product: Product) -> Result<ProviderRateLimit, FetchError> {
         // retryable error, so a cached answer is itself the statement that
         // live failed. The specific reason exists only in `message`, which is
         // free text and never kept.
-        live_failure: (product.source.as_deref() == Some("cache"))
-            .then_some(RateLimitLiveFailure::CliReportedFailure),
+        live_failure: opencode_login.or_else(|| {
+            (product.source.as_deref() == Some("cache"))
+                .then_some(RateLimitLiveFailure::CliReportedFailure)
+        }),
         status,
     })
 }
@@ -392,6 +407,46 @@ mod tests {
         .unwrap()
         .remove(0);
         assert_eq!(missing.status, RateLimitStatus::Unauthorized);
+    }
+
+    #[test]
+    fn opencode_go_login_states_are_settled_reasons_not_a_relogin_request() {
+        let snapshot = |status: &str| {
+            decode(
+                format!(
+                    r#"{{"schemaVersion":1,"products":[{{"id":"opencode-go","status":"{status}","meters":[],"fetchedAt":"2026-11-24T02:00:00Z"}}]}}"#
+                )
+                .as_bytes(),
+                &[RateLimitProvider::OpenCodeGo],
+            )
+            .unwrap()
+            .remove(0)
+        };
+        let missing = snapshot("missing_credentials");
+        assert_eq!(missing.status, RateLimitStatus::NoData);
+        assert_eq!(
+            missing.live_failure,
+            Some(RateLimitLiveFailure::CredentialsNotFound)
+        );
+        let expired = snapshot("expired_credentials");
+        assert_eq!(expired.status, RateLimitStatus::NoData);
+        assert_eq!(
+            expired.live_failure,
+            Some(RateLimitLiveFailure::CredentialsExpired)
+        );
+        // OpenCode refused the login: only OpenCode can issue a new one.
+        let rejected = snapshot("unauthorized");
+        assert_eq!(rejected.status, RateLimitStatus::Unauthorized);
+        assert_eq!(rejected.live_failure, None);
+        // Other CLI products keep their existing mapping.
+        let kimi = decode(
+            br#"{"schemaVersion":1,"products":[{"id":"kimi-code","status":"missing_credentials","meters":[],"fetchedAt":"2026-11-24T02:00:00Z"}]}"#,
+            &[RateLimitProvider::KimiCode],
+        )
+        .unwrap()
+        .remove(0);
+        assert_eq!(kimi.status, RateLimitStatus::Unauthorized);
+        assert_eq!(kimi.live_failure, None);
     }
 
     #[test]

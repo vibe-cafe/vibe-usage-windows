@@ -154,9 +154,12 @@ pub enum RateLimitLiveFailure {
     DesktopMixedOrganizations,
     /// The record could not be read or did not have the expected shape.
     DesktopRecordUnreadable,
-    // Native HTTP provider (Codex)
+    // Native HTTP provider (Codex); also the CLI's OpenCode Go login states
     CredentialsNotFound,
     CredentialsRejected,
+    /// A saved sign-in whose token lapsed and that only its own app may
+    /// renew (OpenCode account): opening that app renews it.
+    CredentialsExpired,
     EndpointTimedOut,
     EndpointUnreachable,
     EndpointHttpStatus { status: u16 },
