@@ -197,6 +197,9 @@ impl AppCtx {
                 .proxy(reqwest::Proxy::custom(|url| {
                     crate::system_proxy::live_route(url).reqwest_proxy()
                 }))
+                // No pooled connections: a connection opened before the user
+                // switched the proxy on must not carry the next request.
+                .pool_max_idle_per_host(0)
                 // A hung connect must fail fast instead of pinning spinners.
                 .connect_timeout(std::time::Duration::from_secs(10))
                 .build()

@@ -118,12 +118,14 @@ fn cli_command(app: &AppHandle, args: &[&str]) -> Result<tokio::process::Command
     // The system proxy (manual list, per-protocol entries, PAC evaluated by
     // WinHTTP), read now for the hosts the CLI reaches (`system_proxy`).
     let lookup = |name: &str| std::env::var(name).ok();
-    for (name, value) in crate::system_proxy::proxy_variables(
-        &crate::system_proxy::live_routes(&crate::system_proxy::CLI_HOSTS),
-        &lookup,
-        true,
-        true,
-    ) {
+    let routes = if crate::system_proxy::has_own_proxy(&lookup) {
+        Vec::new()
+    } else {
+        let npmrc = dirs::home_dir().and_then(|home| std::fs::read_to_string(home.join(".npmrc")).ok());
+        let api_url = app.state::<AppCtx>().config.load_api_url();
+        crate::system_proxy::live_routes(&crate::system_proxy::cli_hosts(npmrc.as_deref(), Some(&api_url)))
+    };
+    for (name, value) in crate::system_proxy::proxy_variables(&routes, &lookup, true, true) {
         cmd.env(name, value);
     }
     process_utils::hide_tokio_command_window(&mut cmd);

@@ -304,9 +304,13 @@ fn collect_local(app: &AppHandle) -> DiagnosticsReport {
         device_tag: gethostname::gethostname().to_str().map(device_tag),
         network: NetworkInfo {
             system_proxy: proxy_kind(system_proxy.as_deref(), registry::system_proxy_enabled()),
+            // Same rule the CLI and Claude probe environments follow
+            // (`system_proxy::proxy_variables`): any proxy variable of the
+            // app's own, ALL_PROXY included, wins over the system's.
             system_proxy_passed_to_sync: system_proxy.is_some()
-                && !app_has("HTTPS_PROXY")
-                && !app_has("https_proxy"),
+                && !["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"]
+                    .iter()
+                    .any(|name| app_has(name)),
             auto_config_script: registry::auto_config_script_set(),
             variables: proxy_variables(&user_names, &system_names, app_has),
         },

@@ -77,12 +77,23 @@ pub fn show_on_launch(app: &AppHandle) {
         return;
     };
     end_quiet_start(app);
+    restore_size_once(app, &window);
+    window_geometry::present(&window);
+}
+
+/// The remembered size, applied before the first show only — at launch, or
+/// on the first tray click after a quiet login launch.
+fn restore_size_once(app: &AppHandle, window: &tauri::WebviewWindow) {
+    if SIZE_RESTORED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
     if let Some(size) = read_size(&size_file(app)) {
         *LAST_SAVED.lock().unwrap() = size;
         let _ = window.set_size(LogicalSize::new(size.width, size.height));
     }
-    window_geometry::present(&window);
 }
+
+static SIZE_RESTORED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Show the normal app window and bring it to the foreground. If it was hidden
 /// to the tray, fit it to the screen and center it so a relaunch has a
@@ -92,6 +103,7 @@ pub fn show(app: &AppHandle) {
         return;
     };
     end_quiet_start(app);
+    restore_size_once(app, &window);
     window_geometry::present(&window);
     let _ = app.emit("panel-shown", ());
 }

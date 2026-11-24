@@ -41,13 +41,20 @@ pub enum Route {
     Unresolved,
 }
 
+/// Where a request goes when its route cannot be resolved (a PAC that is set
+/// but cannot be fetched or evaluated, typically while the proxy client is
+/// restarting): a closed local port, so the request fails instead of going
+/// direct. Never a real proxy.
+pub const FAIL_CLOSED_PROXY: &str = "http://127.0.0.1:1";
+
 impl Route {
     /// The proxy URL reqwest should use, or `None` for a direct connection.
     pub fn reqwest_proxy(&self) -> Option<String> {
         match self {
             Route::Http(url) => Some(url.clone()),
             Route::Socks(endpoint) => Some(format!("socks5h://{endpoint}")),
-            Route::Direct | Route::Unresolved => None,
+            Route::Unresolved => Some(FAIL_CLOSED_PROXY.to_string()),
+            Route::Direct => None,
         }
     }
 }
@@ -116,6 +123,10 @@ pub fn route_for(
 ) -> Route {
     let https = url.scheme() == "https";
     if let Some(value) = env_proxy(env, https) {
+        let no_proxy = [env("no_proxy"), env("NO_PROXY")].into_iter().flatten().collect::<Vec<_>>().join(",");
+        if url.host_str().is_some_and(|host| no_proxy_matches(host, &no_proxy)) {
+            return Route::Direct;
+        }
         return route_from_entry(&value);
     }
     if let Some(pac) = &settings.auto_config_url {
@@ -171,29 +182,65 @@ fn socks_route(endpoint: &str) -> Route {
     }
 }
 
-/// `ProxyServer`: one value for every scheme, or `scheme=value;…`.
+/// `ProxyServer`: one value for every scheme, or `scheme=value;…`. A list
+/// only when every item is `<known protocol>=…` (a `=` inside credentials does
+/// not make one, as before). For https the `https=` entry, else `socks=` (what
+/// WinINet does), else `http=` (what the CLI injection always did); for http
+/// `http=`, else `socks=`. The first entry that parses wins, so an empty or
+/// broken `https=` falls back instead of breaking the route.
 fn route_from_proxy_server(server: &str, https: bool) -> Route {
-    let items: Vec<(&str, &str)> = server
-        .split(';')
-        .map(str::trim)
-        .filter(|item| !item.is_empty())
-        .filter_map(|item| item.split_once('='))
-        .filter(|(key, _)| !key.contains("://") && !key.contains('@'))
-        .collect();
-    if items.is_empty() {
+    const PROTOCOLS: [&str; 5] = ["http", "https", "ftp", "socks", "gopher"];
+    let parts: Vec<&str> = server.split(';').map(str::trim).filter(|p| !p.is_empty()).collect();
+    let items: Vec<(&str, &str)> = parts.iter().filter_map(|p| p.split_once('=')).collect();
+    let is_list = !parts.is_empty()
+        && items.len() == parts.len()
+        && items.iter().all(|(key, _)| PROTOCOLS.iter().any(|name| key.trim().eq_ignore_ascii_case(name)));
+    if !is_list {
         return route_from_entry(server);
     }
-    let order: &[&str] = if https { &["https", "http", "socks"] } else { &["http", "socks"] };
+    let order: &[&str] = if https { &["https", "socks", "http"] } else { &["http", "socks"] };
     for scheme in order {
-        if let Some((_, value)) = items.iter().find(|(key, _)| key.trim().eq_ignore_ascii_case(scheme)) {
-            return if *scheme == "socks" {
-                socks_route(value)
-            } else {
-                route_from_entry(value)
-            };
+        for (_, value) in items.iter().filter(|(key, _)| key.trim().eq_ignore_ascii_case(scheme)) {
+            let route = if *scheme == "socks" { socks_route(value) } else { route_from_entry(value) };
+            if route != Route::Unresolved {
+                return route;
+            }
         }
     }
     Route::Direct
+}
+
+/// curl-style `NO_PROXY` matching: `*`, an exact host or IP, a domain and its
+/// subdomains (`example.com` and `.example.com` both match
+/// `api.example.com`), or an IPv4 CIDR.
+pub fn no_proxy_matches(host: &str, list: &str) -> bool {
+    let host = host.trim_matches(['[', ']']).to_ascii_lowercase();
+    list.split([',', ' ']).map(str::trim).filter(|e| !e.is_empty()).any(|entry| {
+        let entry = entry.to_ascii_lowercase();
+        if entry == "*" {
+            return true;
+        }
+        if let Some((network, bits)) = entry.split_once('/') {
+            return ipv4_in_cidr(&host, network, bits);
+        }
+        let entry = entry.trim_start_matches("*.").trim_start_matches('.').trim_matches(['[', ']']);
+        host == entry || host.ends_with(&format!(".{entry}"))
+    })
+}
+
+fn ipv4_in_cidr(host: &str, network: &str, bits: &str) -> bool {
+    let (Ok(host), Ok(network), Ok(bits)) = (
+        host.parse::<std::net::Ipv4Addr>(),
+        network.parse::<std::net::Ipv4Addr>(),
+        bits.parse::<u32>(),
+    ) else {
+        return false;
+    };
+    if bits > 32 {
+        return false;
+    }
+    let mask = if bits == 0 { 0 } else { u32::MAX << (32 - bits) };
+    (u32::from(host) & mask) == (u32::from(network) & mask)
 }
 
 /// WinHTTP's answer: proxies separated by `;` or spaces, the first wins.
@@ -267,11 +314,15 @@ fn cached_pac(pac: &str, target: &Url) -> Option<String> {
         }
     }
     let answer = evaluate_pac(pac, target.as_str());
-    PAC_ANSWERS
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .get_or_insert_with(HashMap::new)
-        .insert(key, (Instant::now(), answer.clone()));
+    // Only answers are kept: a failure (the proxy client restarting) is
+    // tried again on the next request instead of being remembered.
+    if answer.is_some() {
+        PAC_ANSWERS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get_or_insert_with(HashMap::new)
+            .insert(key, (Instant::now(), answer.clone()));
+    }
     answer
 }
 
@@ -376,10 +427,68 @@ pub const CLAUDE_HOSTS: [&str; 3] = ["api.anthropic.com", "platform.claude.com",
 
 pub const LOOPBACK: [&str; 3] = ["localhost", "127.0.0.1", "::1"];
 
-pub fn live_routes(hosts: &[&str]) -> Vec<(String, Route)> {
+/// Routes for `hosts`, read now. Once a PAC cannot be evaluated, the rest of
+/// the batch is unresolved at once instead of waiting for each host.
+pub fn live_routes(hosts: &[String]) -> Vec<(String, Route)> {
+    let settings = read_settings();
+    let env = |name: &str| std::env::var(name).ok();
+    let mut pac_failed = false;
     hosts
         .iter()
-        .filter_map(|host| Url::parse(&format!("https://{host}/")).ok().map(|url| (host.to_string(), live_route(&url))))
+        .filter_map(|host| Url::parse(&format!("https://{host}/")).ok().map(|url| (host, url)))
+        .map(|(host, url)| {
+            let route = route_for(&url, &settings, &env, &|pac, _| {
+                if pac_failed { None } else { cached_pac(pac, &url) }
+            });
+            if route == Route::Unresolved {
+                pac_failed = true;
+            }
+            (host.clone(), route)
+        })
+        .collect()
+}
+
+/// Whether the app's own environment names a proxy (then the system's is not
+/// resolved for children; theirs wins).
+pub fn has_own_proxy(lookup: &impl Fn(&str) -> Option<String>) -> bool {
+    ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"]
+        .iter()
+        .any(|name| lookup(name).is_some_and(|value| !value.trim().is_empty()))
+}
+
+/// The hosts the CLI reaches that the user chose: the npm registry the
+/// launcher asks (`~/.npmrc`'s `@vibe-cafe:registry`, else `registry`) and
+/// the configured Vibe Usage server. A PAC may send a mirror or an intranet
+/// server direct.
+pub fn configured_cli_hosts(npmrc: Option<&str>, api_url: Option<&str>) -> Vec<String> {
+    let mut hosts = Vec::new();
+    if let Some(text) = npmrc {
+        let (mut scoped, mut plain) = (None, None);
+        for line in text.lines() {
+            let Some((key, value)) = line.split_once('=') else { continue };
+            match key.trim() {
+                "@vibe-cafe:registry" => scoped = Some(value.trim().to_string()),
+                "registry" => plain = Some(value.trim().to_string()),
+                _ => {}
+            }
+        }
+        if let Some(host) = scoped.or(plain).and_then(|value| Url::parse(&value).ok()?.host_str().map(str::to_string)) {
+            hosts.push(host);
+        }
+    }
+    if let Some(host) = api_url.and_then(|value| Url::parse(value).ok()?.host_str().map(str::to_string)) {
+        hosts.push(host);
+    }
+    hosts.retain(|host| !CLI_HOSTS.contains(&host.as_str()));
+    hosts
+}
+
+/// Every host the CLI reaches, for `live_routes`.
+pub fn cli_hosts(npmrc: Option<&str>, api_url: Option<&str>) -> Vec<String> {
+    CLI_HOSTS
+        .iter()
+        .map(|host| host.to_string())
+        .chain(configured_cli_hosts(npmrc, api_url))
         .collect()
 }
 
@@ -397,13 +506,43 @@ pub fn proxy_variables(
     node_switch: bool,
 ) -> Vec<(&'static str, String)> {
     let mut out = Vec::new();
-    let own: Vec<String> = ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"]
+    const HTTP_NAMES: [&str; 4] = ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"];
+    let own: Vec<(&'static str, String)> = HTTP_NAMES
         .iter()
-        .filter_map(|name| lookup(name))
-        .filter(|value| !value.trim().is_empty())
+        .chain(["ALL_PROXY", "all_proxy"].iter())
+        .filter_map(|name| lookup(name).map(|value| (*name, value.trim().to_string())))
+        .filter(|(_, value)| !value.is_empty())
         .collect();
     if !own.is_empty() {
-        if node_switch && !own.iter().any(|value| value.trim().to_ascii_lowercase().starts_with("socks")) {
+        // The user's own proxy wins over the system's. A value without a
+        // scheme is written out as `http://…` for the child: Node with
+        // NODE_USE_ENV_PROXY refuses to start on it.
+        let socks = own.iter().any(|(_, value)| value.to_ascii_lowercase().starts_with("socks"));
+        let mut http_value = false;
+        for (name, value) in &own {
+            if value.to_ascii_lowercase().starts_with("socks") {
+                continue;
+            }
+            if !value.contains("://") {
+                out.push((*name, format!("http://{value}")));
+            }
+            if HTTP_NAMES.contains(name) {
+                http_value = true;
+            }
+        }
+        // An HTTP_PROXY alone: older CLIs upload with Node's https, which does
+        // not fall back to it, so https gets the same proxy (as before this
+        // change, when the system proxy filled HTTPS_PROXY).
+        let has = |names: [&str; 2]| own.iter().any(|(name, _)| names.contains(name));
+        if !has(["HTTPS_PROXY", "https_proxy"]) {
+            if let Some((_, value)) = own.iter().find(|(name, value)| {
+                ["HTTP_PROXY", "http_proxy"].contains(name) && !value.to_ascii_lowercase().starts_with("socks")
+            }) {
+                let value = if value.contains("://") { value.clone() } else { format!("http://{value}") };
+                out.push(("HTTPS_PROXY", value));
+            }
+        }
+        if node_switch && http_value && !socks {
             out.push(("NODE_USE_ENV_PROXY", "1".to_string()));
         }
         push_no_proxy(&mut out, lookup, &[]);
@@ -417,12 +556,21 @@ pub fn proxy_variables(
         Route::Socks(endpoint) => Some(format!("socks5://{endpoint}")),
         _ => None,
     }));
+    let unresolved = routes.iter().any(|(_, route)| *route == Route::Unresolved);
     let (proxy, is_http) = match (http, socks) {
         (Some(http), _) => (http, true),
         (None, Some(socks)) if allow_socks => {
             out.push(("ALL_PROXY", socks.clone()));
+            // Override a switch the app itself may have inherited: Node's
+            // https cannot follow SOCKS either way.
+            if node_switch {
+                out.push(("NODE_USE_ENV_PROXY", "0".to_string()));
+            }
             (socks, false)
         }
+        // A PAC that cannot be evaluated right now: a closed local port, so
+        // the child fails instead of connecting directly.
+        _ if unresolved => (FAIL_CLOSED_PROXY.to_string(), true),
         _ => {
             // Nothing to follow. Node's switch stays, as before: harmless
             // without a proxy, and it keeps an inherited proxy honoured.
@@ -582,6 +730,7 @@ mod tests {
         assert_eq!(pac(Some("")).route(&target), Route::Direct);
         assert_eq!(pac(Some("socks=127.0.0.1:7891")).route(&target), Route::Socks("127.0.0.1:7891".into()));
         assert_eq!(pac(None).route(&target), Route::Unresolved);
+        assert_eq!(Route::Unresolved.reqwest_proxy().as_deref(), Some(FAIL_CLOSED_PROXY));
         let mut both = pac(None);
         both.settings.proxy_enable = true;
         both.settings.proxy_server = Some("127.0.0.1:7890".into());
@@ -623,7 +772,35 @@ mod tests {
         assert_eq!(Route::Http("http://h:1".into()).reqwest_proxy().as_deref(), Some("http://h:1"));
         assert_eq!(Route::Socks("h:1".into()).reqwest_proxy().as_deref(), Some("socks5h://h:1"));
         assert_eq!(Route::Direct.reqwest_proxy(), None);
-        assert_eq!(Route::Unresolved.reqwest_proxy(), None);
+        // Fail closed: an unresolvable PAC never means direct.
+        assert_eq!(Route::Unresolved.reqwest_proxy().as_deref(), Some(FAIL_CLOSED_PROXY));
+    }
+
+    /// The baseline parser's cases, through the route the app now uses.
+    #[test]
+    fn baseline_proxy_server_cases_still_route() {
+        let https = |server: &str| route_for(&url("https://chatgpt.com/"), &manual(server, None), &no_env, &no_pac);
+        assert_eq!(https("http=127.0.0.1:7890;https= ;"), Route::Http("http://127.0.0.1:7890".into()));
+        assert_eq!(https("http=127.0.0.1:7890;https=bad:port"), Route::Http("http://127.0.0.1:7890".into()));
+        assert_eq!(https("user:p=ss@proxy.corp:8080"), Route::Http("http://user:p%3Dss@proxy.corp:8080".into()));
+        // WinINet: https without its own entry uses SOCKS before plain http.
+        assert_eq!(https("http=127.0.0.1:7890;socks=127.0.0.1:7891"), Route::Socks("127.0.0.1:7891".into()));
+    }
+
+    #[test]
+    fn no_proxy_applies_to_the_apps_own_proxy_variables() {
+        let env = |name: &str| match name {
+            "HTTP_PROXY" => Some("http://corp:8080".to_string()),
+            "NO_PROXY" => Some("127.0.0.1,.corp.example,10.0.0.0/8".to_string()),
+            _ => None,
+        };
+        let route = |target: &str| route_for(&url(target), &ProxySettings::default(), &env, &no_pac);
+        assert_eq!(route("http://127.0.0.1:8080/backend-api/wham/usage"), Route::Direct);
+        assert_eq!(route("https://api.corp.example/"), Route::Direct);
+        assert_eq!(route("https://10.1.2.3/"), Route::Direct);
+        assert_eq!(route("https://chatgpt.com/"), Route::Http("http://corp:8080".into()));
+        assert!(no_proxy_matches("anything.example", "*"));
+        assert!(!no_proxy_matches("notcorp.example", "corp.example"));
     }
 
     fn vars(routes: &[(&str, Route)], env: &[(&str, &str)], allow_socks: bool, node_switch: bool) -> Vec<(&'static str, String)> {
@@ -660,17 +837,59 @@ mod tests {
         let cli = vars(&routes, &[], true, true);
         assert!(cli.contains(&("HTTPS_PROXY", "socks5://127.0.0.1:7891".into())));
         assert!(cli.contains(&("ALL_PROXY", "socks5://127.0.0.1:7891".into())));
-        assert!(!cli.iter().any(|(name, _)| *name == "NODE_USE_ENV_PROXY"));
+        assert!(cli.contains(&("NODE_USE_ENV_PROXY", "0".into())));
         assert!(vars(&routes, &[], false, false).is_empty());
+    }
+
+    /// A PAC that cannot be evaluated sends children to a closed port.
+    #[test]
+    fn an_unresolved_pac_fails_closed_for_children() {
+        let out = vars(&[("cursor.com", Route::Unresolved), ("open.bigmodel.cn", Route::Direct)], &[], true, true);
+        assert!(out.contains(&("HTTPS_PROXY", FAIL_CLOSED_PROXY.into())));
+        assert!(out.contains(&("NO_PROXY", "localhost,127.0.0.1,::1,open.bigmodel.cn".into())));
+    }
+
+    #[test]
+    fn an_http_proxy_alone_also_covers_https_for_children() {
+        let out = vars(&[], &[("HTTP_PROXY", "127.0.0.1:7890")], true, true);
+        assert!(out.contains(&("HTTP_PROXY", "http://127.0.0.1:7890".into())));
+        assert!(out.contains(&("HTTPS_PROXY", "http://127.0.0.1:7890".into())));
     }
 
     #[test]
     fn nothing_to_follow_keeps_the_old_cli_variables() {
         assert_eq!(
-            vars(&[("a", Route::Direct), ("b", Route::Unresolved)], &[], true, true),
+            vars(&[("a", Route::Direct)], &[], true, true),
             vec![("NODE_USE_ENV_PROXY", "1".into()), ("NO_PROXY", "localhost,127.0.0.1,::1".into())]
         );
         assert!(vars(&[("a", Route::Direct)], &[], false, false).is_empty());
+    }
+
+    #[test]
+    fn the_users_scheme_less_proxy_gets_a_scheme_and_all_proxy_wins() {
+        let out = vars(&[], &[("HTTPS_PROXY", "127.0.0.1:7890")], true, true);
+        assert!(out.contains(&("HTTPS_PROXY", "http://127.0.0.1:7890".into())));
+        assert!(out.contains(&("NODE_USE_ENV_PROXY", "1".into())));
+        let all = vars(
+            &[("cursor.com", Route::Direct), ("a", Route::Http("http://127.0.0.1:7890".into()))],
+            &[("ALL_PROXY", "socks5://127.0.0.1:7891")],
+            true,
+            true,
+        );
+        assert_eq!(all, vec![("NO_PROXY", "localhost,127.0.0.1,::1".into())]);
+        assert!(has_own_proxy(&|name: &str| (name == "all_proxy").then(|| "x".to_string())));
+    }
+
+    #[test]
+    fn configured_registry_and_server_hosts() {
+        let npmrc = "registry=https://registry.npmmirror.com/\n//registry.npmmirror.com/:_authToken=secret\n";
+        assert_eq!(
+            configured_cli_hosts(Some(npmrc), Some("https://usage.corp.example")),
+            vec!["registry.npmmirror.com".to_string(), "usage.corp.example".to_string()]
+        );
+        let scoped = "registry=https://a.example/\n@vibe-cafe:registry=https://b.example/\n";
+        assert_eq!(configured_cli_hosts(Some(scoped), Some("https://vibefriends.com")), vec!["b.example".to_string()]);
+        assert_eq!(cli_hosts(None, None).len(), CLI_HOSTS.len());
     }
 
     #[test]

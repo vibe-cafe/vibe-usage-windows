@@ -246,12 +246,15 @@ pub async fn fetch() -> Result<ProviderRateLimit, RateLimitLiveFailure> {
     // system proxy for Anthropic's hosts (HTTP only; it does not support
     // SOCKS). Resolved off the async threads (a PAC is evaluated by WinHTTP).
     let proxy_env = tauri::async_runtime::spawn_blocking(|| {
-        crate::system_proxy::proxy_variables(
-            &crate::system_proxy::live_routes(&crate::system_proxy::CLAUDE_HOSTS),
-            &|name: &str| std::env::var(name).ok(),
-            false,
-            false,
-        )
+        let lookup = |name: &str| std::env::var(name).ok();
+        let routes = if crate::system_proxy::has_own_proxy(&lookup) {
+            Vec::new()
+        } else {
+            let hosts: Vec<String> =
+                crate::system_proxy::CLAUDE_HOSTS.iter().map(|host| host.to_string()).collect();
+            crate::system_proxy::live_routes(&hosts)
+        };
+        crate::system_proxy::proxy_variables(&routes, &lookup, false, false)
     })
     .await
     .unwrap_or_default();
