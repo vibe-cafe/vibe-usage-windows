@@ -68,18 +68,20 @@ pub async fn get_rate_limits(app: &AppHandle, force: bool) -> Vec<ProviderRateLi
     };
     let selected = selected_providers(app);
     // Lock order is settings -> cache, also used by credential mutation commands.
-    let (region, generation, egress) = {
+    let (region, generation) = {
         let settings = ctx.settings.lock().unwrap();
         let cache = ctx.rate_limits.lock().unwrap();
-        (settings.z_code_quota_region, cache.zcode_generation(), settings.egress())
+        (settings.z_code_quota_region, cache.zcode_generation())
     };
+    // The egress-check settings as they are right before each product's read.
+    let egress = || app.state::<AppCtx>().settings.lock().unwrap().egress();
     test_diagnostics::record_refresh_started(selected.clone());
 
     if selected.contains(&RateLimitProvider::Codex)
         && needs_refresh(app, RateLimitProvider::Codex, effective_force)
     {
         let http = app.state::<AppCtx>().http.clone();
-        let live = codex_usage::fetch(&http, egress).await;
+        let live = codex_usage::fetch(&http, egress()).await;
         let snapshot = match live {
             Ok(snapshot) => snapshot,
             Err(error) => {
@@ -97,7 +99,7 @@ pub async fn get_rate_limits(app: &AppHandle, force: bool) -> Vec<ProviderRateLi
     if selected.contains(&RateLimitProvider::ClaudeCode)
         && needs_refresh(app, RateLimitProvider::ClaudeCode, effective_force)
     {
-        let snapshot = match claude_usage::fetch(egress).await {
+        let snapshot = match claude_usage::fetch(egress()).await {
             Ok(snapshot) => snapshot,
             Err(failure) => {
                 log::debug!("Claude live quota unavailable: {failure:?}");

@@ -65,7 +65,7 @@ pub fn run() {
                         let up = system_proxy::wait_for_launch_proxy(urls).await;
                         log::info!(
                             "login launch: {} — network reads go ahead",
-                            if up { "proxy is up" } else { "proxy wait ran out" }
+                            if up { "proxy is up or none is set" } else { "proxy wait ran out" }
                         );
                         handle.state::<AppCtx>().launch_network.send_replace(true);
                     });

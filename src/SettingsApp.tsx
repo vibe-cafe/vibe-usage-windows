@@ -546,9 +546,11 @@ export function SettingsApp() {
         <Section
           title="网络"
           footer={
-            settings?.egressCheckEnabled === false
-              ? "关闭后，未检测到代理时直接读取。"
-              : "未检测到代理时，先匿名确认出口地区再读取 Codex、Claude、Antigravity。"
+            settings?.egressRequireLocalProxy
+              ? "未检测到代理时，暂停读取 Codex、Claude、Antigravity。"
+              : settings?.egressCheckEnabled === false
+                ? "关闭后，未检测到代理时直接读取。"
+                : "未检测到代理时，先匿名确认出口地区再读取 Codex、Claude、Antigravity。"
           }
         >
           <Row label="检测网络出口">

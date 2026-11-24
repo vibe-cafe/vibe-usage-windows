@@ -66,17 +66,13 @@ pub async fn fetch(
     let home = codex_home();
     let mut auth = load_auth(&home).ok_or(FetchError::NotLoggedIn)?;
     let mut endpoint = usage_url_from_home(&home).ok_or(FetchError::BadResponse)?;
-    // Direct to OpenAI: confirm the egress before the token goes out.
-    crate::egress_check::check_codex(&endpoint, egress)
-        .await
-        .map_err(FetchError::Paused)?;
-    let mut response = send(http, &endpoint, &auth).await?;
+    let mut response = send(http, &endpoint, &auth, egress).await?;
 
     if response.0 == StatusCode::UNAUTHORIZED {
         if let Some(fresh) = load_auth(&home).filter(|fresh| fresh != &auth) {
             auth = fresh;
             endpoint = usage_url_from_home(&home).ok_or(FetchError::BadResponse)?;
-            response = send(http, &endpoint, &auth).await?;
+            response = send(http, &endpoint, &auth, egress).await?;
         }
     }
     if response.0 == StatusCode::UNAUTHORIZED {
@@ -115,11 +111,18 @@ async fn send(
     http: &Client,
     endpoint: &Url,
     auth: &AuthInfo,
+    egress: crate::egress_check::Settings,
 ) -> Result<(StatusCode, Value), FetchError> {
     for attempt in 0..MAX_ATTEMPTS {
         if attempt > 0 {
             tokio::time::sleep(Duration::from_millis(500 << (attempt - 1))).await;
         }
+        // Direct to OpenAI: confirm the egress before the token goes out. The
+        // shared client reads the route again for every attempt (a proxy
+        // client that quit between attempts leaves it direct), so this does too.
+        crate::egress_check::check_codex(endpoint, egress)
+            .await
+            .map_err(FetchError::Paused)?;
         let mut request = http
             .get(endpoint.clone())
             .bearer_auth(&auth.access_token)

@@ -70,16 +70,14 @@ pub struct Settings {
 }
 
 impl Settings {
-    /// The same settings for the CLI, which checks Antigravity itself.
+    /// The same settings for the CLI, which checks Antigravity itself. Both
+    /// are always written out, so a value the user set in their own
+    /// environment for the terminal cannot override what Settings shows.
     pub fn cli_environment(self) -> Vec<(&'static str, &'static str)> {
-        let mut variables = Vec::new();
-        if !self.enabled {
-            variables.push(("VIBE_USAGE_EGRESS_CHECK", "0"));
-        }
-        if self.require_proxy {
-            variables.push(("VIBE_USAGE_REQUIRE_PROXY", "1"));
-        }
-        variables
+        vec![
+            ("VIBE_USAGE_EGRESS_CHECK", if self.enabled { "1" } else { "0" }),
+            ("VIBE_USAGE_REQUIRE_PROXY", if self.require_proxy { "1" } else { "0" }),
+        ]
     }
 }
 
@@ -102,8 +100,9 @@ pub async fn require_direct(trace_host: &str, settings: Settings, checker: &Chec
     }
 }
 
-/// Before Codex's account request: checked only when that URL's live route is
-/// direct and the URL is OpenAI's own.
+/// Before each Codex account request (every attempt, as the route is read
+/// again for each one): checked only when that URL's live route is direct and
+/// the URL is OpenAI's own.
 pub async fn check_codex(url: &Url, settings: Settings) -> Result<(), Pause> {
     let Some(host) = url.host_str().map(str::to_ascii_lowercase) else {
         return Ok(());
@@ -121,36 +120,97 @@ pub async fn check_codex(url: &Url, settings: Settings) -> Result<(), Pause> {
     require_direct(&host, settings, shared()).await
 }
 
-/// The Anthropic host to check before Claude Code starts: the first one whose
-/// route is direct, or none when every route goes through a proxy. Proxy
-/// variables in the app's own environment go to Claude Code as they are, so
-/// they count as a proxy.
-pub fn claude_trace_host(own_proxy: bool, routes: &[(String, Route)]) -> Option<String> {
-    if own_proxy {
-        return None;
-    }
+/// The Anthropic host to check before Claude Code starts: the first one it
+/// would reach direct, or none. `routes` are the live routes (the app's own
+/// proxy variables and their `NO_PROXY`, which Claude Code inherits as they
+/// are, then the system proxy). `claude_env` holds the proxy keys of Claude
+/// Code's own `settings.json` `env`, which it applies on top (a proxy set only
+/// there is common): with a proxy there, a host is direct only when the bypass
+/// list names it; either way that list can send a host direct. The list is
+/// read broadly (`bypass_matches`): reading a host as direct costs one check,
+/// reading it as proxied would skip one.
+pub fn claude_trace_host(routes: &[(String, Route)], claude_env: &HashMap<String, String>) -> Option<String> {
+    let value = |names: &[&str]| {
+        names
+            .iter()
+            .filter_map(|name| claude_env.get(*name))
+            .find(|value| !value.trim().is_empty())
+            .cloned()
+    };
+    let bypass = value(&["no_proxy", "NO_PROXY"]).unwrap_or_default();
+    let own_proxy = value(&["https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY", "all_proxy", "ALL_PROXY"]).is_some();
     routes
         .iter()
-        .find(|(_, route)| *route == Route::Direct)
+        .find(|(host, route)| (!own_proxy && *route == Route::Direct) || bypass_matches(host, &bypass))
         .map(|(host, _)| host.clone())
+}
+
+/// A bypass list (`NO_PROXY`) read broadly, as any runtime might: `*`, an
+/// exact host, or a domain and its subdomains (with or without a leading `.`
+/// / `*.`); ports are ignored.
+pub fn bypass_matches(host: &str, list: &str) -> bool {
+    let host = host.to_ascii_lowercase();
+    list.split(|c: char| c == ',' || c.is_whitespace())
+        .filter(|entry| !entry.is_empty())
+        .any(|raw| {
+            let mut entry = raw.to_ascii_lowercase();
+            if entry == "*" {
+                return true;
+            }
+            if !entry.starts_with('[') {
+                if let Some(colon) = entry.rfind(':') {
+                    entry.truncate(colon);
+                }
+            }
+            let entry = entry.trim_start_matches("*.").trim_start_matches('.');
+            !entry.is_empty() && (host == entry || host.ends_with(&format!(".{entry}")))
+        })
+}
+
+const PROXY_NAMES: [&str; 8] = [
+    "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy",
+];
+
+/// The proxy keys of Claude Code's own `settings.json` `env`
+/// (`%CLAUDE_CONFIG_DIR%\settings.json`, else `~\.claude\settings.json`).
+/// Only those keys are read; nothing is kept or logged.
+fn claude_settings_proxy_env() -> HashMap<String, String> {
+    let file = crate::services::diagnostics::claude_settings_file();
+    let Some(env) = std::fs::read(&file)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .and_then(|root| root.get("env").cloned())
+    else {
+        return HashMap::new();
+    };
+    PROXY_NAMES
+        .iter()
+        .filter_map(|name| env.get(*name).and_then(|value| value.as_str()).map(|value| (name.to_string(), value.to_string())))
+        .collect()
 }
 
 /// Before Claude Code is started with the user's login.
 pub async fn check_claude(settings: Settings) -> Result<(), Pause> {
-    let lookup = |name: &str| std::env::var(name).ok();
-    let own_proxy = crate::system_proxy::has_own_proxy(&lookup);
-    let routes = if own_proxy {
-        Vec::new()
-    } else {
-        tauri::async_runtime::spawn_blocking(|| {
-            crate::system_proxy::live_routes(&crate::system_proxy::host_urls(
-                &crate::system_proxy::CLAUDE_HOSTS,
-            ))
-        })
-        .await
-        .unwrap_or_default()
-    };
-    match claude_trace_host(own_proxy, &routes) {
+    let (routes, mut claude_env) = tauri::async_runtime::spawn_blocking(|| {
+        (
+            crate::system_proxy::live_routes(&crate::system_proxy::host_urls(&crate::system_proxy::CLAUDE_HOSTS)),
+            claude_settings_proxy_env(),
+        )
+    })
+    .await
+    .unwrap_or_default();
+    // The app's own bypass list reaches Claude Code too, unless its settings
+    // set one; read broadly here as well.
+    if !["no_proxy", "NO_PROXY"].iter().any(|name| claude_env.get(*name).is_some_and(|v| !v.trim().is_empty())) {
+        if let Some(own) = ["no_proxy", "NO_PROXY"]
+            .iter()
+            .filter_map(|name| std::env::var(name).ok())
+            .find(|value| !value.trim().is_empty())
+        {
+            claude_env.insert("no_proxy".into(), own);
+        }
+    }
+    match claude_trace_host(&routes, &claude_env) {
         Some(host) => require_direct(&host, settings, shared()).await,
         None => Ok(()),
     }
@@ -429,9 +489,18 @@ mod tests {
         let manual = Settings { enabled: true, require_proxy: true };
         assert_eq!(require_direct("chatgpt.com", manual, &checker).await, Err(Pause::ProxyNotDetected));
         assert!(script.calls.lock().unwrap().is_empty());
-        assert_eq!(off.cli_environment(), vec![("VIBE_USAGE_EGRESS_CHECK", "0")]);
-        assert_eq!(manual.cli_environment(), vec![("VIBE_USAGE_REQUIRE_PROXY", "1")]);
-        assert!(ON.cli_environment().is_empty());
+        assert_eq!(
+            off.cli_environment(),
+            vec![("VIBE_USAGE_EGRESS_CHECK", "0"), ("VIBE_USAGE_REQUIRE_PROXY", "0")]
+        );
+        assert_eq!(
+            manual.cli_environment(),
+            vec![("VIBE_USAGE_EGRESS_CHECK", "1"), ("VIBE_USAGE_REQUIRE_PROXY", "1")]
+        );
+        assert_eq!(
+            ON.cli_environment(),
+            vec![("VIBE_USAGE_EGRESS_CHECK", "1"), ("VIBE_USAGE_REQUIRE_PROXY", "0")]
+        );
     }
 
     #[tokio::test]
@@ -477,15 +546,46 @@ mod tests {
                 })
                 .collect::<Vec<_>>()
         };
-        assert_eq!(claude_trace_host(false, &routes(&[])), None);
-        assert_eq!(claude_trace_host(true, &routes(&["api.anthropic.com"])), None);
-        assert_eq!(claude_trace_host(false, &routes(&["claude.ai"])).as_deref(), Some("claude.ai"));
+        let none = HashMap::new();
+        assert_eq!(claude_trace_host(&routes(&[]), &none), None);
+        assert_eq!(claude_trace_host(&routes(&["claude.ai"]), &none).as_deref(), Some("claude.ai"));
         assert_eq!(
-            claude_trace_host(false, &routes(&["claude.ai", "api.anthropic.com"])).as_deref(),
+            claude_trace_host(&routes(&["claude.ai", "api.anthropic.com"]), &none).as_deref(),
             Some("api.anthropic.com")
         );
         let unresolved = vec![("api.anthropic.com".to_string(), Route::Unresolved)];
-        assert_eq!(claude_trace_host(false, &unresolved), None);
+        assert_eq!(claude_trace_host(&unresolved, &none), None);
+        // A proxy set only in Claude Code's own settings.json is a proxy...
+        let claude_proxy: HashMap<String, String> =
+            [("HTTPS_PROXY".to_string(), "http://127.0.0.1:7890".to_string())].into();
+        let all_direct = routes(&["api.anthropic.com", "platform.claude.com", "claude.ai"]);
+        assert_eq!(claude_trace_host(&all_direct, &claude_proxy), None);
+        // ...and its bypass list sends a host direct, past any proxy.
+        let mut bypassed = claude_proxy.clone();
+        bypassed.insert("no_proxy".into(), "claude.ai".into());
+        assert_eq!(claude_trace_host(&routes(&[]), &bypassed).as_deref(), Some("claude.ai"));
+        let only_bypass: HashMap<String, String> = [("NO_PROXY".to_string(), ".anthropic.com".to_string())].into();
+        assert_eq!(claude_trace_host(&routes(&[]), &only_bypass).as_deref(), Some("api.anthropic.com"));
+        assert!(bypass_matches("api.anthropic.com", "anthropic.com"));
+        assert!(bypass_matches("api.anthropic.com", "localhost, *.anthropic.com:443"));
+        assert!(bypass_matches("claude.ai", "*"));
+        assert!(!bypass_matches("api.anthropic.com", "notanthropic.com"));
+        // The app's own proxy variable with the user's NO_PROXY: Claude Code
+        // goes direct to the listed host, so that host is checked.
+        let settings = crate::system_proxy::ProxySettings::default();
+        let env = |name: &str| match name {
+            "HTTPS_PROXY" => Some("http://127.0.0.1:7890".to_string()),
+            "NO_PROXY" => Some("api.anthropic.com".to_string()),
+            _ => None,
+        };
+        let live = ["api.anthropic.com", "platform.claude.com", "claude.ai"]
+            .iter()
+            .map(|host| {
+                let url = Url::parse(&format!("https://{host}/")).unwrap();
+                (host.to_string(), crate::system_proxy::route_for(&url, &settings, &env, &|_, _| None))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(claude_trace_host(&live, &none).as_deref(), Some("api.anthropic.com"));
     }
 
     #[test]
