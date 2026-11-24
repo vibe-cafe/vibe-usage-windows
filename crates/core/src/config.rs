@@ -5,8 +5,46 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-pub const RELEASE_API_URL: &str = "https://vibecafe.ai";
+pub const RELEASE_API_URL: &str = "https://vibefriends.com";
 pub const DEV_API_URL: &str = "http://localhost:3000";
+
+/// Match the complete legacy HTTPS origin, keeping any path, query and fragment verbatim.
+fn legacy_origin_suffix(url: &str) -> Option<&str> {
+    for origin in ["https://vibecafe.ai", "https://www.vibecafe.ai"] {
+        if let Some((prefix, suffix)) = url.split_at_checked(origin.len()) {
+            if prefix.eq_ignore_ascii_case(origin)
+                && (suffix.is_empty() || suffix.starts_with(['/', '?', '#']))
+            {
+                return Some(suffix);
+            }
+        }
+    }
+    None
+}
+
+/// A configured base can include a deployment path. Only the old site root is an alias.
+pub fn resolve_api_url<'a>(configured: Option<&'a str>, fallback: &'a str) -> &'a str {
+    let Some(url) = configured.filter(|s| !s.is_empty()) else {
+        return fallback;
+    };
+    if legacy_origin_suffix(url.trim().trim_end_matches('/')) == Some("") {
+        RELEASE_API_URL
+    } else {
+        url
+    }
+}
+
+/// Respect a custom server's chosen approval page, including delegated login.
+pub fn verification_url(base_url: &str, uri: &str) -> String {
+    let origin = base_url.trim_end_matches('/');
+    if !origin.eq_ignore_ascii_case(RELEASE_API_URL) {
+        return uri.to_owned();
+    }
+    match legacy_origin_suffix(uri) {
+        Some(suffix) => format!("{RELEASE_API_URL}{suffix}"),
+        None => uri.to_owned(),
+    }
+}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct VibeUsageConfig {
@@ -96,6 +134,14 @@ impl ConfigManager {
         }
     }
 
+    pub fn effective_api_url(&self, config: &VibeUsageConfig) -> String {
+        resolve_api_url(config.api_url.as_deref(), self.default_api_url()).to_owned()
+    }
+
+    pub fn load_api_url(&self) -> String {
+        self.effective_api_url(&self.load().unwrap_or_default())
+    }
+
     pub fn load(&self) -> Option<VibeUsageConfig> {
         let raw = fs::read_to_string(self.config_path()).ok()?;
         let value: serde_json::Value = serde_json::from_str(&raw).ok()?;
@@ -177,7 +223,7 @@ mod tests {
         let mgr = ConfigManager::with_dir(dir.path().to_path_buf(), false);
         let cfg = VibeUsageConfig {
             api_key: Some("vbu_test123".into()),
-            api_url: Some("https://vibecafe.ai".into()),
+            api_url: Some(RELEASE_API_URL.into()),
             hostname: Some("my-pc".into()),
             last_sync: None,
         };
@@ -197,14 +243,14 @@ mod tests {
         let dir = tempdir().unwrap();
         let mgr = ConfigManager::with_dir(dir.path().to_path_buf(), false);
         std::fs::create_dir_all(dir.path()).unwrap();
-        std::fs::write(
-            mgr.config_path(),
-            r#"{"apiKey":"vbu_abc","apiUrl":"https://vibecafe.ai","hostname":"host-1"}"#,
-        )
-        .unwrap();
+        let raw = r#"{"apiKey":"vbu_abc","apiUrl":"https://vibecafe.ai","hostname":"host-1"}"#;
+        std::fs::write(mgr.config_path(), raw).unwrap();
         let cfg = mgr.load().unwrap();
         assert_eq!(cfg.api_key.as_deref(), Some("vbu_abc"));
         assert_eq!(cfg.hostname.as_deref(), Some("host-1"));
+        assert_eq!(mgr.effective_api_url(&cfg), "https://vibefriends.com");
+        assert_eq!(mgr.load_api_url(), "https://vibefriends.com");
+        assert_eq!(std::fs::read_to_string(mgr.config_path()).unwrap(), raw);
     }
 
     #[test]
@@ -222,7 +268,7 @@ mod tests {
         // App relinks: updates apiKey/apiUrl only.
         mgr.save(&VibeUsageConfig {
             api_key: Some("vbu_new".into()),
-            api_url: Some("https://vibecafe.ai".into()),
+            api_url: Some(RELEASE_API_URL.into()),
             ..Default::default()
         })
         .unwrap();
@@ -264,5 +310,69 @@ mod tests {
         let mgr = ConfigManager::with_dir(dir.path().to_path_buf(), true);
         assert_eq!(mgr.config_file_name(), "config.dev.json");
         assert_eq!(mgr.default_api_url(), DEV_API_URL);
+    }
+
+    #[test]
+    fn missing_url_uses_the_build_default_or_the_device_request_server() {
+        let dir = tempdir().unwrap();
+        for (dev, expected) in [
+            (false, "https://vibefriends.com"),
+            (true, "http://localhost:3000"),
+        ] {
+            let mgr = ConfigManager::with_dir(dir.path().to_owned(), dev);
+            assert_eq!(mgr.load_api_url(), expected);
+            assert!(!mgr.config_path().exists());
+            std::fs::write(mgr.config_path(), r#"{"apiKey":"vbu_test"}"#).unwrap();
+            assert_eq!(mgr.load_api_url(), expected);
+        }
+        let request_server = "https://self.test/App/";
+        for missing in [None, Some("")] {
+            assert_eq!(resolve_api_url(missing, request_server), request_server);
+        }
+    }
+
+    #[test]
+    fn only_legacy_production_roots_are_mapped() {
+        for legacy in ["HTTPS://ViBeCaFe.Ai///", "https://WWW.VIBECAFE.AI/"] {
+            assert_eq!(
+                resolve_api_url(Some(legacy), DEV_API_URL),
+                "https://vibefriends.com"
+            );
+        }
+        for custom in [
+            DEV_API_URL,
+            "https://Self.test/Team/",
+            "https://vibefriends.com/",
+            "http://vibecafe.ai",
+            "https://vibecafe.ai:8443",
+            "https://vibecafe.ai/team/",
+            "https://vibecafe.ai.example/",
+            "https://vibecafe.ai@other.test",
+            "https://vibecafe.ai?tenant=1",
+        ] {
+            assert_eq!(resolve_api_url(Some(custom), RELEASE_API_URL), custom);
+        }
+    }
+
+    #[test]
+    fn verification_preserves_the_server_supplied_route_and_code() {
+        assert_eq!(
+            verification_url(
+                RELEASE_API_URL,
+                "HTTPS://WWW.VIBECAFE.AI/link/Approve?code=A%2BB&x=2#ok"
+            ),
+            "https://vibefriends.com/link/Approve?code=A%2BB&x=2#ok"
+        );
+        for custom in [
+            "http://localhost:3000/approve?a=b",
+            "https://vibecafe.ai.example/link",
+        ] {
+            assert_eq!(verification_url(RELEASE_API_URL, custom), custom);
+        }
+        let tenant_approval = "https://vibecafe.ai/tenant/approve?code=ABC";
+        assert_eq!(
+            verification_url("https://vibecafe.ai/tenant", tenant_approval),
+            tenant_approval
+        );
     }
 }

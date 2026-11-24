@@ -30,12 +30,9 @@ pub struct AppStatus {
 #[tauri::command]
 pub fn get_app_status(app: AppHandle) -> AppStatus {
     let ctx = app.state::<AppCtx>();
-    let config = ctx.config.load();
-    let api_key = config.as_ref().and_then(|c| c.api_key.clone());
-    let api_url = config
-        .as_ref()
-        .and_then(|c| c.api_url.clone())
-        .unwrap_or_else(|| ctx.config.default_api_url().to_string());
+    let config = ctx.config.load().unwrap_or_default();
+    let api_url = ctx.config.effective_api_url(&config);
+    let api_key = config.api_key;
 
     let api_key_display = api_key.as_ref().map(|key| {
         if key.chars().count() > 12 {
@@ -56,7 +53,7 @@ pub fn get_app_status(app: AppHandle) -> AppStatus {
 
     AppStatus {
         configured: api_key.is_some(),
-        hostname: config.as_ref().and_then(|c| c.hostname.clone()).or_else(AppCtx::hostname),
+        hostname: config.hostname.or_else(AppCtx::hostname),
         api_url,
         version: app.package_info().version.to_string(),
         is_dev: crate::state::IS_DEV,
@@ -72,10 +69,8 @@ pub async fn fetch_usage(app: AppHandle, query: UsageQuery) -> Result<Value, Str
     let (http, base_url, api_key) = {
         let ctx = app.state::<AppCtx>();
         let config = ctx.config.load().ok_or("未配置")?;
+        let base_url = ctx.config.effective_api_url(&config);
         let api_key = config.api_key.ok_or("未配置")?;
-        let base_url = config
-            .api_url
-            .unwrap_or_else(|| ctx.config.default_api_url().to_string());
         (ctx.http.clone(), base_url, api_key)
     };
     api_client::fetch_usage(&http, &base_url, &api_key, &query)
@@ -113,7 +108,7 @@ pub async fn set_manual_key(app: AppHandle, api_key: String) -> Result<(), Strin
     }
     let (http, base_url) = {
         let ctx = app.state::<AppCtx>();
-        (ctx.http.clone(), ctx.config.default_api_url().to_string())
+        (ctx.http.clone(), ctx.config.load_api_url())
     };
     api_client::fetch_usage(&http, &base_url, &api_key, &UsageQuery::Days { days: 1 })
         .await
@@ -389,7 +384,10 @@ pub fn reset_config(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 pub fn open_external(url: String) -> Result<(), String> {
-    if !(url.starts_with("https://") || url.starts_with("http://")) {
+    let is_http = url.split_once("://").is_some_and(|(scheme, _)| {
+        scheme.eq_ignore_ascii_case("https") || scheme.eq_ignore_ascii_case("http")
+    });
+    if !is_http {
         return Err("仅允许打开 http(s) 链接".into());
     }
     crate::process_utils::shell_open(&url)

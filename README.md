@@ -1,6 +1,6 @@
 # Vibe Usage
 
-Windows 应用，自动追踪 AI 编程工具的 Token 用量和费用。App 常驻系统托盘；数据同步到 [vibecafe.ai/usage](https://vibecafe.ai/usage)。
+Windows 应用，自动追踪 AI 编程工具的 Token 用量和费用。App 常驻系统托盘，默认同步的数据可在 [vibefriends.com/usage](https://vibefriends.com/usage) 查看。
 
 ## 下载
 
@@ -13,10 +13,10 @@ Windows 应用，自动追踪 AI 编程工具的 Token 用量和费用。App 常
 本机订阅配额无需 Vibe Usage 账号即可使用。若还需要跨设备 Token/费用统计：
 
 1. 打开 Vibe Usage，在订阅配额下方点击「登录并链接数据」
-2. 浏览器自动打开 vibecafe.ai 审批页面 — 登录后确认验证码与 app 一致
+2. 浏览器自动打开所用服务器提供的审批页（正式版默认使用 `https://vibefriends.com`），登录后确认验证码与 App 一致
 3. 点击「确认链接」 — app 自动拿到 Key 并开始同步
 
-配置与 CLI 共享 `%USERPROFILE%\.vibe-usage\config.json`，可与 `npx @vibe-cafe/vibe-usage` 共存。
+配置与 CLI 共享 `%USERPROFILE%\.vibe-usage\config.json`，可与 `npx @vibe-cafe/vibe-usage` 共存。App 读取旧生产地址时在内存中映射到新站，配置文件由 CLI 同步时迁移。自定义服务器同样用于设备绑定、面板用量，以及「详情」的 `/usage` 和「排行榜」的 `/rank`。
 
 ## 功能
 
@@ -119,7 +119,7 @@ Rust (Tauri 2)
 
 - [vibe-usage-app](https://github.com/vibe-cafe/vibe-usage-app) — macOS 版（本项目的功能与视觉基准）
 - [@vibe-cafe/vibe-usage](https://github.com/vibe-cafe/vibe-usage) — 命令行同步工具
-- [vibecafe.ai/usage](https://vibecafe.ai/usage) — Web 仪表盘
+- [vibefriends.com/usage](https://vibefriends.com/usage) — Web 仪表盘
 
 ## Code signing policy
 
