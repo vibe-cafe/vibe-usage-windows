@@ -120,75 +120,103 @@ pub async fn check_codex(url: &Url, settings: Settings) -> Result<(), Pause> {
     require_direct(&host, settings, shared()).await
 }
 
-/// The Anthropic host to check before Claude Code starts: the first one it
-/// really reaches direct, or none. `effective` is the environment it is
+/// How Claude Code reaches Anthropic.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClaudeRoute {
+    /// Every host it reaches goes through a proxy it can use (or through the
+    /// system's SOCKS proxy, which it cannot use: a known gap, not checked).
+    Proxied,
+    /// This host goes direct under any reading of the bypass list: check it.
+    Direct(String),
+    /// Some host may go direct, but none surely does.
+    Unsure,
+}
+
+/// How Claude Code reaches Anthropic, judged by the environment it is
 /// started with (the app's own proxy variables, or the system proxy for its
 /// hosts with the ones a PAC sends direct in `NO_PROXY`, or the fail-closed
 /// port) with the proxy keys of its own `settings.json` `env` on top (Claude
 /// Code applies those over its environment; a proxy set only there is
 /// common). Claude Code follows `HTTPS_PROXY` / `HTTP_PROXY` (either case),
-/// no SOCKS or `ALL_PROXY`; with such a proxy a host is direct only when the
-/// bypass list names it as Claude Code reads it (`claude_bypasses`).
+/// no SOCKS or `ALL_PROXY`; with such a proxy a host goes direct only when the
+/// bypass list (`NO_PROXY` and `no_proxy` together) names it. How Claude Code
+/// reads an entry such as `.api.anthropic.com` or `*.anthropic.com` is not
+/// settled (three cross-review rounds read its code differently), so both
+/// ways count: a host that may go direct under any reading is not let through
+/// unchecked, and the anonymous check goes only to a host that goes direct
+/// under every reading, never to one the user's settings may proxy.
 ///
 /// A host the system routes through SOCKS gets no proxy here (Claude Code has
-/// none it could use; a known gap on Windows, see PRIVACY.md) and is not
-/// checked either: the anonymous check would go direct past the user's SOCKS
-/// proxy.
-pub fn claude_trace_host(effective: &HashMap<String, String>, routes: &[(String, Route)]) -> Option<String> {
-    let value = |names: &[&str]| {
-        names
-            .iter()
-            .filter_map(|name| effective.get(*name))
-            .find(|value| !value.trim().is_empty())
-            .cloned()
-    };
-    let proxied = value(&["https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY"]).is_some();
-    let bypass = value(&["no_proxy", "NO_PROXY"]).unwrap_or_default();
-    crate::system_proxy::CLAUDE_HOSTS
+/// none it could use; a known gap on Windows, see PRIVACY.md) and is left out:
+/// the anonymous check would go direct past the user's SOCKS proxy.
+pub fn claude_route(effective: &HashMap<String, String>, routes: &[(String, Route)]) -> ClaudeRoute {
+    let proxied = ["https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY"]
+        .iter()
+        .any(|name| effective.get(*name).is_some_and(|value| !value.trim().is_empty()));
+    let bypass = ["no_proxy", "NO_PROXY"]
+        .iter()
+        .filter_map(|name| effective.get(*name).cloned())
+        .collect::<Vec<_>>()
+        .join(",");
+    let hosts = crate::system_proxy::CLAUDE_HOSTS
         .iter()
         .filter(|host| !routes.iter().any(|(routed, route)| routed == *host && matches!(route, Route::Socks(_))))
-        .find(|host| !proxied || claude_bypasses(host, &bypass))
-        .map(|host| host.to_string())
+        .collect::<Vec<_>>();
+    if let Some(host) = hosts.iter().find(|host| !proxied || bypass_surely(host, &bypass)) {
+        return ClaudeRoute::Direct(host.to_string());
+    }
+    if hosts.iter().any(|host| bypass_possibly(host, &bypass)) {
+        ClaudeRoute::Unsure
+    } else {
+        ClaudeRoute::Proxied
+    }
 }
 
-/// A bypass list (`NO_PROXY`) for an https host, read as Claude Code 2.1.330
-/// reads it (checked against its code in cross-review): `*`, the exact host,
-/// or `.domain` / `*.domain` for its subdomains; a bare `anthropic.com` is
-/// that host only; an entry with a port only for 443. Reading it more broadly
-/// would send the anonymous check direct to a host the user's settings send
-/// through the proxy (rule 1).
-pub fn claude_bypasses(host: &str, list: &str) -> bool {
-    let host = host.to_ascii_lowercase();
+/// Entries of a bypass list that concern an https host: no port, or 443.
+fn bypass_entries(list: &str) -> Vec<String> {
     list.split(|c: char| c == ',' || c.is_whitespace())
         .filter(|entry| !entry.is_empty())
-        .any(|raw| {
+        .filter_map(|raw| {
             let mut entry = raw.to_ascii_lowercase();
-            if entry == "*" {
-                return true;
-            }
             if !entry.starts_with('[') {
                 if let Some(colon) = entry.rfind(':') {
                     if &entry[colon + 1..] != "443" {
-                        return false;
+                        return None;
                     }
                     entry.truncate(colon);
                 }
             }
-            if let Some(domain) = entry.strip_prefix("*.").or_else(|| entry.strip_prefix('.')) {
-                host.ends_with(&format!(".{domain}"))
-            } else {
-                host == entry
-            }
+            (!entry.is_empty()).then_some(entry)
         })
+        .collect()
+}
+
+/// Bypassed under every reading: `*`, or the host itself.
+pub fn bypass_surely(host: &str, list: &str) -> bool {
+    let host = host.to_ascii_lowercase();
+    bypass_entries(list).iter().any(|entry| entry == "*" || *entry == host)
+}
+
+/// Bypassed under some reading: also a domain of it, with or without a
+/// leading `.` / `*.`.
+pub fn bypass_possibly(host: &str, list: &str) -> bool {
+    let host = host.to_ascii_lowercase();
+    bypass_entries(list).iter().any(|entry| {
+        if entry == "*" {
+            return true;
+        }
+        let domain = entry.strip_prefix("*.").or_else(|| entry.strip_prefix('.')).unwrap_or(entry);
+        !domain.is_empty() && (host == domain || host.ends_with(&format!(".{domain}")))
+    })
 }
 
 pub const PROXY_NAMES: [&str; 8] = [
     "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy",
 ];
 
-/// Claude Code's settings file as text: UTF-8 with or without a byte-order
-/// mark, or UTF-16 with one (what Windows PowerShell 5.1 writes), as Claude
-/// Code reads it.
+/// Claude Code's settings file as text, as Claude Code reads it: UTF-8 with
+/// or without a byte-order mark, or little-endian UTF-16 with one (what
+/// Windows PowerShell 5.1 writes).
 pub fn settings_text(bytes: &[u8]) -> Option<String> {
     let utf16 = |rest: &[u8], little: bool| {
         let units = rest
@@ -200,7 +228,7 @@ pub fn settings_text(bytes: &[u8]) -> Option<String> {
     match bytes {
         [0xEF, 0xBB, 0xBF, rest @ ..] => String::from_utf8(rest.to_vec()).ok(),
         [0xFF, 0xFE, rest @ ..] => utf16(rest, true),
-        [0xFE, 0xFF, rest @ ..] => utf16(rest, false),
+        // Claude Code reads anything else as UTF-8 (big-endian UTF-16 too).
         _ => String::from_utf8(bytes.to_vec()).ok(),
     }
 }
@@ -230,9 +258,13 @@ fn claude_settings_proxy_env() -> HashMap<String, String> {
 pub async fn check_claude(settings: Settings, mut child: HashMap<String, String>, routes: &[(String, Route)]) -> Result<(), Pause> {
     let claude_env = tauri::async_runtime::spawn_blocking(claude_settings_proxy_env).await.unwrap_or_default();
     child.extend(claude_env);
-    match claude_trace_host(&child, routes) {
-        Some(host) => require_direct(&host, settings, shared()).await,
-        None => Ok(()),
+    match claude_route(&child, routes) {
+        ClaudeRoute::Proxied => Ok(()),
+        ClaudeRoute::Direct(host) => require_direct(&host, settings, shared()).await,
+        // It may go direct, but no host is surely direct to check through.
+        ClaudeRoute::Unsure if settings.require_proxy => Err(Pause::ProxyNotDetected),
+        ClaudeRoute::Unsure if !settings.enabled => Ok(()),
+        ClaudeRoute::Unsure => Err(Pause::Unconfirmed),
     }
 }
 
@@ -559,35 +591,43 @@ mod tests {
         let env = |pairs: &[(&str, &str)]| pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect::<HashMap<_, _>>();
         let proxy = "http://127.0.0.1:7890";
         let none: Vec<(String, Route)> = Vec::new();
-        assert_eq!(claude_trace_host(&env(&[]), &none).as_deref(), Some("api.anthropic.com"));
-        assert_eq!(claude_trace_host(&env(&[("HTTPS_PROXY", proxy)]), &none), None);
-        assert_eq!(claude_trace_host(&env(&[("http_proxy", proxy)]), &none), None);
+        let direct = |host: &str| ClaudeRoute::Direct(host.to_string());
+        assert_eq!(claude_route(&env(&[]), &none), direct("api.anthropic.com"));
+        assert_eq!(claude_route(&env(&[("HTTPS_PROXY", proxy)]), &none), ClaudeRoute::Proxied);
+        assert_eq!(claude_route(&env(&[("http_proxy", proxy)]), &none), ClaudeRoute::Proxied);
         // Claude Code follows no ALL_PROXY of its own.
-        assert_eq!(claude_trace_host(&env(&[("ALL_PROXY", "socks5://127.0.0.1:7891")]), &none).as_deref(), Some("api.anthropic.com"));
+        assert_eq!(claude_route(&env(&[("ALL_PROXY", "socks5://127.0.0.1:7891")]), &none), direct("api.anthropic.com"));
         // A host a PAC sends direct, added to NO_PROXY when Claude is started,
         // stays direct under a proxy from Claude's own settings.
         assert_eq!(
-            claude_trace_host(&env(&[("NO_PROXY", "localhost,127.0.0.1,::1,claude.ai"), ("HTTPS_PROXY", proxy)]), &none).as_deref(),
-            Some("claude.ai")
+            claude_route(&env(&[("NO_PROXY", "localhost,127.0.0.1,::1,claude.ai"), ("HTTPS_PROXY", proxy)]), &none),
+            direct("claude.ai")
         );
-        // Bypass entries as Claude Code reads them.
-        assert_eq!(claude_trace_host(&env(&[("HTTPS_PROXY", proxy), ("no_proxy", "anthropic.com")]), &none), None);
+        // Both spellings of the list count together.
         assert_eq!(
-            claude_trace_host(&env(&[("HTTPS_PROXY", proxy), ("no_proxy", ".anthropic.com")]), &none).as_deref(),
-            Some("api.anthropic.com")
+            claude_route(&env(&[("HTTPS_PROXY", proxy), ("no_proxy", "localhost"), ("NO_PROXY", "api.anthropic.com")]), &none),
+            direct("api.anthropic.com")
         );
+        // Entries read differently by different runtimes: unsure, no check.
+        for entry in [".api.anthropic.com", "*.anthropic.com", ".anthropic.com", "anthropic.com"] {
+            assert_eq!(claude_route(&env(&[("HTTPS_PROXY", proxy), ("NO_PROXY", entry)]), &none), ClaudeRoute::Unsure, "{entry}");
+        }
+        assert_eq!(claude_route(&env(&[("HTTPS_PROXY", proxy), ("NO_PROXY", "api.anthropic.com:8443")]), &none), ClaudeRoute::Proxied);
+        assert_eq!(claude_route(&env(&[("HTTPS_PROXY", proxy), ("NO_PROXY", "*")]), &none), direct("api.anthropic.com"));
         // SOCKS hosts: no proxy Claude Code can use (known gap), not checked
         // either, so the anonymous check never bypasses that proxy.
         let socks = crate::system_proxy::CLAUDE_HOSTS
             .iter()
             .map(|host| (host.to_string(), Route::Socks("127.0.0.1:7891".into())))
             .collect::<Vec<_>>();
-        assert_eq!(claude_trace_host(&env(&[]), &socks), None);
-        assert!(claude_bypasses("api.anthropic.com", "api.anthropic.com"));
-        assert!(!claude_bypasses("api.anthropic.com", "anthropic.com"));
-        assert!(claude_bypasses("api.anthropic.com", "localhost, *.anthropic.com:443"));
-        assert!(!claude_bypasses("api.anthropic.com", ".anthropic.com:8443"));
-        assert!(claude_bypasses("claude.ai", "*"));
+        assert_eq!(claude_route(&env(&[]), &socks), ClaudeRoute::Proxied);
+        assert!(bypass_surely("api.anthropic.com", "localhost, api.anthropic.com:443"));
+        assert!(!bypass_surely("api.anthropic.com", ".anthropic.com"));
+        assert!(bypass_possibly("api.anthropic.com", "anthropic.com"));
+        assert!(bypass_possibly("api.anthropic.com", "*.anthropic.com"));
+        assert!(bypass_possibly("api.anthropic.com", ".api.anthropic.com"));
+        assert!(!bypass_possibly("api.anthropic.com", ".anthropic.com:8443"));
+        assert!(!bypass_possibly("api.anthropic.com", ".notanthropic.com"));
     }
 
     #[test]
@@ -597,11 +637,13 @@ mod tests {
         bom.extend_from_slice(json.as_bytes());
         let mut le = vec![0xFF, 0xFE];
         le.extend(json.encode_utf16().flat_map(u16::to_le_bytes));
-        let mut be = vec![0xFE, 0xFF];
-        be.extend(json.encode_utf16().flat_map(u16::to_be_bytes));
-        for bytes in [json.as_bytes().to_vec(), bom, le, be] {
+        for bytes in [json.as_bytes().to_vec(), bom, le] {
             assert_eq!(settings_text(&bytes).as_deref(), Some(json));
         }
+        // Big-endian UTF-16: not read, as Claude Code does not read it either.
+        let mut be = vec![0xFE, 0xFF];
+        be.extend(json.encode_utf16().flat_map(u16::to_be_bytes));
+        assert_eq!(settings_text(&be), None);
     }
 
     #[test]
