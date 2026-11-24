@@ -352,8 +352,8 @@ fn evaluate_pac(pac_url: &str, target: &str) -> Option<String> {
     use windows_sys::Win32::Foundation::GlobalFree;
     use windows_sys::Win32::Networking::WinHttp::{
         WinHttpCloseHandle, WinHttpGetProxyForUrl, WinHttpOpen, WinHttpSetTimeouts,
-        WINHTTP_ACCESS_TYPE_NAMED_PROXY, WINHTTP_ACCESS_TYPE_NO_PROXY, WINHTTP_AUTOPROXY_CONFIG_URL,
-        WINHTTP_AUTOPROXY_OPTIONS, WINHTTP_PROXY_INFO,
+        ERROR_WINHTTP_LOGIN_FAILURE, WINHTTP_ACCESS_TYPE_NAMED_PROXY, WINHTTP_ACCESS_TYPE_NO_PROXY,
+        WINHTTP_AUTOPROXY_CONFIG_URL, WINHTTP_AUTOPROXY_OPTIONS, WINHTTP_PROXY_INFO,
     };
     fn wide(text: &str) -> Vec<u16> {
         text.encode_utf16().chain(std::iter::once(0)).collect()
@@ -383,16 +383,22 @@ fn evaluate_pac(pac_url: &str, target: &str) -> Option<String> {
             return None;
         }
         WinHttpSetTimeouts(session, 3000, 3000, 3000, 3000);
+        // Anonymous first; the Windows login is offered only when the PAC
+        // server asks for it (Microsoft's documented pattern).
         let mut options = WINHTTP_AUTOPROXY_OPTIONS {
             dwFlags: WINHTTP_AUTOPROXY_CONFIG_URL,
             dwAutoDetectFlags: 0,
             lpszAutoConfigUrl: pac.as_ptr(),
             lpvReserved: std::ptr::null_mut(),
             dwReserved: 0,
-            fAutoLogonIfChallenged: 1,
+            fAutoLogonIfChallenged: 0,
         };
         let mut info: WINHTTP_PROXY_INFO = std::mem::zeroed();
-        let ok = WinHttpGetProxyForUrl(session, url.as_ptr(), &mut options, &mut info) != 0;
+        let mut ok = WinHttpGetProxyForUrl(session, url.as_ptr(), &mut options, &mut info) != 0;
+        if !ok && windows_sys::Win32::Foundation::GetLastError() == ERROR_WINHTTP_LOGIN_FAILURE {
+            options.fAutoLogonIfChallenged = 1;
+            ok = WinHttpGetProxyForUrl(session, url.as_ptr(), &mut options, &mut info) != 0;
+        }
         let answer = if !ok {
             None
         } else if info.dwAccessType == WINHTTP_ACCESS_TYPE_NO_PROXY {
@@ -447,13 +453,20 @@ pub const LOOPBACK: [&str; 3] = ["localhost", "127.0.0.1", "::1"];
 pub fn live_routes(urls: &[Url]) -> Vec<(String, Route)> {
     let settings = read_settings();
     let env = |name: &str| std::env::var(name).ok();
+    // One batch gets at most this long for PAC answers; what is left after it
+    // is unresolved (and fails closed) instead of each URL waiting in turn.
+    let deadline = Instant::now() + BATCH_PAC_BUDGET;
     urls.iter()
         .map(|url| {
-            let route = route_for(url, &settings, &env, &|pac, _| cached_pac(pac, url));
+            let route = route_for(url, &settings, &env, &|pac, _| {
+                if Instant::now() < deadline { cached_pac(pac, url) } else { None }
+            });
             (url.host_str().unwrap_or_default().to_string(), route)
         })
         .collect()
 }
+
+const BATCH_PAC_BUDGET: Duration = Duration::from_secs(6);
 
 pub fn host_urls(hosts: &[&str]) -> Vec<Url> {
     hosts.iter().filter_map(|host| Url::parse(&format!("https://{host}/")).ok()).collect()
@@ -477,6 +490,9 @@ pub fn launcher_registry(npmrc: Option<&str>) -> Option<Url> {
     let mut credential_hosts: Vec<String> = Vec::new();
     for line in text.lines() {
         let Some((key, value)) = line.split_once('=') else { continue };
+        // An unquoted value ends at a `#` or `;` comment, as the launcher reads it.
+        let value = value.trim();
+        let value = if value.starts_with(['"', '\'']) { value } else { value.split(['#', ';']).next().unwrap_or("") };
         let (key, value) = (key.trim(), value.trim().trim_matches(['"', '\'']));
         if key == "@vibe-cafe:registry" {
             scoped = Some(value.to_string());
@@ -492,7 +508,9 @@ pub fn launcher_registry(npmrc: Option<&str>) -> Option<Url> {
     }
     let url = Url::parse(&scoped.or(plain)?).ok()?;
     let host = url.host_str()?.to_ascii_lowercase();
-    (url.scheme() == "https" && !credential_hosts.contains(&host)).then_some(url)
+    // The launcher never uses a registry URL that carries credentials.
+    let has_userinfo = !url.username().is_empty() || url.password().is_some();
+    (url.scheme() == "https" && !has_userinfo && !credential_hosts.contains(&host)).then_some(url)
 }
 
 /// Every URL the CLI reaches: the fixed hosts, plus the user's own registry
@@ -922,6 +940,11 @@ mod tests {
         );
         assert_eq!(launcher_registry(Some("registry=https://npm.corp/\n//npm.corp/:_authToken=x\n")), None);
         assert_eq!(launcher_registry(Some("registry=http://plain.example/\n")), None);
+        assert_eq!(launcher_registry(Some("registry=https://user:pass@npm.corp/\n")), None);
+        assert_eq!(
+            launcher_registry(Some("registry=https://m.example/ # mirror\n")).map(|u| u.host_str().unwrap().to_string()),
+            Some("m.example".to_string())
+        );
         let urls = cli_urls(Some("registry=https://registry.npmmirror.com/\n"), Some("http://usage.intra:8080"));
         assert!(urls.iter().any(|u| u.as_str() == "https://registry.npmmirror.com/"));
         assert!(urls.iter().any(|u| u.as_str() == "http://usage.intra:8080/"));

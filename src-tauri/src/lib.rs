@@ -29,6 +29,10 @@ pub fn run() {
 
     let launched_at_login = services::auto_launch::launched_at_login(std::env::args());
     let ctx = AppCtx::new(app_config_dir);
+    // Set before any window can ask for quotas (the hidden webviews load
+    // before `setup` runs).
+    ctx.quiet_start
+        .store(launched_at_login, std::sync::atomic::Ordering::SeqCst);
     commands::initialize_quota_selection(&ctx);
     tauri::Builder::default()
         .manage(ctx)
@@ -46,11 +50,7 @@ pub fn run() {
             // wait before the first sync (`auto_launch`). Otherwise show the
             // window, created hidden in tauri.conf.json so the remembered size
             // is in place before the first paint.
-            if launched_at_login {
-                app.state::<AppCtx>()
-                    .quiet_start
-                    .store(true, std::sync::atomic::Ordering::SeqCst);
-            } else {
+            if !launched_at_login {
                 panel::show_on_launch(app.handle());
             }
             services::auto_launch::migrate_run_value();
