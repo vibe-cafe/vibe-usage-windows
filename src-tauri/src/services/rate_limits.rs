@@ -11,6 +11,20 @@ use vibe_core::statusline_hook::StatuslineHook;
 use vibe_core::{ProviderRateLimit, RateLimitProvider, RateLimitStatus};
 
 const MAX_AGE: Duration = Duration::from_secs(60);
+/// Antigravity is re-read at most every 5 minutes, also while the window stays
+/// visible (maintainer, 2026-11-24, 《Antigravity额度读取-封号风险与新做法》).
+/// The CLI decides whether Google is asked at all — only after Antigravity was
+/// used, never more often than this — so calling it sooner only starts a
+/// process that answers from its record. A forced refresh still calls it.
+const ANTIGRAVITY_MAX_AGE: Duration = Duration::from_secs(5 * 60);
+
+fn max_age(provider: RateLimitProvider) -> Duration {
+    if provider == RateLimitProvider::Antigravity {
+        ANTIGRAVITY_MAX_AGE
+    } else {
+        MAX_AGE
+    }
+}
 
 pub fn statusline_hook(app: &AppHandle) -> StatuslineHook {
     StatuslineHook::new(crate::services::sync_engine::node_for_statusline(app))
@@ -46,7 +60,8 @@ fn needs_refresh(app: &AppHandle, provider: RateLimitProvider, force: bool) -> b
             .snapshots
             .get(&provider)
             .map(|(snapshot, at)| {
-                at.elapsed() > MAX_AGE || snapshot.live_failure.is_some_and(|failure| failure.is_pause())
+                at.elapsed() > max_age(provider)
+                    || snapshot.live_failure.is_some_and(|failure| failure.is_pause())
             })
             .unwrap_or(true)
 }
@@ -210,4 +225,22 @@ pub async fn enable_claude(app: &AppHandle) -> Result<Vec<ProviderRateLimit>, St
         let _ = app.emit("settings-updated", &settings);
     }
     Ok(after_settings_change(app).await)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn antigravity_is_reread_at_most_every_five_minutes() {
+        assert_eq!(max_age(RateLimitProvider::Antigravity), Duration::from_secs(300));
+        for provider in [
+            RateLimitProvider::Codex,
+            RateLimitProvider::ClaudeCode,
+            RateLimitProvider::KimiCode,
+            RateLimitProvider::Grok,
+        ] {
+            assert_eq!(max_age(provider), Duration::from_secs(60));
+        }
+    }
 }
