@@ -15,6 +15,7 @@ import {
   canonicalQuotaMeters,
   codexFiveHourPlaceholder,
   providerLabel,
+  quotaAuthorizationText,
   quotaEmptyStateText,
   quotaProvenanceText,
   quotaRetryableText,
@@ -232,7 +233,7 @@ function meterWindow(meter: RateLimitMeter): RateLimitWindow {
 function ProviderCard({ snapshot }: { snapshot: ProviderRateLimit }) {
   const state = useAppState();
   const name = providerLabel(snapshot.provider, state.quotaProducts);
-  const provenance = quotaProvenanceText(snapshot, name);
+  const provenance = quotaProvenanceText(snapshot);
   const fiveHourPlaceholder = codexFiveHourPlaceholder(snapshot);
 
   const rows: RowItem[] = canonicalQuotaMeters(snapshot.meters ?? []).map((meter) => ({
@@ -285,10 +286,10 @@ function ProviderCard({ snapshot }: { snapshot: ProviderRateLimit }) {
         <QuietText text={emptyStateText(snapshot, state)} />
       )}
       {snapshot.status.kind === "unauthorized" && (
-        <MessageContent text={unauthorizedText(snapshot.provider, state.settings.zCodeQuotaRegion, name)} />
+        <MessageContent text={quotaAuthorizationText(snapshot, state.settings.zCodeQuotaRegion)} />
       )}
       {snapshot.status.kind === "retryableError" && (
-        <MessageContent text={quotaRetryableText(snapshot, name)} />
+        <MessageContent text={quotaRetryableText(snapshot)} />
       )}
       {snapshot.status.kind === "error" && <MessageContent text={snapshot.status.message} />}
       {snapshot.status.kind === "ok" && foldedMeterCount > 0 && (
@@ -307,19 +308,6 @@ function ProviderCard({ snapshot }: { snapshot: ProviderRateLimit }) {
       {snapshot.status.kind === "ok" && <FreshnessNote snapshot={snapshot} />}
     </div>
   );
-}
-
-function unauthorizedText(provider: RateLimitProvider, region: "bigModel" | "zAI", label: string): string {
-  if (provider === "zcode") {
-    return `请在设置中配置 ${region === "bigModel" ? "BigModel" : "Z.ai"} API Key`;
-  }
-  if (provider === "kimi-code") return "请重新登录 Kimi Code 后重试";
-  // The key comes from OpenCode's own store; only OpenCode can re-issue it.
-  if (provider === "opencode-go") return "请在 OpenCode 中重新登录后重试";
-  // The CLI reports this both when no `agy` is installed and when it is
-  // signed out (same sentence as the macOS card).
-  if (provider === "antigravity") return "请安装 agy 并登录后重试";
-  return `请打开 ${label} 使用一次后重试`;
 }
 
 /** Local discovery result only — never a credential or network read. It

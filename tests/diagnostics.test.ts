@@ -136,13 +136,13 @@ describe("copyable diagnostics report", () => {
     expect(text).toContain("手动 · 超时，2m00s 时被 App 结束");
     expect(text).toContain("CLI 启动阶段失败（引导器连不上 npm 源）");
     expect(text).toContain("失败（服务器错误 502）");
-    expect(text).toContain("Claude  正常 · 2 个窗口 · Claude 配额读取超时 · 来源：缓存 · 数据 30 小时前");
+    expect(text).toContain("Claude  正常 · 2 个窗口 · 读取超时 · 来源：缓存 · 数据 30 小时前");
     expect(text).toContain("Kimi Code  需重新登录");
     expect(text).toContain(
-      "1）~\\.local\\bin\\claude.exe · initialize 0.9s · get_usage 超时 · Claude 配额读取超时 · 被 App 结束",
+      "1）~\\.local\\bin\\claude.exe · initialize 0.9s · get_usage 超时 · 读取超时 · 被 App 结束",
     );
     expect(text).toContain(
-      "2）PATH 上第 3 个（claude.cmd） → 包内 claude.exe · initialize 1.2s · get_usage 2.3s · Claude 没有返回额度窗口 · 退出码 0",
+      "2）PATH 上第 3 个（claude.cmd） → 包内 claude.exe · initialize 1.2s · get_usage 2.3s · 没有返回额度 · 退出码 0",
     );
     expect(text).toContain("回答：rate_limits_available true · 5h 无 · 7d 无 · 套餐 有 · error 有");
     expect(text).toContain("PATH 上的 claude.*：claude.exe ×1、claude ×1、claude.cmd ×1");
@@ -494,13 +494,13 @@ describe("Rust ↔ TypeScript diagnostics contract", () => {
       "定时 · 失败（服务器错误 502） · 2.0s",
       "手动 · 失败（Key 被服务器拒绝） · 1.5s",
       "定时 · 成功 · 18s",
-      "Claude  正常 · 1 个窗口 · Claude 配额读取超时 · 来源：缓存 · 数据 30 分钟前",
-      "Codex  无数据 · Codex 配额接口返回错误 502 · 来源：实时读取",
+      "Claude  正常 · 1 个窗口 · 读取超时 · 来源：缓存 · 数据 30 分钟前",
+      "Codex  无数据 · 接口报错 502 · 来源：实时读取",
       "OpenCode Go  无数据 · 未订阅 OpenCode Go",
       "当前候选及版本（复制时查询）：1）~\\.local\\bin\\claude.exe · 2.1.282；2）PATH 上第 3 个（claude.cmd） → 包内 claude.exe · 2.1.319",
       "（不含当时的版本）：桌面端记录：没有 · 找到候选 2 个，试了 2 个",
-      "1）~\\.local\\bin\\claude.exe · initialize 0.9s · get_usage 超时 · Claude 配额读取超时 · 被 App 结束",
-      "2）PATH 上第 3 个（claude.cmd） → 包内 claude.exe · initialize 1.2s · get_usage 2.3s · Claude 没有返回额度窗口 · 退出码 1 · 回答：rate_limits_available true · 5h 无 · 7d 无 · 套餐 有 · error 有",
+      "1）~\\.local\\bin\\claude.exe · initialize 0.9s · get_usage 超时 · 读取超时 · 被 App 结束",
+      "2）PATH 上第 3 个（claude.cmd） → 包内 claude.exe · initialize 1.2s · get_usage 2.3s · 没有返回额度 · 退出码 1 · 回答：rate_limits_available true · 5h 无 · 7d 无 · 套餐 有 · error 有",
       "PATH 上的 claude.*：claude.exe ×1、claude ×1、claude.cmd ×1",
       "ANTHROPIC/CLAUDE 开头的用户变量：ANTHROPIC_BASE_URL · settings.json 的 env：CLAUDE_CODE_USE_BEDROCK · CLAUDE_CONFIG_DIR 已设",
       "CLI 诊断（doctor，CLI 0.14.11）：",

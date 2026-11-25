@@ -122,6 +122,7 @@ pub fn run() {
             commands::trigger_sync,
             commands::get_sync_state,
             commands::get_rate_limits,
+            commands::get_cached_rate_limits,
             commands::enable_claude_rate_limit,
             commands::get_quota_products,
             commands::set_quota_product_selected,

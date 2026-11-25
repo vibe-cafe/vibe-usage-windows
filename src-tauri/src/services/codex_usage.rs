@@ -36,7 +36,7 @@ impl FetchError {
             Self::Unauthorized => RateLimitLiveFailure::CredentialsRejected,
             Self::TimedOut => RateLimitLiveFailure::EndpointTimedOut,
             Self::Unreachable => RateLimitLiveFailure::EndpointUnreachable,
-            Self::HttpStatus(status) => RateLimitLiveFailure::EndpointHttpStatus { status },
+            Self::HttpStatus(status) => RateLimitLiveFailure::EndpointHttpStatus { status: Some(status) },
             Self::BadResponse => RateLimitLiveFailure::EndpointUnrecognized,
             Self::Paused(pause) => pause.live_failure(),
         }
@@ -466,7 +466,7 @@ mod tests {
         assert_eq!(rejected.status, RateLimitStatus::Unauthorized);
         assert_eq!(
             after_live_failure(FetchError::HttpStatus(502), empty()).live_failure,
-            Some(RateLimitLiveFailure::EndpointHttpStatus { status: 502 })
+            Some(RateLimitLiveFailure::EndpointHttpStatus { status: Some(502) })
         );
     }
 

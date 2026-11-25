@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   canonicalQuotaMeters,
   codexFiveHourPlaceholder,
-  compactQuotaStatus,
+  quotaAuthorizationText,
   expectsCodexFiveHour,
   isZCodeConfigured,
   moveQuotaProduct,
@@ -21,55 +21,53 @@ import { ProviderRateLimit, QuotaProduct, RateLimitProvider } from "../src/lib/t
 describe("quota product presentation", () => {
   const grok: QuotaProduct = { provider: "grok", displayName: "Grok", availability: "ready", isDetected: true };
 
-  it("distinguishes a discovered unread product from a known no-data result", () => {
-    expect(quotaProductStatusText(grok)).toBe("已检测 · 未读取");
-    expect(quotaProductStatusText(grok, undefined, "bigModel", { provider: "grok", status: { kind: "noData" } })).toBe("已检测 · 无数据");
+  const enabled = ["grok"] as RateLimitProvider[];
+  const result = (extra: Partial<ProviderRateLimit>): ProviderRateLimit => ({
+    provider: "grok", status: { kind: "noData" }, ...extra,
+  });
+
+  it("distinguishes detection, an unread placeholder and a settled empty answer", () => {
+    expect(quotaProductStatusText(grok, enabled)).toBe("已检测");
+    expect(quotaProductStatusText({ ...grok, isDetected: false }, enabled)).toBe("未检测到");
+    expect(quotaProductStatusText(grok, enabled, result({}))).toBe("未读取");
+    expect(quotaProductStatusText(grok, enabled, result({ fetchedAt: 1 }))).toBe("无数据");
   });
 
   it.each([
-    ["ok", "读取成功"], ["disabled", "未启用"], ["unauthorized", "需重新登录"],
-    ["retryableError", "读取失败 · 可重试"], ["error", "读取失败"],
-  ] as const)("shows %s independently from discovery", (kind, label) => {
+    ["ok", "已检测"], ["disabled", "未启用"], ["unauthorized", "已失效"],
+    ["retryableError", "失败"], ["error", "出错"],
+  ] as const)("describes a settled %s", (kind, label) => {
     const status = kind === "error" ? { kind, message: "must not be displayed" } : { kind };
-    expect(quotaProductStatusText(grok, undefined, "bigModel", { provider: "grok", status })).toBe(`已检测 · ${label}`);
+    expect(quotaProductStatusText(grok, enabled, result({ status }))).toBe(label);
   });
 
-  it("does not borrow another card's status", () => {
-    expect(quotaProductStatusText(grok, undefined, "bigModel", { provider: "codex", status: { kind: "noData" } })).toBe("已检测 · 未读取");
+  it("shares the tab's enabled and refreshing gates and ignores other products", () => {
+    const failed = result({ liveFailure: { code: "programNotFound" } });
+    expect(quotaProductStatusText(grok, enabled, failed)).toBe("未安装");
+    expect(quotaProductStatusText(grok, [], failed)).toBe("已检测");
+    expect(quotaProductStatusText(grok, enabled, failed, true)).toBe("已检测");
+    expect(quotaProductStatusText(grok, enabled, { ...failed, provider: "codex" })).toBe("已检测");
+    expect(quotaProductStatusText(grok, enabled, { ...failed, status: { kind: "ok" } })).toBe("已检测");
   });
 
-  it("separates regional credentials from discovery", () => {
-    const product: QuotaProduct = { provider: "zcode", displayName: "ZCode", availability: "ready", isDetected: false };
-    const credentials = { bigModelConfigured: true, zAiConfigured: false };
-    expect(quotaProductStatusText(product, credentials, "zAI")).toBe("未检测到 · 需配置 API Key");
-    expect(quotaProductStatusText(product, credentials, "bigModel")).toBe("未检测到 · API Key 已配置 · 未读取");
+  it("keeps regional Key configuration unless there is a read warning", () => {
+    const product = { ...grok, provider: "zcode" } as const;
+    for (const configured of [false, true]) {
+      expect(quotaProductStatusText(product, [], undefined, false, configured)).toBe(configured ? "已配置" : "待配置");
+      for (const [code, label] of [["credentialsNotFound", "需 Key"], ["credentialsRejected", "Key 无效"]] as const) {
+        const snapshot = result({ provider: "zcode", status: { kind: "unauthorized" }, liveFailure: { code } });
+        expect(quotaProductStatusText(product, ["zcode"], snapshot, false, configured)).toBe(label);
+      }
+    }
+    const keys = { bigModelConfigured: true, zAiConfigured: false };
+    expect(isZCodeConfigured(keys, "bigModel")).toBe(true);
+    expect(isZCodeConfigured(keys, "zAI")).toBe(false);
   });
 
-  it("keeps pending protocol distinct from a disabled snapshot", () => {
-    expect(quotaProductStatusText({ ...grok, provider: "cursor", availability: "pendingProtocol" }, undefined, "bigModel", { provider: "cursor", status: { kind: "disabled" } })).toBe("已检测 · 待接入");
-  });
-
-  it("describes discovery separately from protocol readiness", () => {
-    const pending: QuotaProduct = {
-      provider: "cursor",
-      displayName: "Cursor",
-      availability: "pendingProtocol",
-      isDetected: true,
-    };
-    expect(quotaProductStatusText(pending)).toBe("已检测 · 待接入");
-  });
-
-  it("tracks ZCode regional credentials independently", () => {
-    const status = { bigModelConfigured: true, zAiConfigured: false };
-    expect(isZCodeConfigured(status, "bigModel")).toBe(true);
-    expect(isZCodeConfigured(status, "zAI")).toBe(false);
-  });
-
-  it("shortens a settings row to the one fact it can act on", () => {
-    expect(compactQuotaStatus("未检测到 · API Key 已配置 · 未读取")).toBe("已配置");
-    expect(compactQuotaStatus("已检测 · 需配置 API Key")).toBe("待配置");
-    expect(compactQuotaStatus("未检测到 · 需配置 API Key")).toBe("待配置");
-    expect(compactQuotaStatus("已检测 · 待接入")).toBe("已检测 · 待接入");
+  it("keeps Cursor's pending wording even with a disabled snapshot", () => {
+    const product = { ...grok, provider: "cursor", availability: "pendingProtocol" } as const;
+    expect(quotaProductStatusText(product, ["cursor"], result({ provider: "cursor", status: { kind: "disabled" } }))).toBe("已检测 · 待接入");
+    expect(quotaProductStatusText({ ...product, isDetected: false }, [])).toBe("待接入");
   });
 });
 
@@ -105,25 +103,25 @@ describe("empty quota card copy", () => {
 
   it("repeats the live source's own verdict when it reported one", () => {
     expect(quotaEmptyStateText(noData({ emptyReason: "limitReached" }), true)).toBe(
-      "本期订阅配额已用满 · 等待额度重置",
+      "额度已用满 · 等待重置",
     );
     expect(quotaEmptyStateText(noData({ emptyReason: "noWindow" }), true)).toBe(
-      "当前没有生效的额度窗口",
+      "没有生效的额度窗口",
     );
   });
 
   it("never borrows 「已用满」 for a source that cannot tell", () => {
     for (const snapshot of [noData({}), noData({ emptyReason: null })]) {
-      expect(quotaEmptyStateText(snapshot, true)).toBe("暂未读取到订阅配额数据");
-      expect(quotaEmptyStateText(snapshot, false)).toBe("未检测到本机安装或登录");
+      expect(quotaEmptyStateText(snapshot, true)).toBe("尚未读取");
+      expect(quotaEmptyStateText(snapshot, false)).toBe("尚未读取");
       expect(quotaEmptyStateText(snapshot, true)).not.toContain("已用满");
     }
   });
 
   it("separates a detected product from one that is not installed", () => {
-    const product: ProviderRateLimit = { provider: "grok", status: { kind: "noData" } };
-    expect(quotaEmptyStateText(product, true)).toBe("暂未读取到订阅配额数据");
-    expect(quotaEmptyStateText(product, false)).toBe("未检测到本机安装或登录");
+    const product: ProviderRateLimit = { provider: "grok", fetchedAt: 1, status: { kind: "noData" } };
+    expect(quotaEmptyStateText(product, true)).toBe("没读到额度，原因未知");
+    expect(quotaEmptyStateText(product, false)).toBe("未检测到安装");
   });
 });
 
@@ -216,8 +214,8 @@ describe("OpenCode Go login states", () => {
   it("leaves a subscription answer and other products' wording alone", () => {
     const notEntitled = snapshot({ emptyReason: "notEntitled", liveFailure: { code: "credentialsNotFound" } });
     expect(quotaEmptyStateText(notEntitled, true, false, "OpenCode Go")).toBe("未订阅 OpenCode Go");
-    expect(quotaFailureText({ code: "credentialsNotFound" }, "Codex", "codex")).toBe("未找到 Codex 登录信息");
-    expect(quotaFailureText({ code: "credentialsExpired" }, "Kimi Code", "kimi-code")).toBe("Kimi Code 登录已过期");
+    expect(quotaFailureText({ code: "credentialsNotFound" }, "codex")).toBe("未找到登录信息");
+    expect(quotaFailureText({ code: "credentialsExpired" }, "kimi-code")).toBe("登录已失效");
   });
 });
 
@@ -233,7 +231,7 @@ describe("empty state reasons", () => {
     expect(
       quotaEmptyStateText({ provider: "claudeCode", status: { kind: "noData" }, emptyReason: "sessionWithoutPlanLimits" },
         true),
-    ).toBe("当前登录方式不含订阅额度（API Key / Bedrock / Vertex）");
+    ).toBe("当前登录方式不含订阅额度");
   });
 
   it("names the organization's Claude Code policy instead of reading like a failure", () => {
@@ -258,9 +256,9 @@ describe("read failure reasons and sources", () => {
   it("states the Claude probe's own reason instead of a neutral empty line", () => {
     const missing = claude({ liveFailure: { code: "claudeBinaryNotFound" } });
     // Detected by a leftover ~/.claude but no program: the read says why.
-    expect(quotaEmptyStateText(missing, true, false, "Claude")).toBe("未找到 Claude Code 程序");
-    expect(quotaEmptyStateText(missing, true, false, "Claude")).not.toBe("暂未读取到订阅配额数据");
-    expect(quotaProvenanceText(missing, "Claude")).toBeNull();
+    expect(quotaEmptyStateText(missing, true, false, "Claude")).toBe("未找到 Claude Code");
+    expect(quotaEmptyStateText(missing, true, false, "Claude")).not.toBe("尚未读取");
+    expect(quotaProvenanceText(missing)).toBeNull();
   });
 
   it("names the failure and the channel on a retryable card", () => {
@@ -269,11 +267,12 @@ describe("read failure reasons and sources", () => {
       source: "live",
       liveFailure: { code: "claudeTimedOut" },
     });
-    expect(quotaRetryableText(timedOut, "Claude")).toBe("Claude 配额读取超时");
-    expect(quotaProvenanceText(timedOut, "Claude")).toBe("来源：实时读取");
-    // A retryable card from an older backend keeps the old wording.
-    expect(quotaRetryableText({ provider: "grok", status: { kind: "retryableError" } }, "Grok")).toBe(
-      "暂时无法读取订阅配额",
+    expect(quotaRetryableText(timedOut)).toBe("读取超时");
+    expect(quotaProvenanceText(timedOut)).toBe("来源：实时读取");
+    expect(quotaProvenanceText({ ...timedOut, source: "localLog" })).toBe("来源：本地日志");
+    expect(quotaProvenanceText({ ...timedOut, source: "cache" })).toBe("来源：缓存");
+    expect(quotaRetryableText({ provider: "grok", status: { kind: "retryableError" } })).toBe(
+      "暂时读不到额度",
     );
   });
 
@@ -283,14 +282,13 @@ describe("read failure reasons and sources", () => {
       source: "cache",
       liveFailure: { code: "claudeNoResponse" },
     });
-    expect(quotaProvenanceText(cached, "Claude")).toBe("来源：缓存 · Claude 没有响应配额请求");
+    expect(quotaProvenanceText(cached)).toBe("来源：缓存 · 没有响应");
     // A successful live card stays quiet, as on macOS.
-    expect(quotaProvenanceText(claude({ status: { kind: "ok" }, source: "live" }), "Claude")).toBeNull();
+    expect(quotaProvenanceText(claude({ status: { kind: "ok" }, source: "live" }))).toBeNull();
     // The CLI answering from its cache.
     expect(
       quotaProvenanceText(
         { provider: "grok", status: { kind: "ok" }, source: "cache", liveFailure: { code: "cliReportedFailure" } },
-        "Grok",
       ),
     ).toBe("来源：缓存 · 实时读取失败");
     // Codex session JSONL after the endpoint failed.
@@ -302,9 +300,8 @@ describe("read failure reasons and sources", () => {
           source: "localLog",
           liveFailure: { code: "endpointHttpStatus", status: 502 },
         },
-        "Codex",
       ),
-    ).toBe("来源：本地日志 · Codex 配额接口返回错误 502");
+    ).toBe("来源：本地日志 · 接口报错 502");
   });
 
   it("splits the Claude Desktop record into its specific reasons", () => {
@@ -322,7 +319,7 @@ describe("read failure reasons and sources", () => {
         liveFailure: { code: code as "desktopRecordStale" },
       });
       expect(quotaEmptyStateText(snapshot, true, false, "Claude")).toBe(text);
-      expect(quotaProvenanceText(snapshot, "Claude")).toBe(label);
+      expect(quotaProvenanceText(snapshot)).toBe(label);
     }
     // An older backend's Desktop snapshot without a reason keeps the old line.
     expect(quotaEmptyStateText(claude({ sourceLabel: label }), true)).toBe(
@@ -336,34 +333,34 @@ describe("read failure reasons and sources", () => {
         claude({ emptyReason: "sessionWithoutPlanLimits", liveFailure: { code: "claudeNoWindows" } }),
         true,
       ),
-    ).toBe("当前登录方式不含订阅额度（API Key / Bedrock / Vertex）");
+    ).toBe("当前登录方式不含订阅额度");
   });
 
-  it("uses the product name for endpoint and credential reasons", () => {
-    expect(quotaFailureText({ code: "credentialsNotFound" }, "Codex")).toBe("未找到 Codex 登录信息");
-    expect(quotaFailureText({ code: "endpointTimedOut" }, "Codex")).toBe("Codex 配额接口请求超时");
-    expect(quotaFailureText({ code: "endpointUnreachable" }, "Codex")).toBe("Codex 配额接口连接失败");
-    expect(quotaFailureText({ code: "cliTimedOut" }, "Kimi Code")).toBe("配额 CLI 读取超时");
-    expect(quotaFailureText({ code: "credentialStoreUnavailable" }, "ZCode")).toBe(
+  it("keeps endpoint and credential reasons short", () => {
+    expect(quotaFailureText({ code: "credentialsNotFound" }, "codex")).toBe("未找到登录信息");
+    expect(quotaFailureText({ code: "endpointTimedOut" }, "codex")).toBe("读取超时");
+    expect(quotaFailureText({ code: "endpointUnreachable" }, "codex")).toBe("连接失败");
+    expect(quotaFailureText({ code: "cliTimedOut" }, "kimi-code")).toBe("读取超时");
+    expect(quotaFailureText({ code: "credentialStoreUnavailable" }, "zcode")).toBe(
       "无法读取 Windows 凭据管理器",
     );
   });
 
   it("says why a read was paused in one line, with no retry", () => {
-    expect(quotaFailureText({ code: "egressRegionUnsupported", region: "CN" }, "Codex")).toBe(
+    expect(quotaFailureText({ code: "egressRegionUnsupported", region: "CN" }, "codex")).toBe(
       "网络出口在中国大陆，已暂停读取",
     );
-    expect(quotaFailureText({ code: "egressRegionUnsupported", region: "HK" }, "Claude")).toBe(
+    expect(quotaFailureText({ code: "egressRegionUnsupported", region: "HK" }, "claudeCode")).toBe(
       "网络出口在香港，已暂停读取",
     );
-    expect(quotaFailureText({ code: "egressRegionUnsupported", region: "MO" }, "Claude")).toBe(
+    expect(quotaFailureText({ code: "egressRegionUnsupported", region: "MO" }, "claudeCode")).toBe(
       "网络出口在澳门，已暂停读取",
     );
-    expect(quotaFailureText({ code: "egressRegionUnsupported", region: "Other" }, "Claude")).toBe(
+    expect(quotaFailureText({ code: "egressRegionUnsupported", region: "Other" }, "claudeCode")).toBe(
       "网络出口不在支持地区，已暂停读取",
     );
-    expect(quotaFailureText({ code: "egressUnconfirmed" }, "Codex")).toBe("无法确认网络出口，已暂停读取");
-    expect(quotaFailureText({ code: "proxyNotDetected" }, "Codex")).toBe("未检测到代理，已暂停读取");
+    expect(quotaFailureText({ code: "egressUnconfirmed" }, "codex")).toBe("无法确认网络出口，已暂停读取");
+    expect(quotaFailureText({ code: "proxyNotDetected" }, "codex")).toBe("未检测到代理，已暂停读取");
     const paused = { provider: "codex", status: { kind: "noData" }, liveFailure: { code: "egressUnconfirmed" } } as const;
     expect(quotaEmptyStateText(paused, true)).toBe("无法确认网络出口，已暂停读取");
     expect(
@@ -374,7 +371,6 @@ describe("read failure reasons and sources", () => {
           source: "localLog",
           liveFailure: { code: "egressRegionUnsupported", region: "CN" },
         },
-        "Codex",
       ),
     ).toBe("来源：本地日志 · 网络出口在中国大陆，已暂停读取");
     // The tab warns while those numbers are kept.
@@ -393,17 +389,110 @@ describe("read failure reasons and sources", () => {
 
   it("never echoes anything but the fixed wording", () => {
     const unknown = { code: "somethingNew" } as unknown as { code: "cliFailed" };
-    expect(quotaFailureText(unknown, "Grok")).toBe("暂时无法读取订阅配额");
+    expect(quotaFailureText(unknown, "grok")).toBe("暂时读不到额度");
   });
 
   it("keeps the re-login card free of extra lines", () => {
     expect(
       quotaProvenanceText(
         { provider: "codex", status: { kind: "unauthorized" }, source: "live", liveFailure: { code: "credentialsRejected" } },
-        "Codex",
       ),
     ).toBeNull();
   });
+});
+
+describe("quota status copy shared with macOS", () => {
+  it.each([
+    ["kimi-code", "credentialsNotFound", "请先登录 Kimi Code", "需登录"],
+    ["cursor", "credentialsNotFound", "请先登录 Cursor", "需登录"],
+    ["grok", "credentialsNotFound", "请先登录", "需登录"],
+    ["kimi-code", "credentialsRejected", "登录已失效，请重新登录", "已失效"],
+    ["codex", "credentialsRejected", "登录已失效，请重新登录", "已失效"],
+    ["opencode-go", "credentialsRejected", "请在 OpenCode 中重新登录后重试", "已失效"],
+    ["antigravity", "programNotFound", "请安装 agy 或 Antigravity", "未安装"],
+    ["antigravity", "credentialsRejected", "请在 Antigravity 中登录", "已失效"],
+    ["zcode", "credentialsNotFound", "请在设置中配置 Z.ai API Key", "需 Key"],
+    ["zcode", "credentialsRejected", "API Key 无效，请在设置中更换", "Key 无效"],
+  ] as const)("maps %s login state %s", (provider, code, card, short) => {
+    const snapshot = { provider, liveFailure: { code }, status: { kind: "unauthorized" } } as const;
+    expect(quotaAuthorizationText(snapshot, "zAI")).toBe(card);
+    expect(quotaProductStatusText({ provider, isDetected: true, displayName: provider, availability: "ready" },
+      [provider], snapshot)).toBe(short);
+    if (provider === "zcode" && code === "credentialsNotFound") {
+      expect(quotaAuthorizationText(snapshot, "bigModel")).toBe("请在设置中配置 BigModel API Key");
+    }
+  });
+
+  it.each([
+    ["grok", "periodEnded", "账期已结束 · 用一次 Grok 后更新", "待更新"],
+    ["antigravity", "periodEnded", "额度已重置 · 下次读取时更新", "待更新"],
+    ["codex", "periodEnded", "上个周期已结束", "待更新"],
+    ["grok", "noLocalRecord", "暂无记录 · 用一次 Grok 后更新", "无记录"],
+    ["antigravity", "noLocalRecord", "用过 Antigravity 后显示", "无记录"],
+    ["codex", "noLocalRecord", "本机暂无记录", "无记录"],
+    ["codex", "noWindow", "没有生效的额度窗口", "无窗口"],
+    ["codex", "limitReached", "额度已用满 · 等待重置", "已用满"],
+    ["claudeCode", "sessionWithoutPlanLimits", "当前登录方式不含订阅额度", "不适用"],
+    ["claudeCode", "nonessentialTrafficDisabled", "组织策略关闭了 Claude Code 非必要流量 · 无法读取", "已禁止"],
+    ["opencode-go", "notEntitled", "未订阅 OpenCode Go", "未订阅"],
+  ] as const)("maps %s empty result %s ahead of a live failure", (provider, emptyReason, card, short) => {
+    const snapshot = { provider, emptyReason, liveFailure: { code: "cliFailed" }, status: { kind: "noData" } } as const;
+    expect(quotaEmptyStateText(snapshot, false, false, "OpenCode Go")).toBe(card);
+    expect(quotaProductStatusText({ provider, isDetected: false, displayName: provider, availability: "ready" },
+      [provider], snapshot)).toBe(short);
+  });
+
+  it.each([
+    ["credentialsNotFound", "运行 grok login 后可实时读取", "需登录"],
+    ["credentialsRejected", "登录已失效", "已失效"],
+    ["credentialsUnreadable", "读不到登录信息", "读不了"],
+    ["credentialsEncrypted", "登录信息已加密，暂时读不了", "不支持"],
+    ["loginRefreshFailed", "登录续期失败", "续期失败"],
+    ["programNotFound", "未找到 Grok 命令行", "未安装"],
+    ["programOutdated", "版本较旧，升级后可实时读取", "需升级"],
+    ["programNoAnswer", "没有返回额度", "无响应"],
+    ["localRecordUnreadable", "读不了本机记录", "读不了"],
+    ["endpointTimedOut", "读取超时", "超时"],
+    ["endpointUnreachable", "连接失败", "连不上"],
+    ["endpointHttpStatus", "接口报错", "接口报错"],
+    ["endpointUnrecognized", "返回数据无法识别", "数据异常"],
+    ["cliFailed", "配额 CLI 出错", "CLI 出错"],
+    ["cliReportedFailure", "实时读取失败", "失败"],
+    ["cliSchemaMismatch", "配额 CLI 版本不兼容", "CLI 出错"],
+    ["cliRuntimeMissing", "缺少 Node.js", "缺 Node"],
+    ["cliNoResult", "配额 CLI 没有返回结果", "CLI 出错"],
+    ["cliUnrecognizedOutput", "配额 CLI 输出无法识别", "数据异常"],
+    ["claudeBinaryNotFound", "未找到 Claude Code", "未安装"],
+    ["claudeLaunchFailed", "启动失败", "启动失败"],
+    ["claudeNoResponse", "没有响应", "无响应"],
+    ["desktopRecordStale", "Claude 桌面端记录已过期", "已过期"],
+    ["desktopMixedOrganizations", "Claude 桌面端记录涉及多个组织，账号不明确", "不明确"],
+    ["desktopMultipleInstalls", "装了多份 Claude 桌面端，账号不明确", "不明确"],
+    ["desktopRecordUnreadable", "Claude 桌面端记录无法解析", "数据异常"],
+    ["credentialStoreUnavailable", "无法读取 Windows 凭据管理器", "读不了"],
+  ] as const)("maps %s on a failed read and on fallback numbers", (code, card, short) => {
+    const product = { provider: "grok", isDetected: true, displayName: "Grok", availability: "ready" } as const;
+    const snapshot = { provider: product.provider, liveFailure: { code }, status: { kind: "retryableError" } } as const;
+    expect(quotaRetryableText(snapshot)).toBe(card);
+    expect(quotaProductStatusText(product, ["grok"], snapshot)).toBe(short);
+    for (const [source, label] of [["localLog", "本地日志"], ["cache", "缓存"]] as const) {
+      const fallback = { ...snapshot, source, status: { kind: "ok" } } as const;
+      expect(quotaProvenanceText(fallback)).toBe(`来源：${label} · ${card}`);
+      expect(quotaProductStatusText(product, ["grok"], fallback)).toBe("已检测");
+    }
+  });
+
+  it.each(["proxyUnsupported", "proxyNotDetected", "egressUnconfirmed", "egressRegionUnsupported"] as const)(
+    "shows a paused row and tab even with local numbers for %s", (code) => {
+      const product = { provider: "grok", isDetected: true, displayName: "Grok", availability: "ready" } as const;
+      const snapshot = { provider: product.provider, liveFailure: { code }, source: "localLog", status: { kind: "ok" } } as const;
+      expect(quotaTabShowsWarning("grok", ["grok"], snapshot, false)).toBe(true);
+      expect(quotaProductStatusText(product, ["grok"], snapshot)).toBe("已暂停");
+      if (code === "proxyUnsupported") {
+        expect(quotaProvenanceText(snapshot)).toBe("来源：本地日志 · 代理无法照着走，已暂停读取");
+      }
+    },
+  );
 });
 
 describe("Codex 5h window expectation", () => {

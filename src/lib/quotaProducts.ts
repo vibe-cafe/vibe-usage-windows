@@ -94,119 +94,123 @@ export function isZCodeConfigured(
   return region === "bigModel" ? status.bigModelConfigured : status.zAiConfigured;
 }
 
+/** Only selected products with a settled warning replace the row's usual status. */
 export function quotaProductStatusText(
   product: QuotaProduct,
-  zCodeStatus?: ZCodeCredentialStatus,
-  zCodeRegion: ZCodeQuotaRegion = "bigModel",
+  enabled: RateLimitProvider[],
   snapshot?: ProviderRateLimit,
+  refreshing = false,
+  zCodeConfigured = false,
 ): string {
-  const detected = product.isDetected ? "已检测" : "未检测到";
-  if (product.provider === "zcode" && product.availability === "ready" && zCodeStatus) {
-    const configured = isZCodeConfigured(zCodeStatus, zCodeRegion);
-    if (!configured) return `${detected} · 需配置 API Key`;
-  }
   if (product.availability === "pendingProtocol") {
     return product.isDetected ? "已检测 · 待接入" : "待接入";
   }
-  // Never-requested products and another provider's snapshot are not no-data.
-  const result = snapshot?.provider === product.provider ? snapshot : undefined;
-  const reading = result ? {
-    ok: "读取成功",
-    noData: "无数据",
-    disabled: "未启用",
-    unauthorized: "需重新登录",
-    retryableError: "读取失败 · 可重试",
-    error: "读取失败",
-  }[result.status.kind] : "未读取";
-  const configured = product.provider === "zcode" && zCodeStatus && isZCodeConfigured(zCodeStatus, zCodeRegion);
-  return `${detected}${configured ? " · API Key 已配置" : ""} · ${reading}`;
-}
-
-/**
- * Settings rows show the one fact the row can act on instead of the full
- * selector status line. Mirrors SettingsView.compactQuotaStatus: wording this
- * map does not recognize passes through untouched instead of being invented.
- */
-export function compactQuotaStatus(status: string): string {
-  if (status.includes("已配置")) return "已配置";
-  if (status.includes("需配置") || status.includes("未检测到")) return "待配置";
-  return status;
-}
-
-/**
- * Fixed wording for each failure code. The same sentences as the macOS card
- * (RateLimitCardView) so a screenshot from either platform reads the same; the
- * Claude Desktop record and Credential Manager lines exist only on Windows.
- * An unknown code (a newer backend) falls back to a neutral sentence.
- */
-export function quotaFailureText(
-  failure: RateLimitLiveFailure,
-  providerName: string,
-  provider?: RateLimitProvider,
-): string {
-  switch (failure.code) {
-    case "claudeBinaryNotFound":
-      return "未找到 Claude Code 程序";
-    case "claudeLaunchFailed":
-      return "Claude 启动失败";
-    case "claudeTimedOut":
-      return "Claude 配额读取超时";
-    case "claudeNoResponse":
-      return "Claude 没有响应配额请求";
-    case "claudeNoWindows":
-      return "Claude 没有返回额度窗口";
-    case "desktopRecordStale":
-      return "Claude 桌面端记录已过期";
-    case "desktopMultipleInstalls":
-      return "装了多份 Claude 桌面端，账号不明确";
-    case "desktopMixedOrganizations":
-      return "Claude 桌面端记录涉及多个组织，账号不明确";
-    case "desktopRecordUnreadable":
-      return "Claude 桌面端记录无法解析";
-    case "credentialsNotFound":
-      // OpenCode Go has no login of its own here: the card reads OpenCode's.
-      if (provider === "opencode-go") return "在 OpenCode 里登录后自动显示";
-      return `未找到 ${providerName} 登录信息`;
-    case "credentialsRejected":
-      return `${providerName} 登录已失效`;
-    case "credentialsExpired":
-      if (provider === "opencode-go") return "打开 OpenCode 后自动显示";
-      return `${providerName} 登录已过期`;
-    case "endpointTimedOut":
-      return `${providerName} 配额接口请求超时`;
-    case "endpointUnreachable":
-      return `${providerName} 配额接口连接失败`;
-    case "endpointHttpStatus":
-      return failure.status != null
-        ? `${providerName} 配额接口返回错误 ${failure.status}`
-        : `${providerName} 配额接口返回错误`;
-    case "endpointUnrecognized":
-      return `${providerName} 配额接口返回了无法识别的数据`;
-    case "credentialStoreUnavailable":
-      return "无法读取 Windows 凭据管理器";
-    case "cliRuntimeMissing":
-      return "未找到 Node.js 或 Bun";
-    case "cliTimedOut":
-      return "配额 CLI 读取超时";
-    case "cliFailed":
-      return "配额 CLI 运行失败";
-    case "cliUnrecognizedOutput":
-      return "配额 CLI 返回了无法识别的数据";
-    case "cliSchemaMismatch":
-      return "配额 CLI 协议版本不兼容";
-    case "cliNoResult":
-      return "配额 CLI 没有返回这个产品";
-    case "cliReportedFailure":
-      return "实时读取失败";
-    case "egressRegionUnsupported":
-      return `网络出口${egressPlace(failure.region)}，已暂停读取`;
-    case "egressUnconfirmed":
-      return "无法确认网络出口，已暂停读取";
-    case "proxyNotDetected":
-      return "未检测到代理，已暂停读取";
-    default:
-      return "暂时无法读取订阅配额";
+  const provider = product.provider;
+  if (snapshot && quotaTabShowsWarning(provider, enabled, snapshot, refreshing)) {
+    const reason = snapshot.liveFailure && failureCopy(snapshot.liveFailure, provider)[1];
+    switch (snapshot.status.kind) {
+      case "unauthorized":
+        if (reason) return reason;
+        if (provider === "zcode") return zCodeConfigured ? "Key 无效" : "需 Key";
+        return provider === "opencode-go" ? "需登录" : "已失效";
+      case "noData":
+        if (snapshot.emptyReason) {
+          return {
+            notEntitled: "未订阅",
+            sessionWithoutPlanLimits: "不适用",
+            nonessentialTrafficDisabled: "已禁止",
+            limitReached: "已用满",
+            noWindow: "无窗口",
+            periodEnded: "待更新",
+            noLocalRecord: "无记录",
+          }[snapshot.emptyReason];
+        }
+        return reason ?? (snapshot.fetchedAt == null ? "未读取" : "无数据");
+      case "retryableError": return reason ?? "失败";
+      case "disabled": return "未启用";
+      case "error": return "出错";
+      case "ok": return "已暂停";
+    }
   }
+  if (provider === "zcode") return zCodeConfigured ? "已配置" : "待配置";
+  return product.isDetected ? "已检测" : "未检测到";
+}
+
+/** Keep the card sentence and its settings short form together. */
+function failureCopy(
+  failure: RateLimitLiveFailure,
+  provider: RateLimitProvider,
+): [card: string, settings: string] {
+  switch (failure.code) {
+    case "claudeBinaryNotFound": return ["未找到 Claude Code", "未安装"];
+    case "claudeLaunchFailed": return ["启动失败", "启动失败"];
+    case "endpointTimedOut":
+    case "cliTimedOut":
+    case "claudeTimedOut": return ["读取超时", "超时"];
+    case "claudeNoResponse": return ["没有响应", "无响应"];
+    case "programNoAnswer":
+    case "claudeNoWindows": return ["没有返回额度", "无响应"];
+    case "desktopRecordStale": return ["Claude 桌面端记录已过期", "已过期"];
+    case "desktopMultipleInstalls": return ["装了多份 Claude 桌面端，账号不明确", "不明确"];
+    case "desktopMixedOrganizations": return ["Claude 桌面端记录涉及多个组织，账号不明确", "不明确"];
+    case "desktopRecordUnreadable": return ["Claude 桌面端记录无法解析", "数据异常"];
+    case "credentialsNotFound":
+      if (provider === "opencode-go") return ["在 OpenCode 里登录后自动显示", "需登录"];
+      if (provider === "grok") return ["运行 grok login 后可实时读取", "需登录"];
+      return ["未找到登录信息", provider === "zcode" ? "需 Key" : "需登录"];
+    case "credentialsExpired":
+      if (provider === "opencode-go") return ["打开 OpenCode 后自动显示", "需打开"];
+      return ["登录已失效", "已失效"];
+    case "credentialsRejected": return ["登录已失效", provider === "zcode" ? "Key 无效" : "已失效"];
+    case "credentialsUnreadable": return ["读不到登录信息", "读不了"];
+    case "credentialsEncrypted": return ["登录信息已加密，暂时读不了", "不支持"];
+    case "loginRefreshFailed": return ["登录续期失败", "续期失败"];
+    case "programNotFound":
+      if (provider === "antigravity") return ["请安装 agy 或 Antigravity", "未安装"];
+      if (provider === "grok") return ["未找到 Grok 命令行", "未安装"];
+      return ["未找到程序", "未安装"];
+    case "programOutdated": return ["版本较旧，升级后可实时读取", "需升级"];
+    case "localRecordUnreadable": return ["读不了本机记录", "读不了"];
+    case "endpointUnreachable": return ["连接失败", "连不上"];
+    case "endpointHttpStatus":
+      return [failure.status == null ? "接口报错" : `接口报错 ${failure.status}`, "接口报错"];
+    case "endpointUnrecognized": return ["返回数据无法识别", "数据异常"];
+    case "credentialStoreUnavailable": return ["无法读取 Windows 凭据管理器", "读不了"];
+    case "cliRuntimeMissing": return ["缺少 Node.js", "缺 Node"];
+    case "cliFailed": return ["配额 CLI 出错", "CLI 出错"];
+    case "cliUnrecognizedOutput": return ["配额 CLI 输出无法识别", "数据异常"];
+    case "cliSchemaMismatch": return ["配额 CLI 版本不兼容", "CLI 出错"];
+    case "cliNoResult": return ["配额 CLI 没有返回结果", "CLI 出错"];
+    case "cliReportedFailure": return ["实时读取失败", "失败"];
+    case "egressRegionUnsupported": return [`网络出口${egressPlace(failure.region)}，已暂停读取`, "已暂停"];
+    case "egressUnconfirmed": return ["无法确认网络出口，已暂停读取", "已暂停"];
+    case "proxyNotDetected": return ["未检测到代理，已暂停读取", "已暂停"];
+    case "proxyUnsupported": return ["代理无法照着走，已暂停读取", "已暂停"];
+    default: return ["暂时读不到额度", "失败"];
+  }
+}
+
+export function quotaFailureText(failure: RateLimitLiveFailure, provider: RateLimitProvider): string {
+  return failureCopy(failure, provider)[0];
+}
+
+export function quotaAuthorizationText(snapshot: ProviderRateLimit, region: ZCodeQuotaRegion): string {
+  const { provider, liveFailure } = snapshot;
+  const missing = liveFailure?.code === "credentialsNotFound";
+  if (liveFailure && !missing && liveFailure.code !== "credentialsRejected") {
+    return quotaFailureText(liveFailure, provider);
+  }
+  switch (provider) {
+    case "zcode":
+      return missing
+        ? `请在设置中配置 ${region === "bigModel" ? "BigModel" : "Z.ai"} API Key`
+        : "API Key 无效，请在设置中更换";
+    case "opencode-go": return "请在 OpenCode 中重新登录后重试";
+    case "antigravity": return "请在 Antigravity 中登录";
+    case "kimi-code": if (missing) return "请先登录 Kimi Code"; break;
+    case "cursor": if (missing) return "请先登录 Cursor"; break;
+  }
+  return missing ? "请先登录" : "登录已失效，请重新登录";
 }
 
 /** Where an unsupported egress is, in the card's words (same as macOS). */
@@ -256,29 +260,38 @@ export function quotaEmptyStateText(
   const name = providerName ?? snapshot.provider;
   switch (snapshot.emptyReason) {
     case "limitReached":
-      return "本期订阅配额已用满 · 等待额度重置";
+      return "额度已用满 · 等待重置";
     case "noWindow":
-      return "当前没有生效的额度窗口";
+      return "没有生效的额度窗口";
     case "notEntitled":
       // The account answered; it simply has no subscription. Name the product
       // so the line is actionable instead of looking like a broken read.
       return `未订阅 ${name}`;
     case "sessionWithoutPlanLimits":
-      return "当前登录方式不含订阅额度（API Key / Bedrock / Vertex）";
+      return "当前登录方式不含订阅额度";
+    case "periodEnded":
+      if (snapshot.provider === "grok") return "账期已结束 · 用一次 Grok 后更新";
+      if (snapshot.provider === "antigravity") return "额度已重置 · 下次读取时更新";
+      return "上个周期已结束";
+    case "noLocalRecord":
+      if (snapshot.provider === "grok") return "暂无记录 · 用一次 Grok 后更新";
+      if (snapshot.provider === "antigravity") return "用过 Antigravity 后显示";
+      return "本机暂无记录";
     case "nonessentialTrafficDisabled":
       return "组织策略关闭了 Claude Code 非必要流量 · 无法读取";
   }
-  if (snapshot.liveFailure) return quotaFailureText(snapshot.liveFailure, name, snapshot.provider);
+  if (snapshot.liveFailure) return quotaFailureText(snapshot.liveFailure, snapshot.provider);
   // A Desktop record from an older backend that did not name its reason.
   if (snapshot.sourceLabel) return "桌面额度记录缺失、过期或账号不明确";
-  return isDetected ? "暂未读取到订阅配额数据" : "未检测到本机安装或登录";
+  if (snapshot.fetchedAt == null) return "尚未读取";
+  return isDetected ? "没读到额度，原因未知" : "未检测到安装";
 }
 
 /** First line of a retryable card: the fixed reason when the read named one. */
-export function quotaRetryableText(snapshot: ProviderRateLimit, providerName: string): string {
+export function quotaRetryableText(snapshot: ProviderRateLimit): string {
   return snapshot.liveFailure
-    ? quotaFailureText(snapshot.liveFailure, providerName, snapshot.provider)
-    : "暂时无法读取订阅配额";
+    ? quotaFailureText(snapshot.liveFailure, snapshot.provider)
+    : "暂时读不到额度";
 }
 
 /**
@@ -287,23 +300,16 @@ export function quotaRetryableText(snapshot: ProviderRateLimit, providerName: st
  * why; a retryable card names the channel that failed; Claude Desktop keeps
  * its own fixed label. Re-login cards and empty states add nothing here.
  */
-export function quotaProvenanceText(
-  snapshot: ProviderRateLimit,
-  providerName: string,
-): string | null {
+export function quotaProvenanceText(snapshot: ProviderRateLimit): string | null {
   if (snapshot.sourceLabel) return snapshot.sourceLabel;
-  if (!snapshot.source) return null;
-  const source = `来源：${quotaSourceText(snapshot.source)}`;
-  switch (snapshot.status.kind) {
-    case "ok":
-      return snapshot.liveFailure
-        ? `${source} · ${quotaFailureText(snapshot.liveFailure, providerName, snapshot.provider)}`
-        : null;
-    case "retryableError":
-      return source;
-    default:
-      return null;
+  if (snapshot.status.kind === "retryableError") {
+    return `来源：${quotaSourceText(snapshot.source ?? "live")}`;
   }
+  if (snapshot.status.kind !== "ok" || !snapshot.liveFailure) return null;
+  const reason = quotaFailureText(snapshot.liveFailure, snapshot.provider);
+  if (!snapshot.source) return reason;
+  const source = snapshot.source === "live" ? "上次实时读取" : quotaSourceText(snapshot.source);
+  return `来源：${source} · ${reason}`;
 }
 
 /**
@@ -422,17 +428,18 @@ export function quotaTabShowsWarning(
 ): boolean {
   if (isRefreshing) return false;
   if (!enabled.includes(provider)) return false;
-  if (!snapshot) return false;
+  if (snapshot?.provider !== provider) return false;
   // Numbers kept on the card while the egress check pauses the read still
   // warn: they are not being refreshed (same as macOS).
-  return snapshot.status.kind !== "ok" || isEgressPause(snapshot.liveFailure);
+  return snapshot.status.kind !== "ok" || isQuotaPause(snapshot.liveFailure);
 }
 
-/** A read paused by the egress check (`egress_check.rs`). */
-export function isEgressPause(failure?: RateLimitLiveFailure | null): boolean {
+/** A read paused by an egress check or the CLI's proxy guard. */
+export function isQuotaPause(failure?: RateLimitLiveFailure | null): boolean {
   return (
     failure?.code === "egressRegionUnsupported" ||
     failure?.code === "egressUnconfirmed" ||
-    failure?.code === "proxyNotDetected"
+    failure?.code === "proxyNotDetected" ||
+    failure?.code === "proxyUnsupported"
   );
 }

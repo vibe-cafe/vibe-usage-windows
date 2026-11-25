@@ -11,7 +11,9 @@ test("published CLI returns the quota contract without inherited account credent
   const root = mkdtempSync(join(tmpdir(), "vibe-windows-quota-"));
   try {
     const env: NodeJS.ProcessEnv = {
-      PATH: process.env.PATH,
+      PATH: root,
+      HOME: root,
+      USERPROFILE: root,
       SystemRoot: process.env.SystemRoot,
       WINDIR: process.env.WINDIR,
       TEMP: root,

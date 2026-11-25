@@ -472,7 +472,7 @@ mod tests {
             json!({"code": "desktopMultipleInstalls"})
         );
         assert_eq!(
-            serde_json::to_value(RateLimitLiveFailure::EndpointHttpStatus { status: 502 }).unwrap(),
+            serde_json::to_value(RateLimitLiveFailure::EndpointHttpStatus { status: Some(502) }).unwrap(),
             json!({"code": "endpointHttpStatus", "status": 502})
         );
         assert_eq!(

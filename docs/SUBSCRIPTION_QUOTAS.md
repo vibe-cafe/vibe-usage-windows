@@ -37,11 +37,11 @@ Codex 付费套餐（Plus / Pro / Prolite / Business / Business ProLite）没有
 - **App 这边。** AGY 卡片的重读间隔是 5 分钟（`rate_limits.rs` 的 `ANTIGRAVITY_MAX_AGE`），窗口可见时的 60 秒定时轮到 AGY 不满 5 分钟就不调 CLI；手动刷新照样调 CLI，问不问由 CLI 决定。设置里 AGY 那一行多一行灰字「Google 表示不支持第三方读取额度」（`quotaProductNote`，与 macOS 一致）。
 - CLI 给这一轮最多 20 秒，在 App 30 秒的 CLI 总预算以内；它和 Kimi / ZCode / Grok / OpenCode Go 同一批读取，最慢的一个决定这一批什么时候回来（与 macOS 相同）。
 
-- CLI 找 `agy.exe` 的顺序：`ANTIGRAVITY_CLI_PATH`（测试用）→ `~\.local\bin\agy.exe` → PATH 上的 `agy.exe` → 官方安装位置 `%LOCALAPPDATA%\agy\bin\agy.exe`。最后一项由 vibe-cafe/vibe-usage#176 加入（要等它发到 npm 才生效）；官方文档（antigravity.google/docs/getting-started）和安装脚本 `install.ps1` / `install.cmd` 都装到这里，要等 `agy install` 改了用户环境变量才进 PATH，而开机自启、一直挂在托盘的 App 看不到之后改的 PATH（App 把自己启动时的 PATH 传给 CLI）。CLI 发版前，agy 不在 App 的 PATH 上时卡片会显示「请安装 agy 并登录后重试」。
+- CLI 找 `agy.exe` 的顺序：`ANTIGRAVITY_CLI_PATH`（测试用）→ `~\.local\bin\agy.exe` → PATH 上的 `agy.exe` → 官方安装位置 `%LOCALAPPDATA%\agy\bin\agy.exe`。最后一项由 vibe-cafe/vibe-usage#176 加入（要等它发到 npm 才生效）；官方文档（antigravity.google/docs/getting-started）和安装脚本 `install.ps1` / `install.cmd` 都装到这里，要等 `agy install` 改了用户环境变量才进 PATH，而开机自启、一直挂在托盘的 App 看不到之后改的 PATH（App 把自己启动时的 PATH 传给 CLI）。CLI 发版前，agy 不在 App 的 PATH 上时卡片会显示「请安装 agy 或 Antigravity」。
 - 代理（`src-tauri/src/system_proxy.rs`）：每次 CLI 运行都按当下的系统代理（手动代理、按协议分开的写法、例外列表、PAC 由 WinHTTP 求值）给出 `HTTPS_PROXY` / `HTTP_PROXY` 和 `NODE_USE_ENV_PROXY=1`；只开 SOCKS 时传 `socks5://` 并把开关设为 `0`；PAC 求值失败时，系统里同时开着手动代理就用手动代理（和 Windows 自己一样），否则指向一个关闭的本机端口，让请求失败而不是直连；App 自己的环境里已有代理变量（含 `ALL_PROXY`）时沿用它，不注入系统代理。Node 22.21+/24 在这种环境下连 `127.0.0.1` 也会交给代理，代理不在本机或 Clash 走全局模式时就读不到额度，所以 `NO_PROXY` 总会并进 `localhost,127.0.0.1,::1`（大小写两种写法合并，保留用户原有的条目，`*` 保持原样），同步、配额、诊断都经过 `sync_engine::cli_command` 这一处；CLI 发往 agy 的请求自己也不走代理（vibe-cafe/vibe-usage#176）。
 - 只认 `agy.exe`，不认 `.cmd` / `.bat`：官方渠道只发 exe；Node 不经 shell 启动不了 `.cmd`；有报道说 Antigravity 桌面端也会注册 `agy` 这个命令名，那种启动器会打开桌面端，而不是读额度。
 - App 的「已检测」（`quota_product.rs`）：`~\.gemini\antigravity-cli`、`~\.gemini\antigravity`、上面两个固定位置（`quota_product::antigravity_cli_paths`，与 CLI 的 `antigravityInstallPaths()` 是同一份列表，改一边要改另一边）、PATH 上的 `agy`（按 PATHEXT，和其他产品一样）、桌面端 `Programs\Antigravity\Antigravity.exe`（Antigravity 2.0 桌面端和 1.x IDE 共用）和 `Programs\Antigravity IDE\Antigravity IDE.exe`（2.x 独立 IDE），根目录是 `%LOCALAPPDATA%`、`%LOCALAPPDATA%\Programs` 和 Program Files。官方文档没写桌面端装在哪，这两个位置来自 Google AI 开发者论坛的用户报告，是推断。只装了桌面端或 IDE、没装 agy 也算「已检测」（macOS 认 `Antigravity.app` 也是这样），首次启动会勾上，卡片提示去装 agy。
-- 卡片：显示名「Antigravity / AGY」。CLI 只给一个模型组的 5h / 7d（有 Gemini 组时取 Gemini）。没找到 agy 或没登录 → CLI 报 `missing_credentials` / `unauthorized` →「请安装 agy 并登录后重试」+ 重试；agy 起不来或连不上 → `retryable_error` →「暂时无法读取订阅配额」+ 重试；读失败但手上有上次的数 → 显示旧数，来源标缓存、「实时读取失败」。
+- Antigravity / AGY 卡片显示一个模型组的 5h / 7d（优先 Gemini）。`programNotFound` 或旧 CLI 的 `missing_credentials` 显示「请安装 agy 或 Antigravity」，登录被拒显示「请在 Antigravity 中登录」。`programNoAnswer` 显示「没有返回额度」。有缓存时保留额度条，在下面写「来源：缓存 · 没有返回额度」。
 
 ## 出口检测（网络隐私最高原则第 3 条，2026-11-24）
 
@@ -49,22 +49,42 @@ Codex 付费套餐（Plus / Pro / Prolite / Business / Business ProLite）没有
 
 ## 空态判定（不猜）
 
-卡片的空态文案只复述数据源真正报告过的内容：刷新在途 →「正在读取订阅配额…」；Codex 实时用量接口的 `allowed:false` / `limit_reached:true` →「本期订阅配额已用满 · 等待额度重置」；同一接口应答但没有生效窗口 →「当前没有生效的额度窗口」；OpenCode Go 用量接口对没有 Go 订阅的 Key 返回 403 →「未订阅 OpenCode Go」；Claude Code 应答 `rate_limits_available:false`（API Key / Bedrock / Vertex 登录，配额窗口本就不适用）→「当前登录方式不含订阅额度（API Key / Bedrock / Vertex）」；组织的托管设置强制关闭 Claude Code 非必要流量 →「组织策略关闭了 Claude Code 非必要流量 · 无法读取」（App 没有启动 Claude Code）；读取本身得出了失败原因 → 直接显示该固定原因（见下一节，如「未找到 Claude Code 程序」「Claude 桌面端记录已过期」）；本机检测到产品、没有原因也尚无数据 →「暂未读取到订阅配额数据」；本机未安装/未登录 →「未检测到本机安装或登录」。`limit_reached` 与 `allowed` 都缺失时 `empty_reason` 保持 `None`（`RateLimitEmptyReason`）；CLI 桥只在 CLI 报告 `emptyReason` 时透传该字段（缺失/`null` 是当前快照的正常路径，未知取值丢弃，均保持 `None`），本地日志与缓存不填该字段，因此前端不会替任何来源断言「已用满」。
+刷新在途显示「正在读取订阅配额…」。读取结束后优先显示数据源给出的 `emptyReason`，其次显示固定的 `liveFailure`。两者都没有时，首次读取前的占位显示「尚未读取」。有读取时间的快照按本机检测结果显示「没读到额度，原因未知」或「未检测到安装」。
 
-CLI 是独立版本的依赖：应用不再内置 CLI 快照，每次都通过 `src-tauri/resources/cli-bootstrap.mjs` 运行 npm 上的 `latest`（见 `docs/PARITY.md`「CLI Windows 适配」）。应用 discovery 包含 Windows 安装位置等平台规则，不能把它与 CLI 的跨平台 discovery 当成完全等价。OpenCode Go 的配额由 CLI 读取，凭据也由 CLI 负责：2.x 凭据表的 `opencode-go`、`opencode`（OpenCode 账号登录或服务账号 Key）两项 → 1.x `auth.json` 的 `opencode-go`、`opencode` 两项（2026-11-24 起；此前只读 `opencode-go` 行和 `auth.json` 的 `opencode`，OpenCode 2.4 起的新用户和 1.x 按官方文档登录的用户都会被当成没登录）。CLI 0.13.1 起，没有 Go 订阅的 Key 在 403 时带机器可读的 `emptyReason: notEntitled`，桥接按可选字段解析，卡片显示「未订阅 OpenCode Go」。桥接对 OpenCode Go 单独处理两种登录状态（卡片文案与 macOS 一致）：CLI 报 `missing_credentials` → 无数据 + `credentialsNotFound`，卡片「在 OpenCode 里登录后自动显示」；`expired_credentials`（账号登录过期，CLI 不续期、不发请求）→ 无数据 + `credentialsExpired`，卡片「打开 OpenCode 后自动显示」；`unauthorized`（OpenCode 拒绝了登录）仍是「请在 OpenCode 中重新登录后重试」。其他 CLI 产品的映射不变。设置窗口只拿得到本机检测结果、拿不到面板的读取结果，所以这里的状态列不像 macOS 那样显示「需登录 OpenCode」「需打开 OpenCode」（原有差距，未改）。
+| 原因 | 卡片 | 设置 |
+|---|---|---|
+| `limitReached`（Codex 接口报告已用满） | 额度已用满 · 等待重置 | 已用满 |
+| `noWindow` | 没有生效的额度窗口 | 无窗口 |
+| `notEntitled`（如 OpenCode Go 无订阅） | 未订阅 <产品名> | 未订阅 |
+| `sessionWithoutPlanLimits`（Claude Code 返回 `rate_limits_available:false`） | 当前登录方式不含订阅额度 | 不适用 |
+| `periodEnded` | Grok「账期已结束 · 用一次 Grok 后更新」，AGY「额度已重置 · 下次读取时更新」，其他产品「上个周期已结束」 | 待更新 |
+| `noLocalRecord` | Grok「暂无记录 · 用一次 Grok 后更新」，AGY「用过 Antigravity 后显示」，其他产品「本机暂无记录」 | 无记录 |
+| 应用本地的 `nonessentialTrafficDisabled` | 组织策略关闭了 Claude Code 非必要流量 · 无法读取 | 已禁止 |
+
+CLI 的六种空态代码见 `quota_cli.rs`。字段缺失、为 `null` 或代码未知时，桥接层保留 `None`。
+
+CLI 是独立版本的依赖：应用不再内置 CLI 快照，每次都通过 `src-tauri/resources/cli-bootstrap.mjs` 运行 npm 上的 `latest`（见 `docs/PARITY.md`「CLI Windows 适配」）。应用 discovery 包含 Windows 安装位置等平台规则，不能把它与 CLI 的跨平台 discovery 当成完全等价。OpenCode Go 的配额由 CLI 读取，凭据也由 CLI 负责：2.x 凭据表的 `opencode-go`、`opencode`（OpenCode 账号登录或服务账号 Key）两项 → 1.x `auth.json` 的 `opencode-go`、`opencode` 两项（2026-11-24 起；此前只读 `opencode-go` 行和 `auth.json` 的 `opencode`，OpenCode 2.4 起的新用户和 1.x 按官方文档登录的用户都会被当成没登录）。CLI 0.13.1 起，没有 Go 订阅的 Key 在 403 时带机器可读的 `emptyReason: notEntitled`，桥接按可选字段解析，卡片显示「未订阅 OpenCode Go」。桥接对 OpenCode Go 单独处理两种登录状态（卡片文案与 macOS 一致）：CLI 报 `missing_credentials` → 无数据 + `credentialsNotFound`，卡片「在 OpenCode 里登录后自动显示」；`expired_credentials`（账号登录过期，CLI 不续期、不发请求）→ 无数据 + `credentialsExpired`，卡片「打开 OpenCode 后自动显示」；`unauthorized`（OpenCode 拒绝了登录）仍是「请在 OpenCode 中重新登录后重试」。其他 CLI 产品也区分缺少凭据和登录失效。Kimi 缺少登录显示「请先登录 Kimi Code」，失效显示「登录已失效，请重新登录」。ZCode 按区域提示配置 BigModel / Z.ai API Key，被拒时显示「API Key 无效，请在设置中更换」。
 
 ## 失败原因和来源（不放原文）
 
 2026-11-09 起（一键诊断方案 1a），读取已经得出的失败原因不再只写进看不到的 `log::debug!`，而是作为固定代码带到卡片上。代码与 macOS `ProviderRateLimit.LiveFailure` 共用，文案在 `src/lib/quotaProducts.ts:quotaFailureText`，与 macOS 卡片一致。只传分类，不传任何原文：Claude Code 的 stderr、启动错误文本、HTTP 响应正文、CLI 的 `message` 都不保留。
 
-- Claude 实时读取：未找到 Claude Code 程序 / Claude 启动失败 / Claude 配额读取超时 / Claude 没有响应配额请求（进程退出、关闭输出或应答不成功）/ Claude 没有返回额度窗口（应答了，但 `rate_limits` 为空或没有可用窗口）。
+- Claude 实时读取的固定原因是「未找到 Claude Code」「启动失败」「读取超时」「没有响应」「没有返回额度」。
 - Claude 桌面端记录（仅 Windows，原先统一显示「桌面额度记录缺失、过期或账号不明确」）：Claude 桌面端记录已过期（最新样本超过 24 小时）/ 装了多份 Claude 桌面端，账号不明确（包后缀不同，或普通安装与 MSIX 包同时有记录；同一个包的新旧目录不算）/ Claude 桌面端记录涉及多个组织，账号不明确（同一份记录里 `org` 不一致；同一账号在个人组织和 Team 组织之间切换也会这样，所以只说组织不同，不断言换过账号）/ Claude 桌面端记录无法解析（读不了、超过 2 MB、格式或版本不符、窗口值非法、时间戳在未来）。
-- Codex 实时接口：未找到 Codex 登录信息 / Codex 登录已失效 / Codex 配额接口请求超时 / Codex 配额接口连接失败 / Codex 配额接口返回错误 {状态码} / Codex 配额接口返回了无法识别的数据。
-- 配额 CLI 整体失败：未找到 Node.js 或 Bun / 配额 CLI 读取超时 / 配额 CLI 运行失败 / 配额 CLI 返回了无法识别的数据 / 配额 CLI 协议版本不兼容 / 配额 CLI 没有返回这个产品。ZCode 读不了 Windows 凭据管理器时是「无法读取 Windows 凭据管理器」。CLI 单个产品以 `source: "cache"` 作答，说明它的实时读取已失败；具体原因只在 `message` 原文里，卡片只说「实时读取失败」。
+- 接口或凭据失败使用「读取超时」「连接失败」「接口报错 502」（无数字时为「接口报错」）「返回数据无法识别」「未找到登录信息」「登录已失效」。CLI 还能区分读不到登录信息、登录信息已加密、登录续期失败、找不到程序、版本较旧、程序没有返回额度和读不了本机记录。
+- CLI 调用本身可能显示「缺少 Node.js」「读取超时」「配额 CLI 出错」「配额 CLI 输出无法识别」「配额 CLI 版本不兼容」「配额 CLI 没有返回结果」。Windows 凭据管理器读取失败沿用「无法读取 Windows 凭据管理器」。CLI 的 `failureReason` 只映射已知代码，`httpStatus` 只用于接口报错。
 
 来源 `source` 的取值：实时读取（Claude Code 探测、Codex 接口、CLI 的 `live`）/ 缓存（`~/.claude.json` 的 `cachedUsageUtilization`、CLI 的 `cache`）/ Claude 桌面端记录 / 本地日志（Codex 会话 JSONL、CLI 的 `local`）。
 
-显示规则与 macOS 相同：实时读取成功时卡片不加说明行（维护者 2026-10-24 定过：每张卡挂一行说明太吵）；实时读取失败、但仍显示缓存或本地日志里的数值时，下面加一行小字「来源：<来源> · <原因>」；可重试卡片第一行是原因，第二行小字「来源：实时读取」，右侧是重试按钮；空态有原因时直接显示原因；需要重新登录的卡片文案不变；Claude 桌面端记录保留原有的小字「Claude 桌面额度记录 · 非本机独占用量」。Claude 实时读取失败且没有缓存时，卡片状态从「无数据」改为「可重试」（与 macOS 一致）；只有「未找到 Claude Code 程序」仍是空态，因为重试改变不了它。数据源先后顺序不变：桌面端记录 → 实时读取 → 缓存。
+实时读取成功时来源行留空。CLI 的 `ok` 带 `failureReason` 时保留额度条，并显示「来源：缓存 / 本地日志 · <原因>」。旧 CLI 从缓存作答而没有具体代码时显示「实时读取失败」。可重试的失败卡显示具体原因或「暂时读不到额度」，下方说明尝试的来源（实时读取、本地日志或缓存）。Claude 桌面端记录保留「Claude 桌面额度记录 · 非本机独占用量」。
+
+`proxyUnsupported` 显示「代理无法照着走，已暂停读取」。四种暂停均无重试按钮。有本地额度条时仍显示来源与暂停原因，标签亮橙点，设置列显示「已暂停」。新增的显示原因沿用该结果原有的刷新间隔。
+
+## 设置页状态列
+
+设置窗口订阅 `rate-limits-updated` 后，通过只读命令 `get_cached_rate_limits` 取得面板内存快照与刷新状态。再次打开时读回当前缓存。面板刷新开始时事件载荷为 `null`，刷新结束后为面板收到的同一份快照列表。事件只更新设置窗口的显示。
+
+产品已启用且刷新结束，才显示最近结果的短词，例如「未读取」「无数据」「需登录」「已失效」「需打开」「超时」。有额度条且未暂停，或产品关闭、正在刷新、没有快照时，显示「已检测 / 未检测到」。ZCode 平时按当前区域显示「待配置 / 已配置」，读取报告缺少或拒绝 Key 时显示「需 Key / Key 无效」。Cursor 保留待接入提示。完整短词与卡片文案见 `src/lib/quotaProducts.ts`。
 
 ## 缓存和失败处理
 
@@ -79,7 +99,7 @@ Credential Manager 读取失败只影响 ZCode，其他产品仍可请求。CLI 
 1. 在两种区域都已配置的测试环境中，先读到 BigModel 配额，再切到 Z.ai 并模拟请求失败；不得显示 BigModel 数据。同一区域替换、删除 Key 也需复测。
 2. 在旧请求尚未结束时切换区域/Key，确认旧返回不覆盖新上下文；同时验证设置窗与托盘面板的显示一致性。
 3. 模拟 ZCode 凭据库读取失败，确认另一个已选产品仍能返回；验证失败后不会继续把过期配额显示为成功。
-4. 使用固定 CLI 验证 Kimi/ZCode/Grok/OpenCode Go 的正常、无数据和失败状态，以及旧设置迁移、首次推荐、空选择和「选择第三项后仍保留前两项」；OpenCode Go 另需用没有 Go 订阅的 Key 复测 403 对应的未订阅空态。Antigravity / AGY 另需复测：agy 只装在默认位置 `%LOCALAPPDATA%\agy\bin`、不在 App 的 PATH 上时仍能读到 5h / 7d；没装 agy、装了没登录时卡片显示「请安装 agy 并登录后重试」。2026-11-24 起另需复测：只装桌面端、桌面端开着时能读（第二步）；桌面端关着时能读（第三步，确认 `resources\app\package.json` 或 `resources\app.asar` 存在，否则这一步不会启动）；agy 登录失效时不弹浏览器；不用 Antigravity 时窗口一直开着，5 分钟后 `~\.vibe-usage\antigravity-quota.json` 的 `attemptAt` 不变。
+4. 使用固定 CLI 验证 Kimi/ZCode/Grok/OpenCode Go 的正常、无数据和失败状态，以及旧设置迁移、首次推荐、空选择和「选择第三项后仍保留前两项」；OpenCode Go 另需用没有 Go 订阅的 Key 复测 403 对应的未订阅空态。Antigravity / AGY 另需复测：agy 只装在默认位置 `%LOCALAPPDATA%\agy\bin`、不在 App 的 PATH 上时仍能读到 5h / 7d；agy 和桌面端都没装时显示「请安装 agy 或 Antigravity」，登录被拒时显示「请在 Antigravity 中登录」。2026-11-24 起另需复测：只装桌面端、桌面端开着时能读（第二步）；桌面端关着时能读（第三步，确认 `resources\app\package.json` 或 `resources\app.asar` 存在，否则这一步不会启动）；agy 登录失效时不弹浏览器；不用 Antigravity 时窗口一直开着，5 分钟后 `~\.vibe-usage\antigravity-quota.json` 的 `attemptAt` 不变。
 5. 重跑生命周期准入测试：关闭准入前子进程可运行，关闭后确有 Job 限额拒绝；继续验证取消、退出、无关 Node 存活、忙时立即卸载和升级。
 
 本地 Rust 测试覆盖缓存失效、旧请求回写、请求/响应集合校验及凭据错误隔离；Mac 的通过不替代以上 Windows 实测。账户条件不满足记为 BLOCKED；ZCode Key 由用户在 GUI 输入。
