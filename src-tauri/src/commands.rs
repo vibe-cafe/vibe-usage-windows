@@ -413,6 +413,9 @@ pub fn open_settings_impl(app: &AppHandle) {
         .min_inner_size(460.0, 360.0)
         .resizable(true)
         .maximizable(false)
+        // Dark title bar over the dark content even under the light Windows
+        // theme (macOS pins the settings window to `darkAqua`).
+        .theme(Some(tauri::Theme::Dark))
         .prevent_overflow()
         .center()
         .build();

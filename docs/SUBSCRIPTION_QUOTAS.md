@@ -13,7 +13,7 @@ Codex 付费套餐（Plus / Pro / Prolite / Business / Business ProLite）没有
 - `crates/core/src/quota_product.rs`：应用侧产品目录，集中维护名称、可用性、CLI 路由、常规目录和命令检测。Windows 应用安装位置在同一模块适配。
 - `commands.rs`：启动时初始化一次默认选择，后续产品查询不写设置；处理选择、区域和用户输入的凭据。
 - `rate_limits.rs`：刷新调度和短期内存缓存。Codex/Claude 保留原读取实现（Claude 原生探测的 `rate_limits_available:false` 直接给出 `sessionWithoutPlanLimits` 空态原因），其他已接入产品通过 `quota_cli.rs` 使用固定 CLI 的 JSON 协议；CLI 结果里的可选 `emptyReason` 会映射到 `RateLimitEmptyReason`，缺失或未知取值保持 `None`（向前兼容）。每张卡片的快照另带 `source`（实际来源）和 `liveFailure`（固定失败原因），见下文「失败原因和来源（不放原文）」。
-- 前端从目录获取产品名称，使用共享卡片展示配额；官方图标资产（七家，@2x）由 `src/assets/` 提供，卡片与设置页共用 `src/components/ProviderIcon.tsx`。Antigravity / AGY 在 macOS 也没有图标资产，两端都画星光符号（macOS `sparkles`，Windows lucide `Sparkles`）。类型定义保留编译期检查，产品特有的登录提示仍由 UI 处理。
+- 前端从目录获取产品名称，使用共享卡片展示配额；品牌图形是与 macOS 同一份的 Lobe Icons 单色路径（八家都有，包括 Antigravity / AGY），图标行、卡片与设置页共用 `src/components/ProviderIcon.tsx`。类型定义保留编译期检查，产品特有的登录提示仍由 UI 处理。
 
 ## Claude 探测约束（与 macOS 逐项一致）
 
