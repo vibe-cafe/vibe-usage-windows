@@ -48,13 +48,19 @@ pub enum Pause {
     RegionUnsupported(EgressRegion),
     Unconfirmed,
     ProxyNotDetected,
+    /// The system sends an Anthropic host through a SOCKS proxy and Claude
+    /// Code has no HTTP proxy it can use (`ClaudeRoute::SocksUnusable`): it
+    /// would connect direct with the user's login (principle rules 1 and 2).
+    /// A proxy was detected, so 「没检测到代理时」 does not apply; shown as
+    /// 「无法确认网络出口」. Until the local relay (macOS `ClaudeSOCKSRelay`).
+    SocksUnusable,
 }
 
 impl Pause {
     pub fn live_failure(self) -> RateLimitLiveFailure {
         match self {
             Self::RegionUnsupported(region) => RateLimitLiveFailure::EgressRegionUnsupported { region },
-            Self::Unconfirmed => RateLimitLiveFailure::EgressUnconfirmed,
+            Self::Unconfirmed | Self::SocksUnusable => RateLimitLiveFailure::EgressUnconfirmed,
             Self::ProxyNotDetected => RateLimitLiveFailure::ProxyNotDetected,
         }
     }
@@ -176,13 +182,17 @@ pub async fn check_codex(url: &Url, settings: Settings) -> Result<(), Pause> {
 /// How Claude Code reaches Anthropic.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClaudeRoute {
-    /// Every host it reaches goes through a proxy it can use (or through the
-    /// system's SOCKS proxy, which it cannot use: a known gap, not checked).
+    /// Every host it reaches goes through a proxy it can use.
     Proxied,
     /// This host goes direct under any reading of the bypass list: check it.
     Direct(String),
     /// Some host may go direct, but none surely does.
     Unsure,
+    /// The system routes a host through SOCKS and Claude Code has no HTTP
+    /// proxy to take instead, so it would connect direct. Not started, and
+    /// not checked either: the anonymous check would go direct past the
+    /// user's SOCKS proxy.
+    SocksUnusable,
 }
 
 /// How Claude Code reaches Anthropic, judged by the environment it is
@@ -199,22 +209,31 @@ pub enum ClaudeRoute {
 /// unchecked, and the anonymous check goes only to a host that goes direct
 /// under every reading, never to one the user's settings may proxy.
 ///
-/// A host the system routes through SOCKS gets no proxy here (Claude Code has
-/// none it could use; a known gap on Windows, see PRIVACY.md) and is left out:
-/// the anonymous check would go direct past the user's SOCKS proxy.
+/// A host the system routes through SOCKS (`routes`, the live system routes
+/// of its hosts; empty when the app's own proxy variables win) gets no proxy
+/// from the app: Claude Code cannot use SOCKS, and the app has no local relay
+/// yet (macOS `ClaudeSOCKSRelay`). Unless Claude Code still ends up with an
+/// HTTP proxy (another host's HTTP route, or its own `settings.json`), it
+/// would connect direct with the user's login: `SocksUnusable`, checked
+/// first, whatever the bypass list says. A `socks…://` value in
+/// `HTTPS_PROXY` / `HTTP_PROXY` is no HTTP proxy.
 pub fn claude_route(effective: &HashMap<String, String>, routes: &[(String, Route)]) -> ClaudeRoute {
-    let proxied = ["https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY"]
+    let proxy = ["https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY"]
         .iter()
-        .any(|name| effective.get(*name).is_some_and(|value| !value.trim().is_empty()));
+        .filter_map(|name| effective.get(*name))
+        .map(|value| value.trim())
+        .find(|value| !value.is_empty());
+    let socks_routed = routes.iter().any(|(_, route)| matches!(route, Route::Socks(_)));
+    if socks_routed && proxy.is_none_or(|value| value.to_ascii_lowercase().starts_with("socks")) {
+        return ClaudeRoute::SocksUnusable;
+    }
+    let proxied = proxy.is_some();
     let bypass = ["no_proxy", "NO_PROXY"]
         .iter()
         .filter_map(|name| effective.get(*name).cloned())
         .collect::<Vec<_>>()
         .join(",");
-    let hosts = crate::system_proxy::CLAUDE_HOSTS
-        .iter()
-        .filter(|host| !routes.iter().any(|(routed, route)| routed == *host && matches!(route, Route::Socks(_))))
-        .collect::<Vec<_>>();
+    let hosts = crate::system_proxy::CLAUDE_HOSTS;
     if let Some(host) = hosts.iter().find(|host| !proxied || bypass_surely(host, &bypass)) {
         return ClaudeRoute::Direct(host.to_string());
     }
@@ -305,15 +324,33 @@ fn claude_settings_proxy_env() -> HashMap<String, String> {
         .collect()
 }
 
+/// The proxy variables Claude Code is started with: the inherited ones
+/// overlaid by the ones the app adds (`proxy_env`), as `probe_command` does.
+pub fn claude_child(inherited: &impl Fn(&str) -> Option<String>, proxy_env: &[(&'static str, String)]) -> HashMap<String, String> {
+    let mut child: HashMap<String, String> = PROXY_NAMES
+        .iter()
+        .filter_map(|name| inherited(name).map(|value| (name.to_string(), value)))
+        .collect();
+    child.extend(proxy_env.iter().map(|(name, value)| (name.to_string(), value.clone())));
+    child
+}
+
 /// Before Claude Code is started with the user's login. `child` holds the
-/// proxy variables it is started with (inherited ones overlaid by the ones
-/// the app adds); `routes` the live routes of its hosts.
+/// proxy variables it is started with (`claude_child`); `routes` the live
+/// routes of its hosts.
 pub async fn check_claude(settings: Settings, mut child: HashMap<String, String>, routes: &[(String, Route)]) -> Result<(), Pause> {
     let claude_env = tauri::async_runtime::spawn_blocking(claude_settings_proxy_env).await.unwrap_or_default();
     child.extend(claude_env);
-    match claude_route(&child, routes) {
+    claude_decision(claude_route(&child, routes), settings, shared()).await
+}
+
+async fn claude_decision(route: ClaudeRoute, settings: Settings, checker: &Checker) -> Result<(), Pause> {
+    match route {
         ClaudeRoute::Proxied => Ok(()),
-        ClaudeRoute::Direct(host) => require_direct(&host, settings, shared()).await,
+        // Under every setting: a proxy was detected, Claude Code just cannot
+        // follow it, and nothing (the check included) may go direct past it.
+        ClaudeRoute::SocksUnusable => Err(Pause::SocksUnusable),
+        ClaudeRoute::Direct(host) => require_direct(&host, settings, checker).await,
         // It may go direct, but no host is surely direct to check through.
         ClaudeRoute::Unsure if settings.require_proxy => Err(Pause::ProxyNotDetected),
         ClaudeRoute::Unsure if !settings.enabled => Ok(()),
@@ -701,13 +738,17 @@ mod tests {
         }
         assert_eq!(claude_route(&env(&[("HTTPS_PROXY", proxy), ("NO_PROXY", "api.anthropic.com:8443")]), &none), ClaudeRoute::Proxied);
         assert_eq!(claude_route(&env(&[("HTTPS_PROXY", proxy), ("NO_PROXY", "*")]), &none), direct("api.anthropic.com"));
-        // SOCKS hosts: no proxy Claude Code can use (known gap), not checked
-        // either, so the anonymous check never bypasses that proxy.
+        // SOCKS hosts: no proxy Claude Code can use, so it is not started,
+        // and not checked either, so the anonymous check never bypasses that
+        // proxy. A `socks5://` value in its proxy variables is no way through.
         let socks = crate::system_proxy::CLAUDE_HOSTS
             .iter()
             .map(|host| (host.to_string(), Route::Socks("127.0.0.1:7891".into())))
             .collect::<Vec<_>>();
-        assert_eq!(claude_route(&env(&[]), &socks), ClaudeRoute::Proxied);
+        assert_eq!(claude_route(&env(&[]), &socks), ClaudeRoute::SocksUnusable);
+        assert_eq!(claude_route(&env(&[("HTTPS_PROXY", "socks5://127.0.0.1:7891")]), &socks), ClaudeRoute::SocksUnusable);
+        assert_eq!(claude_route(&env(&[("https_proxy", " SOCKS5H://127.0.0.1:7891 ")]), &socks), ClaudeRoute::SocksUnusable);
+        assert_eq!(claude_route(&env(&[("HTTPS_PROXY", proxy)]), &socks), ClaudeRoute::Proxied);
         assert!(bypass_surely("api.anthropic.com", "localhost, api.anthropic.com:443"));
         assert!(!bypass_surely("api.anthropic.com", ".anthropic.com"));
         assert!(bypass_possibly("api.anthropic.com", "anthropic.com"));
@@ -715,6 +756,160 @@ mod tests {
         assert!(bypass_possibly("api.anthropic.com", ".api.anthropic.com"));
         assert!(!bypass_possibly("api.anthropic.com", ".anthropic.com:8443"));
         assert!(!bypass_possibly("api.anthropic.com", ".notanthropic.com"));
+    }
+
+    /// What `claude_usage::fetch` hands Claude Code, built the same way: the
+    /// system routes of its hosts (`settings`, with `pac` answering per host
+    /// as WinHTTP does), the variables the app adds for them on top of the
+    /// inherited ones, then the proxy keys of Claude Code's own `settings.json`.
+    fn launched(
+        settings: &crate::system_proxy::ProxySettings,
+        pac: &dyn Fn(&str) -> Option<String>,
+        inherited: &[(&str, &str)],
+        claude_settings: &[(&str, &str)],
+    ) -> ClaudeRoute {
+        let lookup = |name: &str| inherited.iter().find(|(key, _)| *key == name).map(|(_, value)| value.to_string());
+        let routes = if crate::system_proxy::has_own_proxy(&lookup) {
+            Vec::new()
+        } else {
+            crate::system_proxy::host_urls(&crate::system_proxy::CLAUDE_HOSTS)
+                .iter()
+                .map(|url| {
+                    let route = crate::system_proxy::route_for(url, settings, &lookup, &|_, target| {
+                        pac(Url::parse(target).unwrap().host_str().unwrap())
+                    });
+                    (url.host_str().unwrap().to_string(), route)
+                })
+                .collect::<Vec<_>>()
+        };
+        let proxy_env = crate::system_proxy::proxy_variables(&routes, &lookup, false, false);
+        let mut child = claude_child(&lookup, &proxy_env);
+        child.extend(claude_settings.iter().map(|(key, value)| (key.to_string(), value.to_string())));
+        claude_route(&child, &routes)
+    }
+
+    fn manual(server: &str, bypass: Option<&str>) -> crate::system_proxy::ProxySettings {
+        crate::system_proxy::ProxySettings {
+            proxy_enable: true,
+            proxy_server: Some(server.into()),
+            proxy_override: bypass.map(str::to_string),
+            auto_config_url: None,
+        }
+    }
+
+    fn pac_only() -> crate::system_proxy::ProxySettings {
+        crate::system_proxy::ProxySettings {
+            auto_config_url: Some("http://127.0.0.1:33331/pac".into()),
+            ..Default::default()
+        }
+    }
+
+    fn no_pac(_: &str) -> Option<String> {
+        panic!("no PAC configured")
+    }
+
+    /// The gap this closes: with a SOCKS-only system proxy Claude Code got
+    /// no proxy at all and was let through as "proxied", so it reached
+    /// Anthropic direct with the user's login.
+    #[test]
+    fn a_socks_only_system_proxy_never_lets_claude_go_direct() {
+        // Manual proxy, SOCKS only, in each spelling the registry may hold;
+        // a host the bypass list sends direct does not change it.
+        for server in ["socks=127.0.0.1:7891", "socks5://127.0.0.1:7891", "SOCKS=127.0.0.1:7891"] {
+            assert_eq!(launched(&manual(server, None), &no_pac, &[], &[]), ClaudeRoute::SocksUnusable, "{server}");
+        }
+        assert_eq!(
+            launched(&manual("socks=127.0.0.1:7891", Some("claude.ai;<local>")), &no_pac, &[], &[]),
+            ClaudeRoute::SocksUnusable
+        );
+        // PAC answering SOCKS (WinHTTP's `socks=` form), for every host or
+        // for one with the others DIRECT (before: those were checked and
+        // Claude Code started with no proxy).
+        assert_eq!(launched(&pac_only(), &|_| Some("socks=127.0.0.1:7891".into()), &[], &[]), ClaudeRoute::SocksUnusable);
+        let one_socks = |host: &str| Some(if host == "api.anthropic.com" { "socks=127.0.0.1:7891".into() } else { String::new() });
+        assert_eq!(launched(&pac_only(), &one_socks, &[], &[]), ClaudeRoute::SocksUnusable);
+        // Claude Code's own settings: an HTTP proxy there is one it follows;
+        // a SOCKS one, or only a bypass list, is not.
+        let socks = manual("socks=127.0.0.1:7891", None);
+        assert_eq!(launched(&socks, &no_pac, &[], &[("HTTPS_PROXY", "http://127.0.0.1:7890")]), ClaudeRoute::Proxied);
+        assert_eq!(
+            launched(&socks, &no_pac, &[], &[("HTTPS_PROXY", "socks5://127.0.0.1:7891")]),
+            ClaudeRoute::SocksUnusable
+        );
+        assert_eq!(launched(&socks, &no_pac, &[], &[("NO_PROXY", "localhost")]), ClaudeRoute::SocksUnusable);
+        // The app's own proxy variables win over the system's, as before.
+        assert_eq!(launched(&socks, &no_pac, &[("HTTPS_PROXY", "http://127.0.0.1:7890")], &[]), ClaudeRoute::Proxied);
+    }
+
+    #[test]
+    fn http_next_to_socks_gives_claude_the_http_proxy() {
+        // A per-protocol list: https takes the HTTP entry, SOCKS is unused.
+        assert_eq!(
+            launched(&manual("http=127.0.0.1:7890;socks=127.0.0.1:7891", None), &no_pac, &[], &[]),
+            ClaudeRoute::Proxied
+        );
+        // A PAC answering SOCKS for one host and HTTP for the others: Claude
+        // Code has one proxy for all, the HTTP one (as on macOS).
+        let mixed = |host: &str| {
+            let answer = if host == "api.anthropic.com" { "socks=127.0.0.1:7891" } else { "127.0.0.1:7890" };
+            Some(answer.to_string())
+        };
+        assert_eq!(launched(&pac_only(), &mixed, &[], &[]), ClaudeRoute::Proxied);
+        // Its bypass list then counts for every host, the SOCKS one too.
+        assert_eq!(
+            launched(&pac_only(), &mixed, &[], &[("NO_PROXY", "api.anthropic.com")]),
+            ClaudeRoute::Direct("api.anthropic.com".into())
+        );
+        assert_eq!(launched(&pac_only(), &mixed, &[], &[("no_proxy", ".anthropic.com")]), ClaudeRoute::Unsure);
+    }
+
+    #[test]
+    fn no_proxy_beside_a_socks_system_proxy() {
+        let socks = manual("socks=127.0.0.1:7891", None);
+        // The app's NO_PROXY decides the system routes. Every Claude host
+        // bypassed: the user's own direct rule, checked as any direct read.
+        for list in ["*", "api.anthropic.com,platform.claude.com,claude.ai", "api.anthropic.com platform.claude.com claude.ai"] {
+            for name in ["NO_PROXY", "no_proxy"] {
+                assert_eq!(
+                    launched(&socks, &no_pac, &[(name, list)], &[]),
+                    ClaudeRoute::Direct("api.anthropic.com".into()),
+                    "{name}={list}"
+                );
+            }
+        }
+        // Any Claude host left on SOCKS: paused. A domain entry covers its
+        // subdomains only, a bare one that host only, a port entry nothing.
+        for list in [".anthropic.com", "*.anthropic.com", "anthropic.com", "api.anthropic.com", "api.anthropic.com:443", "claude.ai"] {
+            assert_eq!(launched(&socks, &no_pac, &[("NO_PROXY", list)], &[]), ClaudeRoute::SocksUnusable, "{list}");
+        }
+        // Claude Code's own NO_PROXY, beside its own HTTP proxy, reads as
+        // before: surely direct is checked, possibly direct pauses.
+        let own = |list: &'static str| [("HTTPS_PROXY", "http://127.0.0.1:7890"), ("NO_PROXY", list)];
+        assert_eq!(launched(&socks, &no_pac, &[], &own("*")), ClaudeRoute::Direct("api.anthropic.com".into()));
+        assert_eq!(launched(&socks, &no_pac, &[], &own("claude.ai")), ClaudeRoute::Direct("claude.ai".into()));
+        for list in [".anthropic.com", "*.anthropic.com", "anthropic.com", ".api.anthropic.com"] {
+            assert_eq!(launched(&socks, &no_pac, &[], &own(list)), ClaudeRoute::Unsure, "{list}");
+        }
+        assert_eq!(launched(&socks, &no_pac, &[], &own("api.anthropic.com:8443")), ClaudeRoute::Proxied);
+    }
+
+    #[tokio::test]
+    async fn claude_behind_an_unusable_socks_proxy_pauses_under_every_setting_without_a_check() {
+        let (script, checker) = scripted(Some("US"));
+        for settings in [EgressMode::Auto, EgressMode::Pause, EgressMode::Allow].map(EgressMode::settings) {
+            assert_eq!(
+                claude_decision(ClaudeRoute::SocksUnusable, settings, &checker).await,
+                Err(Pause::SocksUnusable),
+                "{settings:?}"
+            );
+        }
+        assert!(script.calls.lock().unwrap().is_empty());
+        assert_eq!(Pause::SocksUnusable.live_failure(), RateLimitLiveFailure::EgressUnconfirmed);
+        // The other routes decide as before.
+        assert_eq!(claude_decision(ClaudeRoute::Proxied, ON, &checker).await, Ok(()));
+        assert_eq!(claude_decision(ClaudeRoute::Unsure, ON, &checker).await, Err(Pause::Unconfirmed));
+        assert_eq!(claude_decision(ClaudeRoute::Direct("api.anthropic.com".into()), ON, &checker).await, Ok(()));
+        assert_eq!(*script.calls.lock().unwrap(), vec!["api.anthropic.com".to_string()]);
     }
 
     #[test]
