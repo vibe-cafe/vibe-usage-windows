@@ -194,6 +194,13 @@ interface ParserResult {
 function runParser(sessionsDir: string, parserPath?: string): ParserResult {
   const env: NodeJS.ProcessEnv = { ...process.env, VIBE_USAGE_DSH_SESSIONS: sessionsDir };
   env.VIBE_USAGE_DSH_PARSER_PATH = parserPath ?? PARSER_PATH;
+  // The parser keeps an index cache (`parser-index-v2.sqlite`) under
+  // VIBE_USAGE_CACHE_DIR, by default the developer's real ~/.vibe-usage/cache:
+  // run on a Mac, this suite wrote its fixture sessions there. A fresh
+  // directory per run also keeps one test's cached result out of the next.
+  const cacheDir = mkdtempSync(join(tmpdir(), "vibe-usage-dsh-cache-"));
+  tempDirs.push(cacheDir);
+  env.VIBE_USAGE_CACHE_DIR = cacheDir;
 
   const proc = spawnSync(process.execPath, [DRIVER, sessionsDir], { encoding: "utf8", env });
   if (proc.status !== 0) {
