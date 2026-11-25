@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
+  agyAuthorizationText,
   canonicalQuotaMeters,
   codexFiveHourPlaceholder,
   compactQuotaStatus,
@@ -479,5 +480,23 @@ describe("settings product notes", () => {
     for (const provider of ["codex", "claudeCode", "kimi-code", "zcode", "grok", "opencode-go", "cursor"] as RateLimitProvider[]) {
       expect(quotaProductNote(provider)).toBeNull();
     }
+  });
+});
+
+describe("AGY re-login card", () => {
+  const card = (code?: "credentialsNotFound" | "credentialsRejected"): ProviderRateLimit => ({
+    provider: "antigravity",
+    status: { kind: "unauthorized" },
+    liveFailure: code ? { code } : null,
+  });
+
+  it("asks to install agy only when the CLI found none to run", () => {
+    expect(agyAuthorizationText(card("credentialsNotFound"))).toBe("请安装 agy 命令行并登录后重试");
+  });
+
+  it("asks an installed agy to sign in again", () => {
+    expect(agyAuthorizationText(card("credentialsRejected"))).toBe("请在 agy 中登录后重试");
+    // Same as macOS: without a reason the card does not send the user to reinstall.
+    expect(agyAuthorizationText(card())).toBe("请在 agy 中登录后重试");
   });
 });

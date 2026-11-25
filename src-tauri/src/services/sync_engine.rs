@@ -358,11 +358,12 @@ async fn run_cli_sync(app: &AppHandle) -> CliRun {
     let (mut child, _process_guard) = match crate::process_lifecycle::spawn(&mut cmd) {
         Ok(spawned) => spawned,
         Err(e) => {
+            log::warn!("sync: could not start the runtime: {e}");
             return CliRun::failed(
-                format!("同步失败: {e}"),
+                failure_message(&SyncReason::SpawnFailed, "", ""),
                 SyncOutcome::CliStartupFailed,
                 Some(SyncReason::SpawnFailed),
-            )
+            );
         }
     };
     let stdout_pipe = child.stdout.take();
@@ -388,11 +389,12 @@ async fn run_cli_sync(app: &AppHandle) -> CliRun {
     let status = match status {
         Ok(status) => status,
         Err(e) => {
+            log::warn!("sync: waiting for the CLI failed: {e}");
             return CliRun::failed(
-                format!("同步失败: {e}"),
+                failure_message(&SyncReason::WaitFailed, "", ""),
                 SyncOutcome::Failed,
                 Some(SyncReason::WaitFailed),
-            )
+            );
         }
     };
     let stdout = stdout.trim().to_string();
@@ -420,22 +422,78 @@ async fn run_cli_sync(app: &AppHandle) -> CliRun {
     let line = extract_error_line(if stderr.is_empty() { &stdout } else { &stderr });
     let (outcome, reason) = sync_history::classify_exit(status.code(), &stderr, &line);
     let all = format!("{stdout}\n{stderr}");
-    let message = if all.contains("Invalid API key") || all.contains("UNAUTHORIZED") {
-        "API Key 无效，请重新配置".into()
-    } else {
-        format!(
-            "同步失败: {}",
-            if line.is_empty() {
-                format!("Exit code {}", status.code().unwrap_or(-1))
-            } else {
-                line
-            }
-        )
-    };
+    let message = failure_message(&reason, &line, &all);
     CliRun {
         cli_fallback,
         ..CliRun::failed(message, outcome, Some(reason))
     }
+}
+
+/// Markers of a request that never reached the sync server (Node's error
+/// codes and fetch's own message), read from the run's final error line only:
+/// an earlier tool warning (e.g. a skipped Cursor export) may carry one too.
+const NETWORK_MARKERS: [&str; 9] = [
+    "fetch failed",
+    "ECONNREFUSED",
+    "ENOTFOUND",
+    "ETIMEDOUT",
+    "ECONNRESET",
+    "EAI_AGAIN",
+    "EHOSTUNREACH",
+    "ENETUNREACH",
+    "socket hang up",
+];
+
+const KEY_REJECTED: &str = "API Key 无效，请重新配置";
+
+/// The status bar's line for a failed run: our own short sentence chosen from
+/// the run's typed category, never the raw output of the CLI or the launcher
+/// (English, sometimes with local paths, and too long for the tray tooltip).
+/// The CLI's own Chinese hints keep their meaning in our words; the full
+/// output stays in `sync.log`. The launcher sentences and the crash case are
+/// macOS's (`SyncEngine.launcherFailureText`, `friendlyFailureMessage`);
+/// macOS still shows the raw line for the rest. `final_line` is the run's
+/// error line (`extract_error_line`), `output` all of stdout and stderr.
+fn failure_message(reason: &SyncReason, final_line: &str, output: &str) -> String {
+    // The server refused the key, or the CLI printed an older key marker
+    // anywhere (the check the status bar has always made).
+    if output.contains("Invalid API key") || output.contains("UNAUTHORIZED") {
+        return KEY_REJECTED.into();
+    }
+    // The CLI held Codex back and synced everything else (its closing line,
+    // `CODEX_ULTRAFAST_HOLD_FAILURE`): not a failed sync of the other tools.
+    if final_line.contains("Codex 本次未上传") {
+        return "Codex 本次未上传，下次同步自动补传".into();
+    }
+    // `部分完成（已上传 …）: <reason>`: the other tools' data did arrive.
+    let head = if final_line.contains("部分完成") { "同步部分完成" } else { "同步失败" };
+    let detail = match reason {
+        SyncReason::Launcher { stage } => match stage {
+            LauncherStage::Network => "连不上 npm 源，CLI 没有下载成功".to_string(),
+            LauncherStage::Registry => "npm 源返回错误，CLI 没有下载成功".to_string(),
+            LauncherStage::Download => "CLI 下载或校验失败".to_string(),
+            LauncherStage::Install => "CLI 安装失败".to_string(),
+            LauncherStage::Other => "CLI 启动失败".to_string(),
+        },
+        SyncReason::ServerStatus { status } => format!("服务器返回错误 {status}"),
+        SyncReason::RuntimeUnavailable | SyncReason::SpawnFailed => "同步工具启动失败".to_string(),
+        SyncReason::WaitFailed => "同步工具异常退出".to_string(),
+        SyncReason::KeyRejected => return KEY_REJECTED.into(),
+        SyncReason::CliExit { exit_code } => {
+            if output.contains("RangeError: Invalid string length")
+                || output.contains("node:internal/readline")
+            {
+                "CLI 读取本机历史记录时崩溃".to_string()
+            } else if final_line.contains("暂时无法读取上传设置") {
+                "暂时读不到上传设置，未上传数据，请稍后重试".to_string()
+            } else if NETWORK_MARKERS.iter().any(|marker| final_line.contains(marker)) {
+                "连不上同步服务器".to_string()
+            } else {
+                format!("退出码 {exit_code}")
+            }
+        }
+    };
+    format!("{head}: {detail}")
 }
 
 /// Drain stdout and stderr at the same time. Reading stdout to EOF before
@@ -563,7 +621,8 @@ fn append_sync_log(app: &AppHandle, entry: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::{read_both, run_with_follow_up, timeout_entry};
+    use super::{extract_error_line, failure_message, read_both, run_with_follow_up, timeout_entry};
+    use crate::services::sync_history::{classify_exit, LauncherStage, SyncReason};
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Arc;
     use tokio::sync::{Mutex, Notify};
@@ -739,5 +798,71 @@ mod tests {
         writer.await.unwrap();
         assert_eq!(stdout, "Synced 12 buckets");
         assert_eq!(stderr.len(), expected);
+    }
+
+    /// The status bar line for a run that exited 1 with this stderr, through
+    /// the same classification the sync uses.
+    fn bar(stderr: &str) -> String {
+        let line = extract_error_line(stderr);
+        let (_, reason) = classify_exit(Some(1), stderr, &line);
+        failure_message(&reason, &line, stderr)
+    }
+
+    #[test]
+    fn failed_sync_shows_a_short_chinese_sentence_never_the_raw_line() {
+        assert_eq!(bar("✗ 同步失败: fetch failed"), "同步失败: 连不上同步服务器");
+        assert_eq!(
+            bar("✗ 同步失败: getaddrinfo ENOTFOUND vibefriends.com"),
+            "同步失败: 连不上同步服务器"
+        );
+        assert_eq!(
+            bar("✗ 同步失败: HTTP 502: <html>Bad gateway</html>"),
+            "同步失败: 服务器返回错误 502"
+        );
+        assert_eq!(
+            bar("✗ 部分完成（已上传 12 buckets）: HTTP 503: Service Unavailable"),
+            "同步部分完成: 服务器返回错误 503"
+        );
+        assert_eq!(
+            bar("✗ API Key 无效，请运行 `npx @vibe-cafe/vibe-usage init` 重新配置。"),
+            "API Key 无效，请重新配置"
+        );
+        assert_eq!(bar("Error: UNAUTHORIZED"), "API Key 无效，请重新配置");
+        let unknown = bar("✗ 同步失败: Cannot read properties of undefined (reading 'x') at C:\\Users\\me\\a.js");
+        assert_eq!(unknown, "同步失败: 退出码 1");
+    }
+
+    #[test]
+    fn the_clis_own_chinese_hints_keep_their_meaning() {
+        assert_eq!(
+            bar("✗ 部分完成（已上传 3 buckets）: Codex 本次未上传：服务端暂时没有答复这台设备的 Ultrafast 档位起点，其他工具已正常同步，下次同步自动补传。"),
+            "Codex 本次未上传，下次同步自动补传"
+        );
+        assert_eq!(
+            bar("✗ 暂时无法读取上传设置，本次同步已安全取消（未上传数据）。请稍后重试。"),
+            "同步失败: 暂时读不到上传设置，未上传数据，请稍后重试"
+        );
+        assert_eq!(
+            bar("file:///x/parser.js:10\nRangeError: Invalid string length\n    at JSON.stringify (<anonymous>)\nNode.js v22.23.1"),
+            "同步失败: CLI 读取本机历史记录时崩溃"
+        );
+    }
+
+    #[test]
+    fn launcher_and_process_failures_use_the_macos_sentences() {
+        let launcher = |stage| failure_message(&SyncReason::Launcher { stage }, "", "");
+        assert_eq!(launcher(LauncherStage::Network), "同步失败: 连不上 npm 源，CLI 没有下载成功");
+        assert_eq!(launcher(LauncherStage::Registry), "同步失败: npm 源返回错误，CLI 没有下载成功");
+        assert_eq!(launcher(LauncherStage::Download), "同步失败: CLI 下载或校验失败");
+        assert_eq!(launcher(LauncherStage::Install), "同步失败: CLI 安装失败");
+        assert_eq!(launcher(LauncherStage::Other), "同步失败: CLI 启动失败");
+        assert_eq!(
+            failure_message(&SyncReason::SpawnFailed, "", ""),
+            "同步失败: 同步工具启动失败"
+        );
+        assert_eq!(
+            failure_message(&SyncReason::WaitFailed, "", ""),
+            "同步失败: 同步工具异常退出"
+        );
     }
 }

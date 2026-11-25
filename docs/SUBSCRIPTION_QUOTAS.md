@@ -37,11 +37,11 @@ Codex 付费套餐（Plus / Pro / Prolite / Business / Business ProLite）没有
 - **App 这边。** AGY 卡片的重读间隔是 5 分钟（`rate_limits.rs` 的 `ANTIGRAVITY_MAX_AGE`），窗口可见时的 60 秒定时轮到 AGY 不满 5 分钟就不调 CLI；手动刷新照样调 CLI，问不问由 CLI 决定。设置里 AGY 那一行多一行灰字「Google 表示不支持第三方读取额度」（`quotaProductNote`，与 macOS 一致）。
 - CLI 给这一轮最多 20 秒，在 App 30 秒的 CLI 总预算以内；它和 Kimi / ZCode / Grok / OpenCode Go 同一批读取，最慢的一个决定这一批什么时候回来（与 macOS 相同）。
 
-- CLI 找 `agy.exe` 的顺序：`ANTIGRAVITY_CLI_PATH`（测试用）→ `~\.local\bin\agy.exe` → PATH 上的 `agy.exe` → 官方安装位置 `%LOCALAPPDATA%\agy\bin\agy.exe`。最后一项由 vibe-cafe/vibe-usage#176 加入（要等它发到 npm 才生效）；官方文档（antigravity.google/docs/getting-started）和安装脚本 `install.ps1` / `install.cmd` 都装到这里，要等 `agy install` 改了用户环境变量才进 PATH，而开机自启、一直挂在托盘的 App 看不到之后改的 PATH（App 把自己启动时的 PATH 传给 CLI）。CLI 发版前，agy 不在 App 的 PATH 上时卡片会显示「请安装 agy 并登录后重试」。
+- CLI 找 `agy.exe` 的顺序：`ANTIGRAVITY_CLI_PATH`（测试用）→ `~\.local\bin\agy.exe` → PATH 上的 `agy.exe` → 官方安装位置 `%LOCALAPPDATA%\agy\bin\agy.exe`。最后一项由 vibe-cafe/vibe-usage#176 加入（要等它发到 npm 才生效）；官方文档（antigravity.google/docs/getting-started）和安装脚本 `install.ps1` / `install.cmd` 都装到这里，要等 `agy install` 改了用户环境变量才进 PATH，而开机自启、一直挂在托盘的 App 看不到之后改的 PATH（App 把自己启动时的 PATH 传给 CLI）。CLI 发版前，agy 不在 App 的 PATH 上时卡片会显示「请安装 agy 命令行并登录后重试」。
 - 代理（`src-tauri/src/system_proxy.rs`）：每次 CLI 运行都按当下的系统代理（手动代理、按协议分开的写法、例外列表、PAC 由 WinHTTP 求值）给出 `HTTPS_PROXY` / `HTTP_PROXY` 和 `NODE_USE_ENV_PROXY=1`；只开 SOCKS 时传 `socks5://` 并把开关设为 `0`；PAC 求值失败时，系统里同时开着手动代理就用手动代理（和 Windows 自己一样），否则指向一个关闭的本机端口，让请求失败而不是直连；App 自己的环境里已有代理变量（含 `ALL_PROXY`）时沿用它，不注入系统代理。Node 22.21+/24 在这种环境下连 `127.0.0.1` 也会交给代理，代理不在本机或 Clash 走全局模式时就读不到额度，所以 `NO_PROXY` 总会并进 `localhost,127.0.0.1,::1`（大小写两种写法合并，保留用户原有的条目，`*` 保持原样），同步、配额、诊断都经过 `sync_engine::cli_command` 这一处；CLI 发往 agy 的请求自己也不走代理（vibe-cafe/vibe-usage#176）。
 - 只认 `agy.exe`，不认 `.cmd` / `.bat`：官方渠道只发 exe；Node 不经 shell 启动不了 `.cmd`；有报道说 Antigravity 桌面端也会注册 `agy` 这个命令名，那种启动器会打开桌面端，而不是读额度。
 - App 的「已检测」（`quota_product.rs`）：`~\.gemini\antigravity-cli`、`~\.gemini\antigravity`、上面两个固定位置（`quota_product::antigravity_cli_paths`，与 CLI 的 `antigravityInstallPaths()` 是同一份列表，改一边要改另一边）、PATH 上的 `agy`（按 PATHEXT，和其他产品一样）、桌面端 `Programs\Antigravity\Antigravity.exe`（Antigravity 2.0 桌面端和 1.x IDE 共用）和 `Programs\Antigravity IDE\Antigravity IDE.exe`（2.x 独立 IDE），根目录是 `%LOCALAPPDATA%`、`%LOCALAPPDATA%\Programs` 和 Program Files。官方文档没写桌面端装在哪，这两个位置来自 Google AI 开发者论坛的用户报告，是推断。只装了桌面端或 IDE、没装 agy 也算「已检测」（macOS 认 `Antigravity.app` 也是这样），首次启动会勾上，卡片提示去装 agy。
-- 卡片：显示名「Antigravity / AGY」。CLI 只给一个模型组的 5h / 7d（有 Gemini 组时取 Gemini）。没找到 agy 或没登录 → CLI 报 `missing_credentials` / `unauthorized` →「请安装 agy 并登录后重试」+ 重试；agy 起不来或连不上 → `retryable_error` →「暂时无法读取订阅配额」+ 重试；读失败但手上有上次的数 → 显示旧数，来源标缓存、「实时读取失败」。
+- 卡片：显示名「Antigravity / AGY」。CLI 只给一个模型组的 5h / 7d（有 Gemini 组时取 Gemini）。agy 和 Antigravity 桌面端都没找到 → CLI 报 `missing_credentials` →「请安装 agy 命令行并登录后重试」；找到了但没登录或登录失效 → `unauthorized` / `expired_credentials` →「请在 agy 中登录后重试」（两句与 macOS 相同，App 把两种情况分别记成 `credentialsNotFound` / `credentialsRejected`）；都带重试；agy 起不来或连不上 → `retryable_error` →「暂时无法读取订阅配额」+ 重试；读失败但手上有上次的数 → 显示旧数，来源标缓存、「实时读取失败」。
 
 ## 出口检测（网络隐私最高原则第 3 条，2026-11-24）
 
@@ -79,7 +79,7 @@ Credential Manager 读取失败只影响 ZCode，其他产品仍可请求。CLI 
 1. 在两种区域都已配置的测试环境中，先读到 BigModel 配额，再切到 Z.ai 并模拟请求失败；不得显示 BigModel 数据。同一区域替换、删除 Key 也需复测。
 2. 在旧请求尚未结束时切换区域/Key，确认旧返回不覆盖新上下文；同时验证设置窗与托盘面板的显示一致性。
 3. 模拟 ZCode 凭据库读取失败，确认另一个已选产品仍能返回；验证失败后不会继续把过期配额显示为成功。
-4. 使用固定 CLI 验证 Kimi/ZCode/Grok/OpenCode Go 的正常、无数据和失败状态，以及旧设置迁移、首次推荐、空选择和「选择第三项后仍保留前两项」；OpenCode Go 另需用没有 Go 订阅的 Key 复测 403 对应的未订阅空态。Antigravity / AGY 另需复测：agy 只装在默认位置 `%LOCALAPPDATA%\agy\bin`、不在 App 的 PATH 上时仍能读到 5h / 7d；没装 agy、装了没登录时卡片显示「请安装 agy 并登录后重试」。2026-11-24 起另需复测：只装桌面端、桌面端开着时能读（第二步）；桌面端关着时能读（第三步，确认 `resources\app\package.json` 或 `resources\app.asar` 存在，否则这一步不会启动）；agy 登录失效时不弹浏览器；不用 Antigravity 时窗口一直开着，5 分钟后 `~\.vibe-usage\antigravity-quota.json` 的 `attemptAt` 不变。
+4. 使用固定 CLI 验证 Kimi/ZCode/Grok/OpenCode Go 的正常、无数据和失败状态，以及旧设置迁移、首次推荐、空选择和「选择第三项后仍保留前两项」；OpenCode Go 另需用没有 Go 订阅的 Key 复测 403 对应的未订阅空态。Antigravity / AGY 另需复测：agy 只装在默认位置 `%LOCALAPPDATA%\agy\bin`、不在 App 的 PATH 上时仍能读到 5h / 7d；没装 agy 时卡片显示「请安装 agy 命令行并登录后重试」，装了没登录时显示「请在 agy 中登录后重试」。2026-11-24 起另需复测：只装桌面端、桌面端开着时能读（第二步）；桌面端关着时能读（第三步，确认 `resources\app\package.json` 或 `resources\app.asar` 存在，否则这一步不会启动）；agy 登录失效时不弹浏览器；不用 Antigravity 时窗口一直开着，5 分钟后 `~\.vibe-usage\antigravity-quota.json` 的 `attemptAt` 不变。
 5. 重跑生命周期准入测试：关闭准入前子进程可运行，关闭后确有 Job 限额拒绝；继续验证取消、退出、无关 Node 存活、忙时立即卸载和升级。
 
 本地 Rust 测试覆盖缓存失效、旧请求回写、请求/响应集合校验及凭据错误隔离；Mac 的通过不替代以上 Windows 实测。账户条件不满足记为 BLOCKED；ZCode Key 由用户在 GUI 输入。

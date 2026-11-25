@@ -251,6 +251,19 @@ fn map_product(product: Product) -> Result<ProviderRateLimit, FetchError> {
         }
         _ => None,
     };
+    // AGY alone: the CLI reports missing_credentials only when it found
+    // neither agy nor the Antigravity desktop app to run; a refused or
+    // expired login means it did run one. The card tells the two apart
+    // ("install agy" vs "sign in to agy", macOS `needsAgyCLI`).
+    let agy_login = match (provider, product.status.as_str()) {
+        (RateLimitProvider::Antigravity, "missing_credentials") => {
+            Some(RateLimitLiveFailure::CredentialsNotFound)
+        }
+        (RateLimitProvider::Antigravity, "expired_credentials" | "unauthorized") => {
+            Some(RateLimitLiveFailure::CredentialsRejected)
+        }
+        _ => None,
+    };
     let status = match product.status.as_str() {
         _ if opencode_login.is_some() => RateLimitStatus::NoData,
         "ok" if !meters.is_empty() => RateLimitStatus::Ok,
@@ -281,6 +294,7 @@ fn map_product(product: Product) -> Result<ProviderRateLimit, FetchError> {
         // live failed. The specific reason exists only in `message`, which is
         // free text and never kept.
         live_failure: opencode_login
+            .or(agy_login)
             .or_else(|| {
                 (product.status == "unsupported")
                     .then(|| pause_failure(product.pause_reason.as_deref(), product.egress_region.as_deref()))
@@ -411,7 +425,7 @@ mod tests {
     }
 
     #[test]
-    fn antigravity_answers_reach_its_card_and_a_missing_agy_asks_for_sign_in() {
+    fn antigravity_answers_reach_its_card_and_install_and_sign_in_are_told_apart() {
         let ok = decode(
             br#"{"schemaVersion":1,"products":[{"id":"antigravity","status":"ok","meters":[{"id":"gemini-5h","label":"5h","utilization":100,"windowSeconds":18000},{"id":"gemini-weekly","label":"7d","utilization":25,"resetsAt":"2026-11-23T00:00:00.000Z","windowSeconds":604800}],"fetchedAt":"2026-11-19T02:00:00.000Z","source":"live"}]}"#,
             &[RateLimitProvider::Antigravity],
@@ -424,7 +438,7 @@ mod tests {
             ok.meters.iter().map(|m| m.label.as_str()).collect::<Vec<_>>(),
             ["5h", "7d"]
         );
-        // The CLI found no `agy`: the card says to install and sign in.
+        // The CLI found no agy: the card says to install it and sign in.
         let missing = decode(
             br#"{"schemaVersion":1,"products":[{"id":"antigravity","status":"missing_credentials","meters":[],"fetchedAt":"2026-11-19T02:00:00.000Z","message":"Install agy and sign in, then retry"}]}"#,
             &[RateLimitProvider::Antigravity],
@@ -432,6 +446,28 @@ mod tests {
         .unwrap()
         .remove(0);
         assert_eq!(missing.status, RateLimitStatus::Unauthorized);
+        assert_eq!(
+            missing.live_failure,
+            Some(RateLimitLiveFailure::CredentialsNotFound)
+        );
+        // It found agy but the sign-in was refused or expired: a re-login,
+        // not a reinstall.
+        for status in ["unauthorized", "expired_credentials"] {
+            let refused = decode(
+                format!(
+                    r#"{{"schemaVersion":1,"products":[{{"id":"antigravity","status":"{status}","meters":[],"fetchedAt":"2026-11-19T02:00:00.000Z"}}]}}"#
+                )
+                .as_bytes(),
+                &[RateLimitProvider::Antigravity],
+            )
+            .unwrap()
+            .remove(0);
+            assert_eq!(refused.status, RateLimitStatus::Unauthorized);
+            assert_eq!(
+                refused.live_failure,
+                Some(RateLimitLiveFailure::CredentialsRejected)
+            );
+        }
     }
 
     #[test]
