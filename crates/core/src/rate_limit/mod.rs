@@ -184,8 +184,8 @@ pub enum RateLimitLiveFailure {
     EgressRegionUnsupported { region: EgressRegion },
     /// The egress could not be confirmed (no answer, unknown country).
     EgressUnconfirmed,
-    /// No proxy detected and the user said this computer relies on a local
-    /// proxy client (「这台电脑上网靠本机代理软件」).
+    /// No proxy detected and the user chose 「暂停读取」 for 「没检测到代理时」
+    /// (Settings → 隐私保护).
     ProxyNotDetected,
 }
 

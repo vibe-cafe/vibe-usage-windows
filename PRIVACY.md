@@ -21,7 +21,7 @@
 | 安装时，仅在电脑缺少 WebView2 时 | 微软 | 安装程序下载微软的 WebView2 引导程序。 |
 | 订阅配额卡开启时 | 见下文 | 用你本机已有的登录信息查询额度。 |
 | 开机自启、系统设了代理、有同步或配额要读时 | 系统代理设置里的 PAC 地址和代理端口 | 读取配额和同步之前（更新检查和面板读取 Vibe 用量不等），每 2 秒读一次系统代理设置（会取 PAC 文件；PAC 地址要求 Windows 登录时，按系统默认方式使用当前身份），并试连代理端口，确认代理已就绪，最多 2 分钟。试连只建立连接，不发送任何数据，不带任何账号。系统没设代理时不等。 |
-| 要读 Codex、Claude 的额度、又没检测到代理时（「没检测到代理时」选「自动判断」） | 该厂商地址的 Cloudflare 节点（Codex 是 `chatgpt.com`，Claude 是 Anthropic 的地址） | 出口检测：用同一条线路访问一次 `/cdn-cgi/trace`，不带任何账号、Cookie 和令牌，只读其中的国家代码。同一地址 10 分钟内最多一次，暂停中每分钟最多一次，换了网络就重新检测。Antigravity 由 CLI 用同样的办法检测（Google 的地址没有这个页面，用 `chatgpt.com` 代替；它要走代理而 Google 直连时改用 `api.anthropic.com`）。Cloudflare 会看到你的出网 IP，但看不到账号。 |
+| 要读 Codex、Claude 的额度、又没检测到代理时（「没检测到代理时」选「自动判断（推荐）」） | 该厂商地址的 Cloudflare 节点（Codex 是 `chatgpt.com`，Claude 是 Anthropic 的地址） | 出口检测：用同一条线路访问一次 `/cdn-cgi/trace`，不带任何账号、Cookie 和令牌，只读其中的国家代码。同一地址 10 分钟内最多一次，暂停中每分钟最多一次，换了网络就重新检测。Antigravity 由 CLI 用同样的办法检测（Google 的地址没有这个页面，用 `chatgpt.com` 代替；它要走代理而 Google 直连时改用 `api.anthropic.com`）。Cloudflare 会看到你的出网 IP，但看不到账号。 |
 
 **跟着你的代理。** App 自己的请求，以及交给 CLI 和 Claude Code 的代理设置，都按你此刻的 Windows 系统代理（含 PAC）和代理环境变量来。PAC 解析不了时，系统里同时开着手动代理就用手动代理（和 Windows 自己的做法一样），否则请求直接失败，不会改走直连。Claude Code 只能使用 HTTP 代理：系统代理只设了 SOCKS 时，Claude Code 目前不经代理（已知缺口，待修）。
 

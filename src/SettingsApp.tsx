@@ -857,6 +857,7 @@ function MenuSelect<T extends string>({
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
   const root = useRef<HTMLDivElement>(null);
+  const button = useRef<HTMLButtonElement>(null);
   const list = useRef<HTMLUListElement>(null);
   const selected = Math.max(0, options.findIndex((option) => option.value === value));
 
@@ -867,18 +868,34 @@ function MenuSelect<T extends string>({
     const close = (event: MouseEvent) => {
       if (!root.current?.contains(event.target as Node)) setOpen(false);
     };
+    // The settings window is hidden, not destroyed, when closed: a menu left
+    // open must not greet the user next time.
+    const dismiss = () => setOpen(false);
     document.addEventListener("mousedown", close);
-    return () => document.removeEventListener("mousedown", close);
+    window.addEventListener("blur", dismiss);
+    document.addEventListener("visibilitychange", dismiss);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      window.removeEventListener("blur", dismiss);
+      document.removeEventListener("visibilitychange", dismiss);
+    };
   }, [open, selected]);
 
-  const pick = (index: number) => {
+  // Picking or cancelling hands the keyboard back to the button.
+  const closeToButton = () => {
     setOpen(false);
+    button.current?.focus();
+  };
+
+  const pick = (index: number) => {
+    closeToButton();
     if (options[index].value !== value) onChange(options[index].value);
   };
 
   return (
     <div ref={root} className="relative shrink-0">
       <button
+        ref={button}
         type="button"
         aria-label={label}
         aria-haspopup="listbox"
@@ -913,7 +930,10 @@ function MenuSelect<T extends string>({
             } else if (event.key === "Enter" || event.key === " ") {
               event.preventDefault();
               pick(active);
-            } else if (event.key === "Escape" || event.key === "Tab") {
+            } else if (event.key === "Escape") {
+              event.preventDefault();
+              closeToButton();
+            } else if (event.key === "Tab") {
               setOpen(false);
             }
           }}
