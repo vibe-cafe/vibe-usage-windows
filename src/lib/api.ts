@@ -36,6 +36,8 @@ export const api = {
 
   // Rate limits ---------------------------------------------------------------
   getRateLimits: (force: boolean) => invoke<ProviderRateLimit[]>("get_rate_limits", { force }),
+  getCachedRateLimits: () =>
+    invoke<{ snapshots: ProviderRateLimit[]; refreshing: boolean }>("get_cached_rate_limits"),
   enableClaudeRateLimit: () => invoke<ProviderRateLimit[]>("enable_claude_rate_limit"),
   getQuotaProducts: () => invoke<QuotaProduct[]>("get_quota_products"),
   setQuotaProductSelected: (provider: RateLimitProvider, selected: boolean) =>
@@ -109,6 +111,34 @@ export function onSettingsUpdated(handler: (settings: AppSettings) => void): Pro
 /** Fired whenever the already-loaded settings window is made visible. */
 export function onSettingsShown(handler: () => void): Promise<UnlistenFn> {
   return listen("settings-shown", () => handler());
+}
+
+/** A null payload hides the previous warning while the panel is refreshing. */
+export function observeCachedRateLimits(update: (snapshots: ProviderRateLimit[] | null) => void): UnlistenFn {
+  let active = true;
+  let revision = 0;
+  async function load() {
+    const request = ++revision;
+    try {
+      const cached = await api.getCachedRateLimits();
+      if (active && request === revision) update(cached.refreshing ? null : cached.snapshots);
+    } catch {
+      // Keep the last result; the next panel event can still update it.
+    }
+  }
+  const subs = Promise.all([
+    listen<ProviderRateLimit[] | null>("rate-limits-updated", ({ payload }) => {
+      revision++;
+      if (active) update(payload);
+    }),
+    onSettingsShown(load),
+  ]);
+  // Subscribe first. A panel update outranks an older command response.
+  void subs.then(() => { if (active) void load(); });
+  return () => {
+    active = false;
+    void subs.then((listeners) => listeners.forEach((unlisten) => unlisten()));
+  };
 }
 
 /** Fired by Rust when the panel window is shown (popover-open refresh path). */

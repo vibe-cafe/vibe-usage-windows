@@ -105,6 +105,8 @@ struct Product {
     /// Optional in the CLI contract: a snapshot that predates the field (or a
     /// source that cannot say) simply omits it.
     empty_reason: Option<String>,
+    failure_reason: Option<String>,
+    http_status: Option<u16>,
     /// `live` / `local` / `cache` in the CLI contract.
     #[serde(default)]
     source: Option<String>,
@@ -227,6 +229,8 @@ fn decode(
 }
 
 fn map_product(product: Product) -> Result<ProviderRateLimit, FetchError> {
+    use RateLimitLiveFailure as Failure;
+
     let provider = cli_provider(&product.id).ok_or(FetchError::UnknownProduct)?;
     let meters = product
         .meters
@@ -239,23 +243,34 @@ fn map_product(product: Product) -> Result<ProviderRateLimit, FetchError> {
             window_duration: meter.window_seconds.filter(|value| *value > 0.0),
         })
         .collect::<Vec<_>>();
-    // OpenCode Go reads OpenCode's own login, which the user cannot fix here:
-    // no login and an expired account sign-in are settled empty states with
-    // their own reason (same as the macOS card), not a re-login request.
-    let opencode_login = match (provider, product.status.as_str()) {
-        (RateLimitProvider::OpenCodeGo, "missing_credentials") => {
-            Some(RateLimitLiveFailure::CredentialsNotFound)
-        }
-        (RateLimitProvider::OpenCodeGo, "expired_credentials") => {
-            Some(RateLimitLiveFailure::CredentialsExpired)
-        }
-        _ => None,
-    };
+    let mut failure = product
+        .failure_reason
+        .as_deref()
+        .and_then(|reason| live_failure(reason, product.http_status));
     let status = match product.status.as_str() {
-        _ if opencode_login.is_some() => RateLimitStatus::NoData,
+        // Only OpenCode can renew this sign-in. Keep its settled card and actions.
+        "missing_credentials" | "expired_credentials"
+            if provider == RateLimitProvider::OpenCodeGo =>
+        {
+            failure.get_or_insert(if product.status == "expired_credentials" {
+                Failure::CredentialsExpired
+            } else {
+                Failure::CredentialsNotFound
+            });
+            RateLimitStatus::NoData
+        }
         "ok" if !meters.is_empty() => RateLimitStatus::Ok,
         "ok" | "no_data" | "unsupported" => RateLimitStatus::NoData,
-        "missing_credentials" | "expired_credentials" | "unauthorized" => {
+        "missing_credentials" => {
+            failure.get_or_insert(if provider == RateLimitProvider::Antigravity {
+                Failure::ProgramNotFound
+            } else {
+                Failure::CredentialsNotFound
+            });
+            RateLimitStatus::Unauthorized
+        }
+        "expired_credentials" | "unauthorized" => {
+            failure.get_or_insert(Failure::CredentialsRejected);
             RateLimitStatus::Unauthorized
         }
         "retryable_error" => RateLimitStatus::RetryableError,
@@ -263,6 +278,16 @@ fn map_product(product: Product) -> Result<ProviderRateLimit, FetchError> {
             message: "无法识别本地配额状态".into(),
         },
     };
+    if matches!(product.status.as_str(), "ok" | "unsupported") {
+        failure = pause_failure(
+            product.pause_reason.as_deref(),
+            product.egress_region.as_deref(),
+        )
+        .or(failure);
+    }
+    if product.source.as_deref() == Some("cache") {
+        failure.get_or_insert(Failure::CliReportedFailure);
+    }
     Ok(ProviderRateLimit {
         provider,
         meters,
@@ -276,21 +301,31 @@ fn map_product(product: Product) -> Result<ProviderRateLimit, FetchError> {
         reset_credits_count: None,
         empty_reason: product.empty_reason.as_deref().and_then(empty_reason),
         source: product.source.as_deref().and_then(source),
-        // The CLI answers from its cache only after its live read reported a
-        // retryable error, so a cached answer is itself the statement that
-        // live failed. The specific reason exists only in `message`, which is
-        // free text and never kept.
-        live_failure: opencode_login
-            .or_else(|| {
-                (product.status == "unsupported")
-                    .then(|| pause_failure(product.pause_reason.as_deref(), product.egress_region.as_deref()))
-                    .flatten()
-            })
-            .or_else(|| {
-                (product.source.as_deref() == Some("cache"))
-                    .then_some(RateLimitLiveFailure::CliReportedFailure)
-            }),
+        live_failure: failure,
         status,
+    })
+}
+
+fn live_failure(reason: &str, http_status: Option<u16>) -> Option<RateLimitLiveFailure> {
+    use RateLimitLiveFailure::*;
+    Some(match reason {
+        "credentialsMissing" => CredentialsNotFound,
+        "credentialsRejected" => CredentialsRejected,
+        "credentialsUnreadable" => CredentialsUnreadable,
+        "credentialsEncrypted" => CredentialsEncrypted,
+        "loginRefreshFailed" => LoginRefreshFailed,
+        "programNotFound" => ProgramNotFound,
+        "programOutdated" => ProgramOutdated,
+        "programNoAnswer" => ProgramNoAnswer,
+        "timedOut" => EndpointTimedOut,
+        "unreachable" => EndpointUnreachable,
+        "httpStatus" => EndpointHttpStatus {
+            status: http_status.filter(|s| (100..=599).contains(s)),
+        },
+        "unrecognizedResponse" => EndpointUnrecognized,
+        "localRecordUnreadable" => LocalRecordUnreadable,
+        "internalError" => CliFailed,
+        _ => return None,
     })
 }
 
@@ -303,6 +338,7 @@ fn pause_failure(reason: Option<&str>, region: Option<&str>) -> Option<RateLimit
         }),
         "egressUnconfirmed" => Some(RateLimitLiveFailure::EgressUnconfirmed),
         "proxyNotDetected" => Some(RateLimitLiveFailure::ProxyNotDetected),
+        "proxyUnsupported" => Some(RateLimitLiveFailure::ProxyUnsupported),
         _ => None,
     }
 }
@@ -327,6 +363,8 @@ fn empty_reason(raw: &str) -> Option<RateLimitEmptyReason> {
         "noWindow" => Some(RateLimitEmptyReason::NoWindow),
         "notEntitled" => Some(RateLimitEmptyReason::NotEntitled),
         "sessionWithoutPlanLimits" => Some(RateLimitEmptyReason::SessionWithoutPlanLimits),
+        "periodEnded" => Some(RateLimitEmptyReason::PeriodEnded),
+        "noLocalRecord" => Some(RateLimitEmptyReason::NoLocalRecord),
         _ => None,
     }
 }
@@ -411,7 +449,7 @@ mod tests {
     }
 
     #[test]
-    fn antigravity_answers_reach_its_card_and_a_missing_agy_asks_for_sign_in() {
+    fn antigravity_answers_reach_its_card_and_a_missing_agy_asks_to_install() {
         let ok = decode(
             br#"{"schemaVersion":1,"products":[{"id":"antigravity","status":"ok","meters":[{"id":"gemini-5h","label":"5h","utilization":100,"windowSeconds":18000},{"id":"gemini-weekly","label":"7d","utilization":25,"resetsAt":"2026-11-23T00:00:00.000Z","windowSeconds":604800}],"fetchedAt":"2026-11-19T02:00:00.000Z","source":"live"}]}"#,
             &[RateLimitProvider::Antigravity],
@@ -424,7 +462,7 @@ mod tests {
             ok.meters.iter().map(|m| m.label.as_str()).collect::<Vec<_>>(),
             ["5h", "7d"]
         );
-        // The CLI found no `agy`: the card says to install and sign in.
+        // An older CLI only reported the missing_credentials status.
         let missing = decode(
             br#"{"schemaVersion":1,"products":[{"id":"antigravity","status":"missing_credentials","meters":[],"fetchedAt":"2026-11-19T02:00:00.000Z","message":"Install agy and sign in, then retry"}]}"#,
             &[RateLimitProvider::Antigravity],
@@ -432,6 +470,7 @@ mod tests {
         .unwrap()
         .remove(0);
         assert_eq!(missing.status, RateLimitStatus::Unauthorized);
+        assert_eq!(missing.live_failure, Some(RateLimitLiveFailure::ProgramNotFound));
     }
 
     #[test]
@@ -450,6 +489,10 @@ mod tests {
         );
         assert_eq!(paused("egressUnconfirmed", "").live_failure, Some(RateLimitLiveFailure::EgressUnconfirmed));
         assert_eq!(paused("proxyNotDetected", "").live_failure, Some(RateLimitLiveFailure::ProxyNotDetected));
+        let proxy = paused("proxyUnsupported", "");
+        assert_eq!(proxy.status, RateLimitStatus::NoData);
+        assert_eq!(proxy.live_failure, Some(RateLimitLiveFailure::ProxyUnsupported));
+        assert!(proxy.live_failure.unwrap().is_pause());
         assert_eq!(paused("somethingNew", "").live_failure, None);
     }
 
@@ -481,16 +524,55 @@ mod tests {
         // OpenCode refused the login: only OpenCode can issue a new one.
         let rejected = snapshot("unauthorized");
         assert_eq!(rejected.status, RateLimitStatus::Unauthorized);
-        assert_eq!(rejected.live_failure, None);
-        // Other CLI products keep their existing mapping.
-        let kimi = decode(
-            br#"{"schemaVersion":1,"products":[{"id":"kimi-code","status":"missing_credentials","meters":[],"fetchedAt":"2026-11-24T02:00:00Z"}]}"#,
-            &[RateLimitProvider::KimiCode],
-        )
-        .unwrap()
-        .remove(0);
-        assert_eq!(kimi.status, RateLimitStatus::Unauthorized);
-        assert_eq!(kimi.live_failure, None);
+        assert_eq!(rejected.live_failure, Some(RateLimitLiveFailure::CredentialsRejected));
+    }
+
+    #[test]
+    fn cli_login_states_distinguish_absence_from_rejection() {
+        use RateLimitLiveFailure::*;
+        for id in ["kimi-code", "zcode", "antigravity", "grok"] {
+            for (status, failure) in [
+                ("missing_credentials", if id == "antigravity" { ProgramNotFound } else { CredentialsNotFound }),
+                ("expired_credentials", CredentialsRejected),
+                ("unauthorized", CredentialsRejected),
+            ] {
+                let mut product = serde_json::json!({ "id": id, "status": status, "fetchedAt": "2026-11-25T00:00:00Z" });
+                let snapshot = map_product(serde_json::from_value(product.clone()).unwrap()).unwrap();
+                assert_eq!(snapshot.status, RateLimitStatus::Unauthorized);
+                assert_eq!(snapshot.live_failure, Some(failure));
+                // A known code takes precedence over the legacy status fallback.
+                product["failureReason"] = "credentialsUnreadable".into();
+                let snapshot = map_product(serde_json::from_value(product).unwrap()).unwrap();
+                assert_eq!(snapshot.live_failure, Some(CredentialsUnreadable));
+            }
+        }
+    }
+
+    #[test]
+    fn maps_only_fixed_cli_failure_reasons() {
+        use RateLimitLiveFailure::*;
+        for (code, expected) in [
+            ("credentialsMissing", CredentialsNotFound),
+            ("credentialsRejected", CredentialsRejected),
+            ("credentialsUnreadable", CredentialsUnreadable),
+            ("credentialsEncrypted", CredentialsEncrypted),
+            ("loginRefreshFailed", LoginRefreshFailed),
+            ("programNotFound", ProgramNotFound),
+            ("programOutdated", ProgramOutdated),
+            ("programNoAnswer", ProgramNoAnswer),
+            ("timedOut", EndpointTimedOut),
+            ("unreachable", EndpointUnreachable),
+            ("httpStatus", EndpointHttpStatus { status: Some(502) }),
+            ("unrecognizedResponse", EndpointUnrecognized),
+            ("localRecordUnreadable", LocalRecordUnreadable),
+            ("internalError", CliFailed),
+        ] {
+            assert_eq!(live_failure(code, Some(502)), Some(expected));
+        }
+        for status in [None, Some(99), Some(600)] {
+            assert_eq!(live_failure("httpStatus", status), Some(EndpointHttpStatus { status: None }));
+        }
+        assert_eq!(live_failure("unknown", Some(502)), None);
     }
 
     #[test]
@@ -523,6 +605,9 @@ mod tests {
         // A snapshot that predates the field is the normal path, and a newer
         // CLI naming a reason this app cannot render must not error either.
         assert_eq!(snapshot("").empty_reason, None);
+        assert_eq!(snapshot(r#","emptyReason":"noWindow""#).empty_reason, Some(RateLimitEmptyReason::NoWindow));
+        assert_eq!(snapshot(r#","emptyReason":"periodEnded""#).empty_reason, Some(RateLimitEmptyReason::PeriodEnded));
+        assert_eq!(snapshot(r#","emptyReason":"noLocalRecord""#).empty_reason, Some(RateLimitEmptyReason::NoLocalRecord));
         assert_eq!(snapshot(r#","emptyReason":"whoKnows""#).empty_reason, None);
     }
 
@@ -548,10 +633,10 @@ mod tests {
 
     #[test]
     fn cli_source_is_mapped_and_a_cached_answer_says_live_failed() {
-        let snapshot = |source: &str| {
+        let snapshot = |source: &str, extra: &str| {
             decode(
                 format!(
-                    r#"{{"schemaVersion":1,"products":[{{"id":"grok","status":"ok","meters":[{{"id":"m","label":"7d","utilization":30}}],"fetchedAt":"2026-09-08T02:00:00Z","source":"{source}","message":"ECONNRESET C:\\Users\\someone must-not-survive"}}]}}"#
+                    r#"{{"schemaVersion":1,"products":[{{"id":"grok","status":"ok","meters":[{{"id":"m","label":"7d","utilization":30}}],"fetchedAt":"2026-09-08T02:00:00Z","source":"{source}","message":"ECONNRESET C:\\Users\\someone must-not-survive"{extra}}}]}}"#
                 )
                 .as_bytes(),
                 &[RateLimitProvider::Grok],
@@ -559,11 +644,11 @@ mod tests {
             .unwrap()
             .remove(0)
         };
-        let live = snapshot("live");
+        let live = snapshot("live", "");
         assert_eq!(live.source, Some(RateLimitSource::Live));
         assert_eq!(live.live_failure, None);
-        assert_eq!(snapshot("local").source, Some(RateLimitSource::LocalLog));
-        let cached = snapshot("cache");
+        assert_eq!(snapshot("local", "").source, Some(RateLimitSource::LocalLog));
+        let cached = snapshot("cache", "");
         assert_eq!(cached.status, RateLimitStatus::Ok);
         assert_eq!(cached.source, Some(RateLimitSource::Cache));
         assert_eq!(
@@ -571,7 +656,17 @@ mod tests {
             Some(RateLimitLiveFailure::CliReportedFailure)
         );
         assert!(!format!("{cached:?}").contains("must-not-survive"));
-        assert_eq!(snapshot("somethingNew").source, None);
+        assert_eq!(snapshot("somethingNew", "").source, None);
+        for source in ["cache", "local"] {
+            let fallback = snapshot(source, r#","failureReason":"httpStatus","httpStatus":502"#);
+            assert_eq!(fallback.status, RateLimitStatus::Ok);
+            assert_eq!(fallback.live_failure, Some(RateLimitLiveFailure::EndpointHttpStatus { status: Some(502) }));
+        }
+        let paused = snapshot("local", r#","pauseReason":"proxyUnsupported""#);
+        assert_eq!(paused.status, RateLimitStatus::Ok);
+        assert_eq!(paused.meters[0].utilization, 30.0);
+        assert_eq!(paused.live_failure, Some(RateLimitLiveFailure::ProxyUnsupported));
+        assert_eq!(snapshot("cache", r#","failureReason":"future""#).live_failure, cached.live_failure);
     }
 
     #[test]

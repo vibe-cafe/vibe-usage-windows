@@ -79,10 +79,8 @@ pub enum RateLimitStatus {
 /// why: OpenCode Go's usage endpoint returns 403 for a key without the Go
 /// plan, and Claude Code answers `rate_limits_available: false` for API key /
 /// Bedrock / Vertex logins. Both are definitive, so the card explains the
-/// account instead of offering a retry. Every other source (session JSONL,
-/// on-disk cache, the other CLI-backed products) cannot tell those apart from
-/// "that product has no data here", so it leaves this `None` and the card
-/// stays neutral rather than guessing.
+/// account instead of offering a retry. CLI readers can also distinguish a
+/// finished period from the absence of a local record.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum RateLimitEmptyReason {
@@ -96,6 +94,8 @@ pub enum RateLimitEmptyReason {
     /// The session's login method has plan windows that genuinely do not apply
     /// (Claude Code with an API key, Bedrock or Vertex).
     SessionWithoutPlanLimits,
+    PeriodEnded,
+    NoLocalRecord,
     /// The organization's managed settings force Claude Code's nonessential
     /// traffic off, which also blocks its usage read, so the app did not start
     /// Claude Code (`claude_nonessential`). Not a failure and not something a
@@ -160,9 +160,19 @@ pub enum RateLimitLiveFailure {
     /// A saved sign-in whose token lapsed and that only its own app may
     /// renew (OpenCode account): opening that app renews it.
     CredentialsExpired,
+    CredentialsUnreadable,
+    CredentialsEncrypted,
+    LoginRefreshFailed,
+    ProgramNotFound,
+    ProgramOutdated,
+    ProgramNoAnswer,
+    LocalRecordUnreadable,
     EndpointTimedOut,
     EndpointUnreachable,
-    EndpointHttpStatus { status: u16 },
+    EndpointHttpStatus {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        status: Option<u16>,
+    },
     EndpointUnrecognized,
     // App-held credentials (ZCode key in Windows Credential Manager)
     CredentialStoreUnavailable,
@@ -173,8 +183,7 @@ pub enum RateLimitLiveFailure {
     CliUnrecognizedOutput,
     CliSchemaMismatch,
     CliNoResult,
-    /// The CLI answered from its cache after its live read failed; the reason
-    /// exists only as free text, which is never displayed.
+    /// The CLI answered from its cache without a known failure code.
     CliReportedFailure,
     // Paused on purpose (network-privacy principle, rule 3): the read would go
     // out direct and the egress check said no (`egress_check`, or the CLI's
@@ -187,6 +196,7 @@ pub enum RateLimitLiveFailure {
     /// No proxy detected and the user chose 「暂停读取」 for 「没检测到代理时」
     /// (Settings → 隐私保护).
     ProxyNotDetected,
+    ProxyUnsupported,
 }
 
 impl RateLimitLiveFailure {
@@ -194,7 +204,7 @@ impl RateLimitLiveFailure {
     pub fn is_pause(self) -> bool {
         matches!(
             self,
-            Self::EgressRegionUnsupported { .. } | Self::EgressUnconfirmed | Self::ProxyNotDetected
+            Self::EgressRegionUnsupported { .. } | Self::EgressUnconfirmed | Self::ProxyNotDetected | Self::ProxyUnsupported
         )
     }
 }
@@ -322,6 +332,8 @@ mod tests {
             serde_json::json!("antigravity")
         );
         for (reason, id) in [
+            (RateLimitEmptyReason::PeriodEnded, "periodEnded"),
+            (RateLimitEmptyReason::NoLocalRecord, "noLocalRecord"),
             (RateLimitEmptyReason::NotEntitled, "notEntitled"),
             (
                 RateLimitEmptyReason::SessionWithoutPlanLimits,

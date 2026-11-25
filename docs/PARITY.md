@@ -39,7 +39,7 @@
 | `DistributionChartsView` | `components/DistributionGrid.tsx`（自绘 SVG donut） |
 | 长名字 `.truncationMode(.middle)` + `.help()`（分布图例/筛选选项，同前缀项目名区分信息在尾部） | `components/MiddleTruncateLabel.tsx`（head 截断 + tail 6 字符不收缩 + `title` 悬浮全名；两段都 `whitespace-pre`，否则拆分处的空格会被 flex 子元素吞掉，显示成「Gemini 4Carbon」） |
 | `SettingsView` (NSWindow 460×480) | `SettingsApp`（独立 WebView 窗口，默认 460×620、可调整，信息架构 1:1：数据同步 → 订阅配额 → 常规 → 数据目录（高级）→ 测试诊断 → 关于 → 危险操作） |
-| `SettingsView.zCodeRow` / `compactQuotaStatus`（收起显示「待配置/已配置」，展开才是区域 + Key 表单） | `SettingsApp` 的 ZCode 行 + `lib/quotaProducts.ts:compactQuotaStatus` |
+| `SettingsQuotaStatus.status` / `AppState.quotaWarningSnapshot` | `SettingsApp` + `lib/quotaProducts.ts:quotaProductStatusText`。启用且刷新结束后显示读取原因短词。有数但暂停时也显示「已暂停」。设置窗口只读面板内存快照，监听 `rate-limits-updated`。ZCode 行保留按区域的 Key 配置状态。 |
 | `AppState` | `state/AppStateContext.tsx` + Rust `AppCtx` |
 | `APIClient` | `services/api_client.rs` |
 | `SyncEngine`（npx/bun x，120s） | `services/sync_engine.rs`（内置 CLI + node，120s，CREATE_NO_WINDOW） |
@@ -48,7 +48,7 @@
 | 八产品订阅配额目录与任意数量选择 | Codex / Claude 原生适配；Kimi / ZCode / Grok / OpenCode Go / Antigravity / AGY 使用版本化 typed CLI bridge（OpenCode Go 的凭据读取由内置 CLI 负责：2.x 凭据表 → 1.x `auth.json` 回退；Antigravity 由 CLI 启动用户已登录的 `agy` 读取，Windows 额外查官方默认安装位置，见 `docs/SUBSCRIPTION_QUOTAS.md`「Antigravity / AGY 探测约束」）；Cursor 独立显示待接入（macOS 0.7.4 起已经读取，Windows 尚未跟进） |
 | `RateLimitCardView`：`QuotaTabStripView`（整目录图标 Tab：已生效彩色在前、未生效置灰在后、可拖动排序、最右齿轮进设置、已启用但非 ok 加琥珀点）+ 一行两张 240px 卡片横滑，Tab 与横滑双向联动（点 Tab 滑过去、滑动时高亮跟随前缘卡片）；卡片只属于已启用产品，全部关闭时只剩图标行 | `components/RateLimitCard.tsx` + `components/QuotaTabStrip.tsx`：同一模型（HTML5 拖放排序、前缘卡片经滚动位置判定、`quotaTabOrder` 顺序与 `quotaProductOrder` 持久化、齿轮调 `open_settings_window`） |
 | `RateLimitCardView.allRows` 的 Codex 5h 占位行（`fiveHourNotEnforced` 或 Pro / Prolite →「不限额」，否则「近 5 小时无活动」；维护者 2026-10-24 定）与 `expectsFiveHourWindow` | `lib/quotaProducts.ts:codexFiveHourPlaceholder` / `expectsCodexFiveHour`（同一规则；Windows 原先显示「官方当前未启用」，已对齐） |
-| `RateLimitCardView.emptyStateText(for:isDetected:)` / `ProviderRateLimit.EmptyReason` | `lib/quotaProducts.ts:quotaEmptyStateText` + Rust `RateLimitEmptyReason`（`crates/core/src/rate_limit/mod.rs`） |
+| `RateLimitCardView.emptyStateText` / `authorizationText` | `lib/quotaProducts.ts:quotaEmptyStateText` / `quotaAuthorizationText`。六种 CLI 空态、登录缺失与失效、首次占位和未知原因的卡片文案逐字对齐。 |
 | `ProviderRateLimit.Source` / `ProviderRateLimit.LiveFailure`（卡片的实际来源和固定失败原因，一键诊断 1a） | Rust `RateLimitSource` / `RateLimitLiveFailure`（同一组代码，另加 Windows 独有的桌面端记录四种原因和凭据管理器）+ `lib/quotaProducts.ts:quotaFailureText` / `quotaProvenanceText`（文案与显示规则一致，见 `docs/SUBSCRIPTION_QUOTAS.md`「失败原因和来源」） |
 | `RateLimitCardView.ProviderIcon`（官方 28/56px 资产，卡片与设置共用；Antigravity / AGY 没有资产，画 `sparkles`） | `components/ProviderIcon.tsx`（`src/assets/*-icon.png` 为官方资产 @2x=56px，卡片 14px 显示）+ 符号兜底（Antigravity / AGY 直接用 lucide `Sparkles`） |
 | ZCode 两区域 Key | BigModel / Z.ai 分开存入 Windows Credential Manager；只向明确选择的区域请求注入 |
@@ -61,7 +61,7 @@
 | Sparkle | `services/updater.rs`（latest.json + SHA-256 + NSIS 被动模式覆盖升级，见 `docs/WINDOWS_UPDATE.md`） |
 | `SMAppService`（登录项） | `auto-launch` crate（HKCU Run 注册表键，值带 `--autostart`；带它启动时窗口照常出现；设了代理（含 PAC 暂时取不到）、有同步或配额要读时，读配额和每一次同步（手动的也算）都等到代理就绪——应用自己的代理变量，或同步服务器、各厂商主机的系统路由（含 PAC）指向的端口能连上——最多等 2 分钟，等待期间配额卡显示「正在读取」；一个代理都没设就不等，四家厂商的读取改由出口检测把关，与 macOS `LoginLaunch` 对齐；旧注册值在启动时补上参数，不碰任务管理器的启用开关） |
 | `EgressCheck`（没检测到代理时，先匿名检测出口国家再读 Codex、Claude；设置「隐私保护 → 没检测到代理时」三选一（自动判断（推荐）/ 暂停读取 / 照常读取），转给 CLI 检测 Antigravity） | `src-tauri/src/egress_check.rs`（同样的检测主机、地区、缓存时长和文案；网卡地址用 `GetAdaptersAddresses` 求摘要；设置在「隐私保护」分区，同样的弹出菜单（`MenuSelect`，自绘、对齐 macOS 原生弹出菜单），存为 `settings.json` 的 `egressMode`（开发时的两个旧字段读入时映射）；环境变量 `VIBE_USAGE_EGRESS_CHECK=1|0` / `VIBE_USAGE_REQUIRE_PROXY=1|0`） |
-| `SystemProxy`（按网址解析系统代理，PAC 由系统求值，交给 CLI、Claude Code 和厂商请求） | `src-tauri/src/system_proxy.rs`（注册表手动代理含按协议分开的写法和例外列表、PAC 由 WinHTTP 求值；reqwest 每次请求现解析；CLI 和 Claude 探测按同一份系统代理拿变量，Claude Code 只拿 HTTP 代理，纯 SOCKS 系统代理下目前不经代理，Mac 用本机中转解决、Windows 待做） |
+| `SystemProxy`（按网址解析系统代理，PAC 由系统求值，交给 CLI、Claude Code 和厂商请求） | `src-tauri/src/system_proxy.rs`（注册表手动代理含按协议分开的写法和例外列表、PAC 由 WinHTTP 求值；reqwest 每次请求现解析；CLI 和 Claude 探测按同一份系统代理拿变量，Claude Code 只拿 HTTP 代理；系统把 Claude 的主机交给 SOCKS、Claude Code 又拿不到 HTTP 代理时，Windows 不启动 Claude Code、卡片暂停，Mac 用本机中转 `ClaudeSOCKSRelay` 照常读取，Windows 待做） |
 
 ## 平台差异（有意为之）
 

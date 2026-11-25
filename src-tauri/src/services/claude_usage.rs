@@ -220,6 +220,11 @@ fn discover_candidates(environment: &DiscoveryEnvironment) -> Vec<ClaudeLaunch> 
 /// Checked on every refresh, so a policy change takes effect on the next one.
 /// A user's own switch does not stop the read: the probe keeps it off and
 /// still reads the quota (`vibe_core::claude_nonessential`).
+///
+/// When the system routes an Anthropic host through SOCKS and Claude Code has
+/// no HTTP proxy to use, Claude Code is not started either (it would connect
+/// direct with the user's login): the card is paused, without older numbers,
+/// and the next refresh looks again (`egress_check::ClaudeRoute::SocksUnusable`).
 pub async fn fetch(
     egress: crate::egress_check::Settings,
 ) -> Result<ProviderRateLimit, RateLimitLiveFailure> {
@@ -273,14 +278,21 @@ pub async fn fetch(
     .unwrap_or_default();
     // Claude Code would reach Anthropic direct with that environment: confirm
     // the egress before it starts with the user's login (`egress_check`).
-    let mut child: std::collections::HashMap<String, String> = crate::egress_check::PROXY_NAMES
-        .iter()
-        .filter_map(|name| std::env::var(name).ok().map(|value| (name.to_string(), value)))
-        .collect();
-    child.extend(proxy_env.iter().map(|(name, value)| (name.to_string(), value.clone())));
-    if let Err(pause) = crate::egress_check::check_claude(egress, child, &routes).await {
-        remember(record);
-        return Err(pause.live_failure());
+    let child = crate::egress_check::claude_child(&|name| std::env::var(name).ok(), &proxy_env);
+    match crate::egress_check::check_claude(egress, child, &routes).await {
+        Ok(()) => {}
+        // A SOCKS-only system proxy Claude Code cannot follow: it lasts until
+        // the local relay lands, so Claude Code's own cache would only grow
+        // older. The card says why, without numbers (and, as for any pause,
+        // without a retry; the next refresh checks again).
+        Err(pause @ crate::egress_check::Pause::SocksUnusable) => {
+            remember(record);
+            return Ok(after_live_failure(pause.live_failure(), None));
+        }
+        Err(pause) => {
+            remember(record);
+            return Err(pause.live_failure());
+        }
     }
     let mut last_error = RateLimitLiveFailure::ClaudeNoResponse;
     for candidate in candidates.into_iter().take(MAX_CANDIDATES) {
