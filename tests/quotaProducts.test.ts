@@ -15,6 +15,8 @@ import {
   quotaRetryableText,
   quotaTabOrder,
   quotaTabShowsWarning,
+  quotaTooltipLines,
+  quotaTooltipTitle,
 } from "../src/lib/quotaProducts";
 import { ProviderRateLimit, QuotaProduct, RateLimitProvider } from "../src/lib/types";
 
@@ -568,5 +570,42 @@ describe("settings product notes", () => {
     for (const provider of ["codex", "claudeCode", "kimi-code", "zcode", "grok", "opencode-go", "cursor"] as RateLimitProvider[]) {
       expect(quotaProductNote(provider)).toBeNull();
     }
+  });
+});
+
+describe("quota tooltip (macOS TooltipView)", () => {
+  const now = new Date("2026-11-25T00:00:00Z");
+  const epoch = (iso: string) => new Date(iso).getTime() / 1000;
+
+  it("spells out the common windows and keeps any other label", () => {
+    expect(quotaTooltipTitle("5h")).toBe("5 小时窗口");
+    expect(quotaTooltipTitle("7d")).toBe("7 天窗口");
+    expect(quotaTooltipTitle("Month")).toBe("月度窗口");
+    expect(quotaTooltipTitle("额外")).toBe("额外");
+  });
+
+  it("puts Cursor's split under the Month row's usage and time", () => {
+    const lines = quotaTooltipLines(
+      { utilization: 48, resetsAt: epoch("2026-12-01T00:00:00Z"), windowDuration: 30 * 86400 },
+      [
+        { label: "Cursor 模型", utilization: 4 },
+        { label: "第三方模型", utilization: 88 },
+      ],
+      now,
+    );
+    expect(lines.map(({ kind, label, value }) => ({ kind, label, value }))).toEqual([
+      { kind: "usage", label: "Token 用量", value: "已使用 48%" },
+      { kind: "time", label: "时间", value: "已过去 80% · 剩余 6d" },
+      { kind: "part", label: "Cursor 模型", value: "4%" },
+      { kind: "part", label: "第三方模型", value: "88%" },
+    ]);
+  });
+
+  it("falls back to the reset countdown, then to 未知", () => {
+    const resetOnly = quotaTooltipLines({ utilization: 25, resetsAt: epoch("2026-11-25T02:30:00Z") }, [], now);
+    expect(resetOnly[1]).toEqual({ kind: "time", label: "重置", value: "剩余 2h 30m" });
+    const unknown = quotaTooltipLines({ utilization: 25 }, undefined, now);
+    expect(unknown).toHaveLength(2);
+    expect(unknown[1]).toEqual({ kind: "time", label: "时间", value: "未知", muted: true });
   });
 });

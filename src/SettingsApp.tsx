@@ -590,8 +590,8 @@ export function SettingsApp() {
               检测状态仅用于推荐，所有产品都可手动选择；未选择的产品不会联网读取配额。
             </p>
             <p className="text-[10.5px] leading-relaxed" style={{ color: "#8C8C8C" }}>
-              Grok 仅从官方 CLI 普通日志读取结构化订阅配额；Cursor 可单独选择并等待官方配额接口，不读取
-              Cookie、登录 Token 或其他应用凭据。
+              Grok 仅从官方 CLI 普通日志读取结构化订阅配额；Cursor 复用 Cursor 自己的登录读取官方用量汇总，不读取浏览器
+              Cookie。
             </p>
             <p className="text-[10.5px] leading-relaxed" style={{ color: "#8C8C8C" }}>
               Kimi Code 使用其官方 CLI 登录；Antigravity / AGY 使用官方 agy 登录。

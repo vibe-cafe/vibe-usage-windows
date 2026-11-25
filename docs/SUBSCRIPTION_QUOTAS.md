@@ -6,7 +6,7 @@
 
 Codex 付费套餐（Plus / Pro / Prolite / Business / Business ProLite）没有拿到 5h 窗口时，卡片仍保留 5h 这一行并说明原因，规则与 macOS 相同（维护者 2026-10-24 定，见 macOS `AGENTS.md`「"Not enforced" vs "no data" for the Codex 5h window」）：实时用量接口会列出所有生效的窗口，它没给 5h 就说明官方关掉了这个限额（`fiveHourNotEnforced`），显示「不限额」；OpenAI 对 Pro / Prolite 一直关着 5h，这两种套餐不论数据来自接口还是本地日志都显示「不限额」；其余情况数据来自本地会话日志，少了 5h 窗口可能只是近 5 小时没用，显示「近 5 小时无活动」。Business ProLite 不算 Pro 套餐，只在接口确认没有 5h 时显示「不限额」。实现在 `src/lib/quotaProducts.ts:codexFiveHourPlaceholder`。
 
-用户可以选择任意数量的订阅产品，选择顺序即卡片顺序；面板为每个已选产品始终渲染一张卡片，多于两张时横向滚动，不折叠成一句通用提示。自动检测只影响首次推荐（首次启动会勾选全部已检测且已就绪的产品）；手动选择不受安装路径限制。Cursor 当前只展示待接入状态（macOS 已经读取，Windows 尚未跟进）。
+用户可以选择任意数量的订阅产品，选择顺序即卡片顺序；面板为每个已选产品始终渲染一张卡片，多于两张时横向滚动，不折叠成一句通用提示。自动检测只影响首次推荐（首次启动会勾选全部已检测且已就绪的产品）；手动选择不受安装路径限制。
 
 ## 数据流和职责
 
@@ -52,6 +52,16 @@ Codex 付费套餐（Plus / Pro / Prolite / Business / Business ProLite）没有
 - 出口检测：Grok 在 CLI 的 `EGRESS_GATED_PRODUCTS` 里，检测主机是 `cli-chat-proxy.grok.com` 自己。暂停时不启动 Grok：日志里有本账期的数就照常显示（CLI 结果是 `ok` + `source: local`，另带 `pauseReason`，来源行写明暂停原因），没有就是 `unsupported` + `pauseReason`，卡片一行原因，和 Antigravity 一样。
 - App 这边：窗口可见时 Grok 最多 5 分钟读一次（`rate_limits.rs` 的 `SLOW_MAX_AGE`），手动刷新照样读。出口检测暂停时例外，下一次刷新就重读（`recheck_egress`，见下节），暂停期间 CLI 不启动 Grok，只重新判断出口。
 - **真机待测**：`grok.exe` 的实际安装位置、能否直接启动、超时后进程树收尾（`taskkill /T /F`）。
+
+## Cursor 探测约束（与 macOS 0.7.4 一致）
+
+2026-11-25 接入，对齐 macOS（vibe-cafe/vibe-usage-app#53）；最初由外部贡献者在 vibe-cafe/vibe-usage-windows#23 实现，这里在最新 main 上只保留了 Cursor 部分。读取全部由 CLI 完成（`quota fetch --product cursor`，CLI 规则见 vibe-cafe/vibe-usage `AGENTS.md`「Subscription quota isolation」）：
+
+- **读什么。** CLI 只读 Cursor 自己的 `%APPDATA%\Cursor\User\globalStorage\state.vscdb` 里 `cursorAuth/accessToken` 这一行（`CURSOR_CONFIG_DIR` / `CURSOR_STATE_DB_PATH` 可改位置），在内存里拼成会话 Cookie，请求 `https://cursor.com/api/usage-summary`。不读浏览器 Cookie、不读 refresh token、不续期、不写 Cursor 的库。App 自己不碰 Cursor 的任何文件；「已检测」只看 `~\.cursor`、`%APPDATA%\Cursor`、`Programs\Cursor\Cursor.exe` 和 PATH 上的 `cursor`。
+- **代理。** 和其他 CLI 产品一样经 `sync_engine::cli_command` 注入当下的系统代理（`system_proxy.rs`，`cursor.com` 已在开机代理探测的主机清单里）；CLI 照不了的代理（如只开 SOCKS4）返回 `unsupported`，不发请求。只靠 Windows「自动检测设置」（WPAD）下发代理、没有 PAC 地址和代理变量的网络，`system_proxy.rs` 目前认不出，会按直连（已知缺口，工作区《隐私修复/B块按第6条复查》记为后续；Windows 上的 Cursor 同步原来就走这条路）。Cursor 不在出口检测名单里（名单只有维护者点名的四家），与 macOS 和 CLI 相同。
+- **卡片。** 一行 `Month`（本计费周期，带时间进度条），按需额度显示为「额外」；Cursor 模型 / 第三方模型各用了多少只放在 `Month` 的悬停提示里（CLI 的 `breakdown`，标签映射 `quota_cli.rs:display_label`，与 macOS `QuotaCLIBridge.displayLabel` 相同）。套餐名在标题旁。悬停提示与 macOS `TooltipView` 一致：标题把 `5h` / `7d` / `Month` 写成「5 小时窗口 / 7 天窗口 / 月度窗口」，每行带「Token 用量」「时间」或「重置」小标签（对所有产品生效，PARITY 第 7 条）。
+- **状态。** 没找到登录（`missing_credentials`）或 cursor.com 拒绝（`unauthorized`）→「请在 Cursor 中重新登录后重试」+ 重试；`retryable_error` →「暂时无法读取订阅配额」+ 重试，CLI 有同一账号的缓存时显示旧数并标「来源：缓存 · 实时读取失败」；`unsupported`（新版 Cursor 把登录加密成 `cursor-safe-storage:`，vibe-cafe/vibe-usage#144；或代理照不了）→ 无数据、没有重试，空态按「空态判定（不猜）」显示「暂未读取到订阅配额数据」。不提示重新登录：重新登录只会写回同样的密文。卡片要说出「已加密」，要等 CLI 的固定原因代码（#190 的 `failureReason`）。**CLI 在加密时不发请求，要等 vibe-cafe/vibe-usage#205 发到 npm；之前的 CLI 会把密文发一次，401 后卡片显示「请在 Cursor 中重新登录后重试」。**
+- **刷新。** 与 Kimi / ZCode / Grok / OpenCode Go 同一批、同样 60 秒间隔（macOS 每个产品 60 秒冷却）。首次启动且本机检测到 Cursor 时默认勾选（维护者 2026-11-08 定，见 CLI `AGENTS.md`）；已经初始化过选择的老用户不会被自动加上。
 
 ## 出口检测（网络隐私最高原则第 3 条，2026-11-24）
 
@@ -110,7 +120,8 @@ Credential Manager 读取失败只影响 ZCode，其他产品仍可请求。CLI 
 2. 在旧请求尚未结束时切换区域/Key，确认旧返回不覆盖新上下文；同时验证设置窗与托盘面板的显示一致性。
 3. 模拟 ZCode 凭据库读取失败，确认另一个已选产品仍能返回；验证失败后不会继续把过期配额显示为成功。
 4. 使用固定 CLI 验证 Kimi/ZCode/Grok/OpenCode Go 的正常、无数据和失败状态，以及旧设置迁移、首次推荐、空选择和「选择第三项后仍保留前两项」；OpenCode Go 另需用没有 Go 订阅的 Key 复测 403 对应的未订阅空态。Antigravity / AGY 另需复测：agy 只装在默认位置 `%LOCALAPPDATA%\agy\bin`、不在 App 的 PATH 上时仍能读到 5h / 7d；agy 和桌面端都没装时显示「请安装 agy 或 Antigravity」，登录被拒时显示「请在 Antigravity 中登录」。2026-11-24 起另需复测：只装桌面端、桌面端开着时能读（第二步）；桌面端关着时能读（第三步，确认 `resources\app\package.json` 或 `resources\app.asar` 存在，否则这一步不会启动）；agy 登录失效时不弹浏览器；不用 Antigravity 时窗口一直开着，5 分钟后 `~\.vibe-usage\antigravity-quota.json` 的 `attemptAt` 不变。
-5. 重跑生命周期准入测试：关闭准入前子进程可运行，关闭后确有 Job 限额拒绝；继续验证取消、退出、无关 Node 存活、忙时立即卸载和升级。
+5. Cursor：登录了 Cursor（明文凭据）时能读到 `Month`，悬停能看到 Cursor 模型 / 第三方模型；退出 Cursor 登录后卡片显示「请先登录 Cursor」、不显示旧额度；换账号后不显示前一个账号的数；凭据已加密（`cursor-safe-storage:`）时显示「登录信息已加密，暂时读不了」、没有重试按钮（要用带 vibe-cafe/vibe-usage#205、#207 的 CLI）；系统代理开着时请求走代理。
+6. 重跑生命周期准入测试：关闭准入前子进程可运行，关闭后确有 Job 限额拒绝；继续验证取消、退出、无关 Node 存活、忙时立即卸载和升级。
 
 本地 Rust 测试覆盖缓存失效、旧请求回写、请求/响应集合校验及凭据错误隔离；Mac 的通过不替代以上 Windows 实测。账户条件不满足记为 BLOCKED；ZCode Key 由用户在 GUI 输入。
 

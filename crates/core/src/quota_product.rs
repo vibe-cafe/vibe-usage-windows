@@ -114,7 +114,7 @@ pub struct ProductDefinition {
 /// App-owned presentation, routing and discovery rules. The vendored CLI
 /// keeps its independent versioned contract; changing it requires CLI review.
 pub fn catalog() -> &'static [ProductDefinition] {
-    use QuotaProductAvailability::{PendingProtocol, Ready};
+    use QuotaProductAvailability::Ready;
     use RateLimitProvider::*;
     &[
         ProductDefinition {
@@ -168,8 +168,8 @@ pub fn catalog() -> &'static [ProductDefinition] {
         ProductDefinition {
             provider: Cursor,
             display_name: "Cursor",
-            availability: PendingProtocol,
-            cli_id: None,
+            availability: Ready,
+            cli_id: Some("cursor"),
             command: "cursor",
             relative_paths: &[".cursor"],
         },
@@ -389,7 +389,14 @@ mod tests {
         }
         assert_eq!(
             ids,
-            HashSet::from(["kimi-code", "zcode", "grok", "opencode-go", "antigravity"])
+            HashSet::from([
+                "kimi-code",
+                "zcode",
+                "grok",
+                "opencode-go",
+                "cursor",
+                "antigravity"
+            ])
         );
         assert_eq!(
             cli_provider("antigravity"),
@@ -399,7 +406,8 @@ mod tests {
             cli_provider("opencode-go"),
             Some(RateLimitProvider::OpenCodeGo)
         );
-        assert_eq!(cli_id(RateLimitProvider::Cursor), None);
+        assert_eq!(cli_id(RateLimitProvider::Cursor), Some("cursor"));
+        assert_eq!(cli_provider("cursor"), Some(RateLimitProvider::Cursor));
         assert_eq!(cli_id(RateLimitProvider::Codex), None);
         assert_eq!(cli_id(RateLimitProvider::ClaudeCode), None);
         assert_eq!(cli_provider("unknown"), None);
@@ -560,11 +568,20 @@ mod tests {
     }
 
     #[test]
-    fn first_launch_selects_detected_ready_products_but_not_cursor() {
+    fn first_launch_selects_detected_ready_products_only() {
+        // Cursor is read through the CLI like the others now (macOS 0.7.4,
+        // vibe-usage-app#53), so a detected Cursor is recommended too. A
+        // product still waiting for its protocol never is.
         let products = vec![
             QuotaProduct {
                 provider: RateLimitProvider::Cursor,
                 display_name: "Cursor",
+                availability: QuotaProductAvailability::Ready,
+                is_detected: true,
+            },
+            QuotaProduct {
+                provider: RateLimitProvider::OpenCodeGo,
+                display_name: "OpenCode Go",
                 availability: QuotaProductAvailability::PendingProtocol,
                 is_detected: true,
             },
@@ -583,7 +600,11 @@ mod tests {
         ];
         assert_eq!(
             initial_selection(&products),
-            vec![RateLimitProvider::KimiCode, RateLimitProvider::Grok]
+            vec![
+                RateLimitProvider::Cursor,
+                RateLimitProvider::KimiCode,
+                RateLimitProvider::Grok
+            ]
         );
     }
 

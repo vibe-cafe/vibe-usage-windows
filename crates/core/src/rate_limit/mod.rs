@@ -33,6 +33,20 @@ pub struct RateLimitMeter {
     pub resets_at: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub window_duration: Option<f64>,
+    /// Optional split of this meter's allowance (Cursor's own models vs
+    /// third-party models). It explains the row and only appears in its
+    /// tooltip, like macOS `RateLimitMeter.breakdown`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub breakdown: Vec<RateLimitMeterPart>,
+}
+
+/// One part of a meter's allowance (macOS `RateLimitMeter.Part`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RateLimitMeterPart {
+    pub label: String,
+    /// 0-100
+    pub utilization: f64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -51,6 +65,9 @@ pub enum RateLimitProvider {
     /// sqlite table, so the app never reads it itself.
     #[serde(rename = "opencode-go")]
     OpenCodeGo,
+    /// CLI-backed: the CLI reads Cursor's own signed-in session and asks
+    /// cursor.com for the subscription summary; the app never opens Cursor's
+    /// store itself.
     #[serde(rename = "cursor")]
     Cursor,
     /// CLI-backed: the CLI starts the user's signed-in `agy` and reads its

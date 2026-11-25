@@ -3,11 +3,15 @@ import {
   QuotaProduct,
   RateLimitLiveFailure,
   RateLimitMeter,
+  RateLimitMeterPart,
   RateLimitProvider,
   RateLimitSource,
+  RateLimitWindow,
   ZCodeCredentialStatus,
   ZCodeQuotaRegion,
 } from "./types";
+import { elapsedPercent } from "./aggregate";
+import { formatPercent, formatTimeUntil } from "./formatters";
 
 type PeriodPresentation = {
   label: string;
@@ -74,6 +78,69 @@ export function canonicalQuotaMeters(meters: RateLimitMeter[]): RateLimitMeter[]
       return left.index - right.index;
     })
     .map(({ meter }) => meter);
+}
+
+/** Tooltip heading for a quota row. Same words as macOS
+ *  `RateLimitCardView.tooltipTitle`: the canonical monthly label carries no
+ *  day count on purpose (a calendar/subscription month is 28–31 days), so the
+ *  title spells it out instead of echoing the raw token. */
+export function quotaTooltipTitle(label: string): string {
+  switch (label) {
+    case "5h":
+      return "5 小时窗口";
+    case "7d":
+      return "7 天窗口";
+    case "Month":
+      return "月度窗口";
+    default:
+      return label;
+  }
+}
+
+/** One labelled line of a quota tooltip: `usage` is the row's own share,
+ *  `time` its window or reset, `part` one piece of a meter's breakdown. */
+export interface QuotaTooltipLine {
+  kind: "usage" | "time" | "part";
+  label: string;
+  value: string;
+  /** Present for `usage` and `part`: drives the colour of the usage line. */
+  utilization?: number;
+  /** The time is unknown: drawn dimmer. */
+  muted?: boolean;
+}
+
+/** The lines under a quota tooltip's title, in macOS `TooltipView` order:
+ *  Token 用量, then 时间 (window elapsed and remaining) or 重置 (only the reset
+ *  countdown is known) or 时间 未知, then each breakdown part. */
+export function quotaTooltipLines(
+  window: RateLimitWindow,
+  breakdown: RateLimitMeterPart[] = [],
+  now: Date = new Date(),
+): QuotaTooltipLine[] {
+  const elapsed = elapsedPercent(window, now);
+  const remaining =
+    window.resetsAt != null ? formatTimeUntil(new Date(window.resetsAt * 1000), now) : null;
+  const time: QuotaTooltipLine =
+    elapsed != null && remaining != null
+      ? { kind: "time", label: "时间", value: `已过去 ${formatPercent(elapsed)} · 剩余 ${remaining}` }
+      : remaining != null
+        ? { kind: "time", label: "重置", value: `剩余 ${remaining}` }
+        : { kind: "time", label: "时间", value: "未知", muted: true };
+  return [
+    {
+      kind: "usage",
+      label: "Token 用量",
+      value: `已使用 ${formatPercent(window.utilization)}`,
+      utilization: window.utilization,
+    },
+    time,
+    ...breakdown.map((part): QuotaTooltipLine => ({
+      kind: "part",
+      label: part.label,
+      value: formatPercent(part.utilization),
+      utilization: part.utilization,
+    })),
+  ];
 }
 
 export function providerLabel(provider: RateLimitProvider, products: QuotaProduct[]): string {

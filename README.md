@@ -23,7 +23,7 @@ Windows 应用，自动追踪 AI 编程工具的 Token 用量和费用。App 常
 - 系统托盘常驻，点击托盘图标打开用量面板
 - 后台每 30 分钟自动同步数据，也可手动「更新数据」
 - 弹出窗口查看费用、总 Token、缓存 Token、趋势图表
-- **订阅配额监控**：自动检测 Codex、Claude Code、Kimi Code、ZCode、Grok、Cursor、OpenCode Go 与 Antigravity / AGY；面板顶部是一排产品图标 Tab（可拖动排序，最右侧齿轮图标进设置）：已生效的排在前面、用单色图形高亮，未生效的变灰排在后面、点它直接进设置；已生效但取不到数据的产品，Tab 上会多一个琥珀色小点。下方是**已生效**产品的卡片，一行两张、横向滑动 —— 点 Tab 滑到对应产品，滑动时高亮的 Tab 也会跟着走；全部关掉时这一段只剩那排图标。Antigravity / AGY 通过你已登录的官方 agy 读取 5 小时与每周额度。Cursor 当前明确标记为待接入
+- **订阅配额监控**：自动检测 Codex、Claude Code、Kimi Code、ZCode、Grok、Cursor、OpenCode Go 与 Antigravity / AGY；面板顶部是一排产品图标 Tab（可拖动排序，最右侧齿轮图标进设置）：已生效的排在前面、用单色图形高亮，未生效的变灰排在后面、点它直接进设置；已生效但取不到数据的产品，Tab 上会多一个琥珀色小点。下方是**已生效**产品的卡片，一行两张、横向滑动 —— 点 Tab 滑到对应产品，滑动时高亮的 Tab 也会跟着走；全部关掉时这一段只剩那排图标。Antigravity / AGY 通过你已登录的官方 agy 读取 5 小时与每周额度。Cursor 复用你在 Cursor 里的登录读取本月额度（悬停可看 Cursor 模型与第三方模型各占多少）
 - 未读到数据时不猜：只有数据源明确报告配额用尽才显示「已用满」，其余情况按来源分别显示「正在读取…」「当前没有生效的额度窗口」「暂未读取到订阅配额数据」或「未检测到本机安装或登录」
 - Codex / Claude 使用只读原生适配；Kimi Code 使用官方 CLI 登录；Grok 由 CLI 运行官方 `grok` 命令行、用它自己的登录查一次当前账期（只查账单，不开对话、不耗额度；没检测到代理时先做出口检测），查不到时读官方 CLI 的结构化配额日志；ZCode 使用用户明确提供的 BigModel（国内）或 Z.ai（海外）Coding Plan Key
 - ZCode Key 只保存在当前 Windows 用户的 Credential Manager 中，不写入设置文件、不回显，也不会跨区域试发
@@ -106,7 +106,7 @@ Rust (Tauri 2)
   ├─ sync_engine         spawn node <内置CLI> sync（120s 超时、CREATE_NO_WINDOW）
   ├─ scheduler           面板可见时约 1 分钟、托盘后台 30 分钟同步 + 24h 更新检查
   ├─ rate_limits         Codex / Claude 原生读取 + Kimi / ZCode / Grok typed CLI bridge
-  ├─ quota_product       只读本地发现 + 两项选择策略（Cursor 待接入）
+  ├─ quota_product       只读本地发现 + 产品选择策略
   ├─ zcode_credentials   Windows Credential Manager 安全存储
   ├─ statusline_hook     仅安全退休旧版本能够证明归属的 Claude hook
   └─ updater             latest.json + SHA-256 校验 + NSIS 被动模式覆盖升级（/P /UPDATE /R）

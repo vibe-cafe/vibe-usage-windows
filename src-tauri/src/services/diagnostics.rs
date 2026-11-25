@@ -350,11 +350,7 @@ fn quota_card(provider: RateLimitProvider, snapshot: Option<&ProviderRateLimit>)
     let Some(snapshot) = snapshot else {
         return QuotaCard {
             provider,
-            status: if provider == RateLimitProvider::Cursor {
-                "disabled"
-            } else {
-                "notRead"
-            },
+            status: "notRead",
             source: None,
             live_failure: None,
             empty_reason: None,

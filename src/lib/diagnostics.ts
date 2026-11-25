@@ -381,7 +381,7 @@ function failureReason(reason: SyncReason | null | undefined): string {
   }
 }
 
-function quotaStatusText(status: string, meterCount: number, provider: RateLimitProvider): string {
+function quotaStatusText(status: string, meterCount: number): string {
   switch (status) {
     case "ok":
       return `正常 · ${meterCount} 个窗口`;
@@ -394,7 +394,7 @@ function quotaStatusText(status: string, meterCount: number, provider: RateLimit
     case "error":
       return "读取失败";
     case "disabled":
-      return provider === "cursor" ? "待接入" : "未启用";
+      return "未启用";
     case "notRead":
       return "本次启动以来未读取";
     default:
@@ -882,7 +882,7 @@ export function formatDiagnosticsReport(
               { provider: card.provider, status: { kind: "unauthorized" }, liveFailure: card.liveFailure },
               "bigModel",
             )
-        : quotaStatusText(card.status, number(card.meterCount) ?? 0, card.provider),
+        : quotaStatusText(card.status, number(card.meterCount) ?? 0),
     ];
     if (card.emptyReason) {
       parts.push(
