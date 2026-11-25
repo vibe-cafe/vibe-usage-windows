@@ -530,10 +530,11 @@ function TooltipLayer({ anchor, children }: { anchor: HTMLElement; children: Rea
 }
 
 /**
- * When a Claude Desktop record (Windows only) was written: that source can lag
- * the live account, so the card says how old it is. A live or cached read
- * adds no age line — macOS dropped 「数据截至 N 分钟前」 (maintainer,
- * 2026-10-24: too noisy), and the reset credits sit beside the name.
+ * When a Claude Desktop record was written: that source can lag the live
+ * account, so the Windows card says how old it is (macOS shows no age line
+ * for it). A live or cached read adds no age line — macOS dropped
+ * 「数据截至 N 分钟前」 (maintainer, 2026-10-24: too noisy), and the reset
+ * credits sit beside the name.
  */
 function FreshnessNote({ snapshot }: { snapshot: ProviderRateLimit }) {
   if (!snapshot.sourceLabel || !snapshot.dataAsOf) return null;

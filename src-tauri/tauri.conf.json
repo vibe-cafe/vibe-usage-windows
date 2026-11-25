@@ -67,7 +67,8 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "resources/cli-bootstrap.mjs": "cli-bootstrap.mjs"
+      "resources/cli-bootstrap.mjs": "cli-bootstrap.mjs",
+      "../THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md"
     },
     "windows": {
       "webviewInstallMode": {

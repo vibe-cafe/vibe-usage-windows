@@ -54,6 +54,17 @@ export function SettingsApp() {
     settingsRef.current = next;
     setSettingsState(next);
   }, []);
+  // Counts `settings-updated` events. A reload waits for slower reads (the
+  // CLI's extra roots) before it applies the settings it fetched; if an event
+  // arrived meanwhile, that copy is older than the one already shown.
+  const settingsEvents = useRef(0);
+  const applyPushedSettings = useCallback(
+    (next: AppSettings) => {
+      settingsEvents.current += 1;
+      setSettings(next);
+    },
+    [setSettings],
+  );
   const [syncState, setSyncState] = useState<SyncState>({ status: "idle" });
   const [autoStart, setAutoStart] = useState(false);
 
@@ -87,6 +98,7 @@ export function SettingsApp() {
   const [isIsolatedRootsExpanded, setIsIsolatedRootsExpanded] = useState(false);
 
   const reload = useCallback(async () => {
+    const eventsBefore = settingsEvents.current;
     // Defaults are initialized by the backend before any window starts.
     const discovered = await api.getQuotaProducts().catch(() => null);
     const [
@@ -107,7 +119,9 @@ export function SettingsApp() {
 
     if (discovered) setQuotaProducts(discovered);
     if (nextStatus.status === "fulfilled") setStatus(nextStatus.value);
-    if (nextSettings.status === "fulfilled") setSettings(nextSettings.value);
+    if (nextSettings.status === "fulfilled" && settingsEvents.current === eventsBefore) {
+      setSettings(nextSettings.value);
+    }
     if (nextSyncState.status === "fulfilled") setSyncState(nextSyncState.value);
     if (nextAutoStart.status === "fulfilled") setAutoStart(nextAutoStart.value);
     if (nextZCodeStatus.status === "fulfilled") setZCodeStatus(nextZCodeStatus.value);
@@ -124,7 +138,7 @@ export function SettingsApp() {
     void reload();
     const subs = [
       onSyncState(setSyncState),
-      onSettingsUpdated(setSettings),
+      onSettingsUpdated(applyPushedSettings),
       // The same offer the panel header shows: found at startup, by the daily
       // check or by 「检查更新」 here; withdrawn by a later check (#36).
       followUpdateOffer(
@@ -157,7 +171,7 @@ export function SettingsApp() {
     return () => {
       for (const p of subs) void p.then((un) => un());
     };
-  }, [reload, setSettings]);
+  }, [reload, applyPushedSettings]);
 
   // A failure belonged to the offer it tried to install (same rule as the header badge).
   const offeredVersion = updateOffer?.version ?? null;
@@ -291,6 +305,8 @@ export function SettingsApp() {
   };
 
   const checkUpdate = async () => {
+    // A recheck may withdraw the offer (a pulled release, docs/WINDOWS_UPDATE.md),
+    // so it stays available next to 「安装更新」.
     setUpdateMessage("检查中…");
     try {
       const info = await api.checkForUpdate();
@@ -482,7 +498,7 @@ export function SettingsApp() {
                   />
                   <ProviderIcon
                     provider="zcode"
-                    size={18}
+                    size={22}
                     color={
                       settings?.selectedQuotaProductIds.includes("zcode")
                         ? undefined
@@ -699,32 +715,43 @@ export function SettingsApp() {
           </Row>
           <Row label="检查更新">
             <div className="flex min-w-0 items-center gap-2">
-              {status?.updatesAvailable && updateOffer ? (
-                // Found a newer version: install it from here, the same
-                // download-and-install as the panel's 「发现更新」 (no second
-                // confirmation on Windows, docs/PARITY.md 平台差异 5).
+              {status?.updatesAvailable ? (
                 <>
-                  <span
-                    className="min-w-0 truncate text-xs"
-                    style={{ color: updatePhase.kind === "failed" ? "#FF6B6B" : "#9E9E9E" }}
-                    title={updatePhase.kind === "failed" ? updatePhase.reason : undefined}
+                  {(() => {
+                    const failed = updatePhase.kind === "failed" ? updatePhase.reason : null;
+                    const text =
+                      failed != null
+                        ? `更新失败：${failed}`
+                        : (updateMessage ?? (updateOffer ? `发现新版本 ${updateOffer.version}` : null));
+                    return (
+                      text && (
+                        <span
+                          className="min-w-0 truncate text-xs"
+                          style={{ color: failed != null ? "#FF6B6B" : "#9E9E9E" }}
+                          title={text}
+                        >
+                          {text}
+                        </span>
+                      )
+                    );
+                  })()}
+                  <SmallButton
+                    disabled={!updateButtonEnabled(updatePhase)}
+                    onClick={() => void checkUpdate()}
                   >
-                    {updatePhase.kind === "failed"
-                      ? `更新失败：${updatePhase.reason}`
-                      : `发现新版本 ${updateOffer.version}`}
-                  </span>
-                  <SmallButton disabled={!updateButtonEnabled(updatePhase)} onClick={() => void startUpdate()}>
-                    {settingsUpdateButtonLabel(updatePhase)}
+                    检查更新
                   </SmallButton>
-                </>
-              ) : status?.updatesAvailable ? (
-                <>
-                  {updateMessage && (
-                    <span className="text-xs" style={{ color: "#9E9E9E" }}>
-                      {updateMessage}
-                    </span>
+                  {updateOffer && (
+                    // Install from here: the same download-and-install as the
+                    // panel's 「发现更新」 (no second confirmation on Windows,
+                    // docs/PARITY.md 平台差异 5).
+                    <SmallButton
+                      disabled={!updateButtonEnabled(updatePhase)}
+                      onClick={() => void startUpdate()}
+                    >
+                      {settingsUpdateButtonLabel(updatePhase)}
+                    </SmallButton>
                   )}
-                  <SmallButton onClick={() => void checkUpdate()}>检查更新</SmallButton>
                 </>
               ) : status ? (
                 <span className="text-xs text-neutral-400">外测版不检查更新</span>
@@ -842,10 +869,11 @@ function ProductRow({
   return (
     <div className="flex min-h-[38px] items-center justify-between gap-3 px-3 py-1.5">
       <div className="flex min-w-0 items-center gap-2">
-        {/* On products in the primary colour, off ones in the secondary (macOS 订阅配额 table). */}
+        {/* A 22 px slot, on products in the primary colour, off ones dimmed
+            (macOS 订阅配额 table: ProviderGlyph 18 in a 22 frame, 72% when off). */}
         <ProviderIcon
           provider={product.provider}
-          size={18}
+          size={22}
           color={selected ? undefined : PROVIDER_ICON_OFF_COLOR}
         />
         <span className="flex min-w-0 flex-col">
@@ -1096,7 +1124,7 @@ function SmallButton({
     <button
       disabled={disabled}
       onClick={onClick}
-      className="rounded-md px-2.5 py-1 text-xs disabled:opacity-50"
+      className="shrink-0 whitespace-nowrap rounded-md px-2.5 py-1 text-xs disabled:opacity-50"
       style={{ background: "#48484A", color: "#E8E8E8" }}
     >
       {children}

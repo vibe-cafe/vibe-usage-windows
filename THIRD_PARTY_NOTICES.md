@@ -1,7 +1,7 @@
 # Third-party notices
 
 Brand marks shown in the app remain the property of their respective owners
-and only identify each product.
+and only identify each product. This file ships with the installed app.
 
 ## Lobe Icons
 

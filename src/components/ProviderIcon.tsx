@@ -1,6 +1,7 @@
 /*! Provider marks: path data from Lobe Icons (@lobehub/icons-static-svg
  * 1.104.0, https://github.com/lobehub/lobe-icons), MIT License,
- * Copyright (c) 2023 LobeHub. Full notice: THIRD_PARTY_NOTICES.md. The marks
+ * Copyright (c) 2023 LobeHub. Full notice: THIRD_PARTY_NOTICES.md (installed
+ * next to the app). The marks
  * remain trademarks of their owners and only identify each product. */
 
 // Monochrome provider marks, one flat shape per product, shared by the quota
@@ -16,8 +17,8 @@ import { RateLimitProvider } from "../lib/types";
 
 /** macOS `SettingsTheme.text`. */
 export const PROVIDER_ICON_COLOR = "#E9E9E9";
-/** macOS `SettingsTheme.secondaryText`: an off product in Settings. */
-export const PROVIDER_ICON_OFF_COLOR = "#9C9C9C";
+/** An off product in Settings: macOS `SettingsTheme.secondaryText` (#9C9C9C) at 72% opacity. */
+export const PROVIDER_ICON_OFF_COLOR = "rgba(156,156,156,0.72)";
 
 const PATHS: Record<RateLimitProvider, string[]> = {
   // Lobe Icons `openai.svg`
