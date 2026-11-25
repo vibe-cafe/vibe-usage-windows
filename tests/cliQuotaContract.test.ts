@@ -2,7 +2,7 @@ import { expect, test } from "vitest";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { cliPath } from "./cliUnderTest.mjs";
 
 // Asserts the quota contract of the CLI the app actually runs (resolved from
@@ -10,8 +10,17 @@ import { cliPath } from "./cliUnderTest.mjs";
 test("published CLI returns the quota contract without inherited account credentials", () => {
   const root = mkdtempSync(join(tmpdir(), "vibe-windows-quota-"));
   try {
+    // A temporary home and a PATH with only Node and the system directories:
+    // since vibe-cafe/vibe-usage#189 the CLI reads Grok by starting the official
+    // `grok`, and must not find the developer's or release machine's own copy,
+    // which would ask xAI with that machine's sign-in and change the status.
+    const systemPath = process.platform === "win32"
+      ? [join(process.env.SystemRoot || "C:\\Windows", "System32")]
+      : ["/usr/bin", "/bin", "/usr/sbin", "/sbin"];
     const env: NodeJS.ProcessEnv = {
-      PATH: process.env.PATH,
+      PATH: [dirname(process.execPath), ...systemPath].join(delimiter),
+      HOME: root,
+      USERPROFILE: root,
       SystemRoot: process.env.SystemRoot,
       WINDIR: process.env.WINDIR,
       TEMP: root,
