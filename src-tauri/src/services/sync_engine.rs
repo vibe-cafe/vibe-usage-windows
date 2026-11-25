@@ -128,6 +128,12 @@ fn cli_command(app: &AppHandle, args: &[&str]) -> Result<tokio::process::Command
     for (name, value) in crate::system_proxy::proxy_variables(&routes, &lookup, true, true) {
         cmd.env(name, value);
     }
+    // The egress-check settings, for the reads the CLI makes itself
+    // (Antigravity): `egress_check::Settings::cli_environment`.
+    let egress = app.state::<AppCtx>().settings.lock().unwrap().egress();
+    for (name, value) in egress.cli_environment() {
+        cmd.env(name, value);
+    }
     process_utils::hide_tokio_command_window(&mut cmd);
     Ok(cmd)
 }

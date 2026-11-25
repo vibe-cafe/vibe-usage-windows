@@ -176,6 +176,49 @@ pub enum RateLimitLiveFailure {
     /// The CLI answered from its cache after its live read failed; the reason
     /// exists only as free text, which is never displayed.
     CliReportedFailure,
+    // Paused on purpose (network-privacy principle, rule 3): the read would go
+    // out direct and the egress check said no (`egress_check`, or the CLI's
+    // `pauseReason`). Nothing was sent; the next read checks again. Not a
+    // failure: the card offers no retry.
+    /// The egress is in a region the vendor does not serve.
+    EgressRegionUnsupported { region: EgressRegion },
+    /// The egress could not be confirmed (no answer, unknown country).
+    EgressUnconfirmed,
+    /// No proxy detected and the user said this computer relies on a local
+    /// proxy client (「这台电脑上网靠本机代理软件」).
+    ProxyNotDetected,
+}
+
+impl RateLimitLiveFailure {
+    /// A read stopped on purpose before it was sent, not one that failed.
+    pub fn is_pause(self) -> bool {
+        matches!(
+            self,
+            Self::EgressRegionUnsupported { .. } | Self::EgressUnconfirmed | Self::ProxyNotDetected
+        )
+    }
+}
+
+/// Where an unsupported egress is. Only the regions the paused vendors leave
+/// out and our users may be in are named; anything else is `Other`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum EgressRegion {
+    CN,
+    HK,
+    MO,
+    #[serde(other)]
+    Other,
+}
+
+impl EgressRegion {
+    pub fn from_code(code: &str) -> Self {
+        match code {
+            "CN" => Self::CN,
+            "HK" => Self::HK,
+            "MO" => Self::MO,
+            _ => Self::Other,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

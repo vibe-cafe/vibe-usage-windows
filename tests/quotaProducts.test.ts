@@ -349,6 +349,48 @@ describe("read failure reasons and sources", () => {
     );
   });
 
+  it("says why a read was paused in one line, with no retry", () => {
+    expect(quotaFailureText({ code: "egressRegionUnsupported", region: "CN" }, "Codex")).toBe(
+      "网络出口在中国大陆，已暂停读取",
+    );
+    expect(quotaFailureText({ code: "egressRegionUnsupported", region: "HK" }, "Claude")).toBe(
+      "网络出口在香港，已暂停读取",
+    );
+    expect(quotaFailureText({ code: "egressRegionUnsupported", region: "MO" }, "Claude")).toBe(
+      "网络出口在澳门，已暂停读取",
+    );
+    expect(quotaFailureText({ code: "egressRegionUnsupported", region: "Other" }, "Claude")).toBe(
+      "网络出口不在支持地区，已暂停读取",
+    );
+    expect(quotaFailureText({ code: "egressUnconfirmed" }, "Codex")).toBe("无法确认网络出口，已暂停读取");
+    expect(quotaFailureText({ code: "proxyNotDetected" }, "Codex")).toBe("未检测到代理，已暂停读取");
+    const paused = { provider: "codex", status: { kind: "noData" }, liveFailure: { code: "egressUnconfirmed" } } as const;
+    expect(quotaEmptyStateText(paused, true)).toBe("无法确认网络出口，已暂停读取");
+    expect(
+      quotaProvenanceText(
+        {
+          provider: "codex",
+          status: { kind: "ok" },
+          source: "localLog",
+          liveFailure: { code: "egressRegionUnsupported", region: "CN" },
+        },
+        "Codex",
+      ),
+    ).toBe("来源：本地日志 · 网络出口在中国大陆，已暂停读取");
+    // The tab warns while those numbers are kept.
+    expect(
+      quotaTabShowsWarning(
+        "codex",
+        ["codex"],
+        { provider: "codex", status: { kind: "ok" }, liveFailure: { code: "egressUnconfirmed" } },
+        false,
+      ),
+    ).toBe(true);
+    expect(
+      quotaTabShowsWarning("codex", ["codex"], { provider: "codex", status: { kind: "ok" } }, false),
+    ).toBe(false);
+  });
+
   it("never echoes anything but the fixed wording", () => {
     const unknown = { code: "somethingNew" } as unknown as { code: "cliFailed" };
     expect(quotaFailureText(unknown, "Grok")).toBe("暂时无法读取订阅配额");

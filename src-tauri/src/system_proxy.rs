@@ -443,7 +443,7 @@ fn evaluate_pac(_pac_url: &str, _target: &str) -> Option<String> {
 
 /// Hosts the CLI reaches. A PAC can answer per host; one `HTTPS_PROXY`
 /// cannot, so hosts the PAC sends direct join `NO_PROXY`.
-pub const CLI_HOSTS: [&str; 11] = [
+pub const CLI_HOSTS: [&str; 13] = [
     "vibefriends.com",
     "registry.npmjs.org",
     "api.kimi.com",
@@ -455,6 +455,10 @@ pub const CLI_HOSTS: [&str; 11] = [
     "cli-chat-proxy.grok.com",
     "daily-cloudcode-pa.googleapis.com",
     "generativelanguage.googleapis.com",
+    // The CLI's egress check asks one of these for Google, and only when its
+    // own route is direct too, so a PAC answer for them must reach the CLI.
+    "chatgpt.com",
+    "api.anthropic.com",
 ];
 
 /// Hosts the Claude Code probe reaches (Claude Code's network docs).
@@ -729,9 +733,12 @@ pub fn accepts(host: &str, port: u16) -> bool {
 }
 
 /// Polls `route` every `interval` until it names a proxy that `accepts` a
-/// connection (true), or until `limit` (false). With no proxy yet it keeps
-/// polling: many proxy clients set the system proxy only once they have
-/// started, and whether this user relies on a proxy at all is not known here.
+/// connection (true), or until `limit` (false). With no proxy configured at
+/// all (every route direct) it returns true at once: there is nothing to wait
+/// for, and the vendor reads that would go out direct are gated by the egress
+/// check instead (`egress_check`, network-privacy principle rule 3; until
+/// 2026-11-24 it kept polling to the limit). A PAC that cannot be evaluated
+/// yet counts as configured (the proxy client often serves it itself).
 pub async fn wait_for_proxy<R, RF, A, AF>(
     limit: Duration,
     interval: Duration,
@@ -746,11 +753,16 @@ where
 {
     let started = tokio::time::Instant::now();
     loop {
+        let current = routes().await;
+        let unresolved = current.contains(&Route::Unresolved);
         let mut endpoints: Vec<(String, u16)> = Vec::new();
-        for endpoint in routes().await.iter().filter_map(Route::proxy_endpoint) {
+        for endpoint in current.iter().filter_map(Route::proxy_endpoint) {
             if !endpoints.contains(&endpoint) {
                 endpoints.push(endpoint);
             }
+        }
+        if endpoints.is_empty() && !unresolved {
+            return true;
         }
         for (host, port) in endpoints {
             if accepts(host, port).await {
@@ -848,7 +860,7 @@ mod tests {
     #[tokio::test]
     async fn a_login_launch_goes_ahead_once_the_proxy_answers() {
         let routes = std::sync::Mutex::new(vec![
-            Route::Direct,
+            Route::Unresolved,
             Route::Unresolved,
             Route::Http("http://127.0.0.1:7890".into()),
         ]);
@@ -892,13 +904,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn no_proxy_runs_out_the_limit_and_a_closed_port_does_not_count() {
+    async fn no_proxy_goes_ahead_at_once_a_silent_one_runs_out_the_limit() {
+        // Nothing configured: nothing to wait for (the egress check gates the
+        // vendor reads instead).
+        let started = std::time::Instant::now();
+        let up = wait_for_proxy(
+            Duration::from_secs(5),
+            Duration::from_millis(5),
+            || async { vec![Route::Direct] },
+            |_, _| async { false },
+        )
+        .await;
+        assert!(up);
+        assert!(started.elapsed() < Duration::from_secs(1));
+        // A proxy that is set but never answers runs out the limit.
         let started = std::time::Instant::now();
         let up = wait_for_proxy(
             Duration::from_millis(30),
             Duration::from_millis(5),
-            || async { vec![Route::Direct] },
-            |_, _| async { true },
+            || async { vec![Route::Http("http://127.0.0.1:7890".into())] },
+            |_, _| async { false },
         )
         .await;
         assert!(!up);

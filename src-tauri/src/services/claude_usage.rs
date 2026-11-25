@@ -220,7 +220,9 @@ fn discover_candidates(environment: &DiscoveryEnvironment) -> Vec<ClaudeLaunch> 
 /// Checked on every refresh, so a policy change takes effect on the next one.
 /// A user's own switch does not stop the read: the probe keeps it off and
 /// still reads the quota (`vibe_core::claude_nonessential`).
-pub async fn fetch() -> Result<ProviderRateLimit, RateLimitLiveFailure> {
+pub async fn fetch(
+    egress: crate::egress_check::Settings,
+) -> Result<ProviderRateLimit, RateLimitLiveFailure> {
     let at = (now_epoch() * 1000.0) as u64;
     let environment = DiscoveryEnvironment::live();
     // Desktop observations are local-only and must not be confused with a
@@ -258,17 +260,28 @@ pub async fn fetch() -> Result<ProviderRateLimit, RateLimitLiveFailure> {
     // Claude Code reads proxy variables, never Windows settings: hand it the
     // system proxy for Anthropic's hosts (HTTP only; it does not support
     // SOCKS). Resolved off the async threads (a PAC is evaluated by WinHTTP).
-    let proxy_env = tauri::async_runtime::spawn_blocking(|| {
+    let (proxy_env, routes) = tauri::async_runtime::spawn_blocking(|| {
         let lookup = |name: &str| std::env::var(name).ok();
         let routes = if crate::system_proxy::has_own_proxy(&lookup) {
             Vec::new()
         } else {
             crate::system_proxy::live_routes(&crate::system_proxy::host_urls(&crate::system_proxy::CLAUDE_HOSTS))
         };
-        crate::system_proxy::proxy_variables(&routes, &lookup, false, false)
+        (crate::system_proxy::proxy_variables(&routes, &lookup, false, false), routes)
     })
     .await
     .unwrap_or_default();
+    // Claude Code would reach Anthropic direct with that environment: confirm
+    // the egress before it starts with the user's login (`egress_check`).
+    let mut child: std::collections::HashMap<String, String> = crate::egress_check::PROXY_NAMES
+        .iter()
+        .filter_map(|name| std::env::var(name).ok().map(|value| (name.to_string(), value)))
+        .collect();
+    child.extend(proxy_env.iter().map(|(name, value)| (name.to_string(), value.clone())));
+    if let Err(pause) = crate::egress_check::check_claude(egress, child, &routes).await {
+        remember(record);
+        return Err(pause.live_failure());
+    }
     let mut last_error = RateLimitLiveFailure::ClaudeNoResponse;
     for candidate in candidates.into_iter().take(MAX_CANDIDATES) {
         let mut attempt = ProbeAttempt {
@@ -424,7 +437,8 @@ pub fn after_live_failure(
         snapshot.live_failure = Some(failure);
         return snapshot;
     }
-    if failure == RateLimitLiveFailure::ClaudeBinaryNotFound {
+    // Nothing to retry: no program, or a read paused on purpose.
+    if failure == RateLimitLiveFailure::ClaudeBinaryNotFound || failure.is_pause() {
         return ProviderRateLimit::failed(
             RateLimitProvider::ClaudeCode,
             RateLimitStatus::NoData,
@@ -1017,6 +1031,16 @@ mod tests {
             missing.live_failure,
             Some(RateLimitLiveFailure::ClaudeBinaryNotFound)
         );
+        // A read paused by the egress check is not retried: the card says why.
+        for paused in [
+            RateLimitLiveFailure::EgressRegionUnsupported { region: vibe_core::EgressRegion::CN },
+            RateLimitLiveFailure::EgressUnconfirmed,
+            RateLimitLiveFailure::ProxyNotDetected,
+        ] {
+            let shown = after_live_failure(paused, None);
+            assert_eq!(shown.status, RateLimitStatus::NoData);
+            assert_eq!(shown.live_failure, Some(paused));
+        }
     }
 
     #[test]

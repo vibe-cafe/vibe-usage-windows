@@ -56,6 +56,11 @@ windows-sys = { version = "0.59", features = [
     # PAC evaluation by the system (WinHttpGetProxyForUrl); a network API,
     # not an input hook. Approved 2026-11-24 (privacy fix plan, item 9).
     "Win32_Networking_WinHttp",
+    # The egress check's network fingerprint (GetAdaptersAddresses): network
+    # APIs, not input hooks (network-privacy principle, rule 3, 2026-11-24).
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_NetworkManagement_Ndis",
+    "Win32_Networking_WinSock",
 ] }
 winreg = "0.52"
 

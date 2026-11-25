@@ -108,6 +108,12 @@ struct Product {
     /// `live` / `local` / `cache` in the CLI contract.
     #[serde(default)]
     source: Option<String>,
+    /// Why an `unsupported` read was deliberately not sent (the CLI's egress
+    /// check); `egressRegion` comes with `egressRegionUnsupported`.
+    #[serde(default)]
+    pause_reason: Option<String>,
+    #[serde(default)]
+    egress_region: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -274,12 +280,31 @@ fn map_product(product: Product) -> Result<ProviderRateLimit, FetchError> {
         // retryable error, so a cached answer is itself the statement that
         // live failed. The specific reason exists only in `message`, which is
         // free text and never kept.
-        live_failure: opencode_login.or_else(|| {
-            (product.source.as_deref() == Some("cache"))
-                .then_some(RateLimitLiveFailure::CliReportedFailure)
-        }),
+        live_failure: opencode_login
+            .or_else(|| {
+                (product.status == "unsupported")
+                    .then(|| pause_failure(product.pause_reason.as_deref(), product.egress_region.as_deref()))
+                    .flatten()
+            })
+            .or_else(|| {
+                (product.source.as_deref() == Some("cache"))
+                    .then_some(RateLimitLiveFailure::CliReportedFailure)
+            }),
         status,
     })
+}
+
+/// The CLI's `pauseReason`, as the card's own fixed reason. Unknown codes stay
+/// `None` (the card then says nothing was read, as before).
+fn pause_failure(reason: Option<&str>, region: Option<&str>) -> Option<RateLimitLiveFailure> {
+    match reason? {
+        "egressRegionUnsupported" => Some(RateLimitLiveFailure::EgressRegionUnsupported {
+            region: vibe_core::EgressRegion::from_code(region.unwrap_or_default()),
+        }),
+        "egressUnconfirmed" => Some(RateLimitLiveFailure::EgressUnconfirmed),
+        "proxyNotDetected" => Some(RateLimitLiveFailure::ProxyNotDetected),
+        _ => None,
+    }
 }
 
 /// The CLI's `source` field. Unknown values stay `None` rather than guessed.
@@ -407,6 +432,25 @@ mod tests {
         .unwrap()
         .remove(0);
         assert_eq!(missing.status, RateLimitStatus::Unauthorized);
+    }
+
+    #[test]
+    fn a_cli_pause_reason_becomes_the_cards_reason() {
+        let paused = |reason: &str, region: &str| {
+            let json = format!(
+                r#"{{"schemaVersion":1,"products":[{{"id":"antigravity","status":"unsupported","meters":[],"fetchedAt":"2026-11-24T12:00:00.000Z","source":"live","message":"Paused","pauseReason":"{reason}"{region}}}]}}"#
+            );
+            decode(json.as_bytes(), &[RateLimitProvider::Antigravity]).unwrap().remove(0)
+        };
+        let region = paused("egressRegionUnsupported", r#","egressRegion":"HK""#);
+        assert_eq!(region.status, RateLimitStatus::NoData);
+        assert_eq!(
+            region.live_failure,
+            Some(RateLimitLiveFailure::EgressRegionUnsupported { region: vibe_core::EgressRegion::HK })
+        );
+        assert_eq!(paused("egressUnconfirmed", "").live_failure, Some(RateLimitLiveFailure::EgressUnconfirmed));
+        assert_eq!(paused("proxyNotDetected", "").live_failure, Some(RateLimitLiveFailure::ProxyNotDetected));
+        assert_eq!(paused("somethingNew", "").live_failure, None);
     }
 
     #[test]

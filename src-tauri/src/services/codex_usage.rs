@@ -23,6 +23,9 @@ pub enum FetchError {
     /// Any status other than 200 / 401; only the number is kept, never the body.
     HttpStatus(u16),
     BadResponse,
+    /// Not sent: the route is direct and the egress check said no
+    /// (`egress_check`). An empty card shows the reason, with no retry.
+    Paused(crate::egress_check::Pause),
 }
 
 impl FetchError {
@@ -35,6 +38,7 @@ impl FetchError {
             Self::Unreachable => RateLimitLiveFailure::EndpointUnreachable,
             Self::HttpStatus(status) => RateLimitLiveFailure::EndpointHttpStatus { status },
             Self::BadResponse => RateLimitLiveFailure::EndpointUnrecognized,
+            Self::Paused(pause) => pause.live_failure(),
         }
     }
 
@@ -55,17 +59,20 @@ struct AuthInfo {
     account_id: Option<String>,
 }
 
-pub async fn fetch(http: &Client) -> Result<ProviderRateLimit, FetchError> {
+pub async fn fetch(
+    http: &Client,
+    egress: crate::egress_check::Settings,
+) -> Result<ProviderRateLimit, FetchError> {
     let home = codex_home();
     let mut auth = load_auth(&home).ok_or(FetchError::NotLoggedIn)?;
     let mut endpoint = usage_url_from_home(&home).ok_or(FetchError::BadResponse)?;
-    let mut response = send(http, &endpoint, &auth).await?;
+    let mut response = send(http, &endpoint, &auth, egress).await?;
 
     if response.0 == StatusCode::UNAUTHORIZED {
         if let Some(fresh) = load_auth(&home).filter(|fresh| fresh != &auth) {
             auth = fresh;
             endpoint = usage_url_from_home(&home).ok_or(FetchError::BadResponse)?;
-            response = send(http, &endpoint, &auth).await?;
+            response = send(http, &endpoint, &auth, egress).await?;
         }
     }
     if response.0 == StatusCode::UNAUTHORIZED {
@@ -104,11 +111,18 @@ async fn send(
     http: &Client,
     endpoint: &Url,
     auth: &AuthInfo,
+    egress: crate::egress_check::Settings,
 ) -> Result<(StatusCode, Value), FetchError> {
     for attempt in 0..MAX_ATTEMPTS {
         if attempt > 0 {
             tokio::time::sleep(Duration::from_millis(500 << (attempt - 1))).await;
         }
+        // Direct to OpenAI: confirm the egress before the token goes out. The
+        // shared client reads the route again for every attempt (a proxy
+        // client that quit between attempts leaves it direct), so this does too.
+        crate::egress_check::check_codex(endpoint, egress)
+            .await
+            .map_err(FetchError::Paused)?;
         let mut request = http
             .get(endpoint.clone())
             .bearer_auth(&auth.access_token)

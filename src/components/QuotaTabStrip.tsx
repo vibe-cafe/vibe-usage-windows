@@ -14,7 +14,7 @@
 import { useState } from "react";
 import { Settings } from "lucide-react";
 import { RateLimitProvider } from "../lib/types";
-import { providerLabel, quotaTabShowsWarning } from "../lib/quotaProducts";
+import { isEgressPause, providerLabel, quotaTabShowsWarning } from "../lib/quotaProducts";
 import { useAppState } from "../state/AppStateContext";
 import { api } from "../lib/api";
 import { ProviderIcon } from "./ProviderIcon";
@@ -53,13 +53,16 @@ export function QuotaTabStrip({
       {order.map((provider) => {
         const enabled = isEnabled(provider);
         const active = activeProvider === provider;
+        const snapshot = state.rateLimits.find((item) => item.provider === provider);
         const warning = quotaTabShowsWarning(
           provider,
           state.settings.selectedQuotaProductIds,
-          state.rateLimits.find((snapshot) => snapshot.provider === provider),
+          snapshot,
           state.isRefreshingRateLimits,
         );
-        const help = `${providerLabel(provider, state.quotaProducts)}${enabled ? "" : " · 未启用"}${warning ? " · 数据异常" : ""}`;
+        // A paused read keeps sound numbers: only the reading stopped.
+        const warningText = isEgressPause(snapshot?.liveFailure) ? " · 读取已暂停" : " · 数据异常";
+        const help = `${providerLabel(provider, state.quotaProducts)}${enabled ? "" : " · 未启用"}${warning ? warningText : ""}`;
         return (
           <button
             key={provider}
