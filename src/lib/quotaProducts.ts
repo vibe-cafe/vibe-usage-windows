@@ -274,18 +274,6 @@ export function quotaEmptyStateText(
   return isDetected ? "暂未读取到订阅配额数据" : "未检测到本机安装或登录";
 }
 
-/**
- * The AGY re-login card names what is missing (macOS
- * `RateLimitCardView.agyAuthorizationText`): the CLI says
- * `credentialsNotFound` only when it found no agy to run, so only then is the
- * user told to install it; a refused login asks for a sign-in instead.
- */
-export function agyAuthorizationText(snapshot: ProviderRateLimit): string {
-  return snapshot.liveFailure?.code === "credentialsNotFound"
-    ? "请安装 agy 命令行并登录后重试"
-    : "请在 agy 中登录后重试";
-}
-
 /** First line of a retryable card: the fixed reason when the read named one. */
 export function quotaRetryableText(snapshot: ProviderRateLimit, providerName: string): string {
   return snapshot.liveFailure
