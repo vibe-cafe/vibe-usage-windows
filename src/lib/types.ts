@@ -1,3 +1,4 @@
+import type { EgressMode } from "./egressMode";
 // Data models — 1:1 port of VibeUsage/Models/*.swift
 
 /** Mirrors UsageBucket.swift */
@@ -463,10 +464,8 @@ export interface AppSettings {
   quotaSelectedTabId?: RateLimitProvider | null;
   quotaSelectionInitialized: boolean;
   zCodeQuotaRegion: ZCodeQuotaRegion;
-  /** 「检测网络出口」, default on (the egress check, `egress_check.rs`). */
-  egressCheckEnabled: boolean;
-  /** 「这台电脑上网靠本机代理软件」, default off. */
-  egressRequireLocalProxy: boolean;
+  /** 「没检测到代理时」 (`lib/egressMode.ts`, the egress check in `egress_check.rs`). */
+  egressMode: EgressMode;
 }
 
 export type ExtraRoots = Partial<Record<"codex" | "grok" | "antigravity", string[]>>;

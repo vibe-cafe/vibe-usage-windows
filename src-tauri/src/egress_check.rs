@@ -60,9 +60,62 @@ impl Pause {
     }
 }
 
-/// The two settings (`AppSettings`): 「检测网络出口」 (default on; off sends a
-/// direct read as before) and 「这台电脑上网靠本机代理软件」 (default off; on
-/// pauses a direct read without a check).
+/// Settings → 隐私保护 → 「没检测到代理时」, one of three (the maintainer's
+/// wording, 2026-11-25; same as macOS `EgressCheck.Mode`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum EgressMode {
+    /// 「自动判断（推荐）」, the default: check the egress first.
+    #[default]
+    Auto,
+    /// 「暂停读取」: a direct read always pauses, and no check is sent.
+    Pause,
+    /// 「照常读取」: no check; a direct read is sent as before.
+    Allow,
+}
+
+impl EgressMode {
+    pub fn settings(self) -> Settings {
+        Settings {
+            enabled: self != EgressMode::Allow,
+            require_proxy: self == EgressMode::Pause,
+        }
+    }
+
+    /// The two switches of development builds (never released), for a
+    /// settings file written before the menu: require-proxy on → 暂停读取,
+    /// check off → 照常读取, else the default.
+    pub fn from_legacy(object: &serde_json::Map<String, serde_json::Value>) -> Option<Self> {
+        if object.contains_key("egressMode") {
+            return None;
+        }
+        let require = object.get("egressRequireLocalProxy").and_then(|v| v.as_bool());
+        let enabled = object.get("egressCheckEnabled").and_then(|v| v.as_bool());
+        match (require, enabled) {
+            (Some(true), _) => Some(EgressMode::Pause),
+            (_, Some(false)) => Some(EgressMode::Allow),
+            (None, None) => None,
+            _ => Some(EgressMode::Auto),
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for EgressMode {
+    /// A value this build does not know falls back to the default instead of
+    /// failing the whole settings file.
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        Ok(match value.as_str() {
+            Some("pause") => EgressMode::Pause,
+            Some("allow") => EgressMode::Allow,
+            _ => EgressMode::Auto,
+        })
+    }
+}
+
+/// What `EgressMode` means for the checks (and, as two variables, for the
+/// CLI): `enabled` off only for 「照常读取」, `require_proxy` on only for
+/// 「暂停读取」.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Settings {
     pub enabled: bool,
@@ -505,6 +558,40 @@ mod tests {
     }
 
     const ON: Settings = Settings { enabled: true, require_proxy: false };
+
+    #[test]
+    fn the_menu_is_one_value_and_the_old_switches_map_onto_it() {
+        assert_eq!(EgressMode::default(), EgressMode::Auto);
+        assert_eq!(EgressMode::Auto.settings(), Settings { enabled: true, require_proxy: false });
+        assert_eq!(EgressMode::Pause.settings(), Settings { enabled: true, require_proxy: true });
+        assert_eq!(EgressMode::Allow.settings(), Settings { enabled: false, require_proxy: false });
+        assert_eq!(serde_json::to_value(EgressMode::Pause).unwrap(), serde_json::json!("pause"));
+        for (raw, mode) in [("\"auto\"", EgressMode::Auto), ("\"pause\"", EgressMode::Pause), ("\"allow\"", EgressMode::Allow),
+            ("\"somethingNew\"", EgressMode::Auto), ("true", EgressMode::Auto), ("null", EgressMode::Auto)] {
+            assert_eq!(serde_json::from_str::<EgressMode>(raw).unwrap(), mode, "{raw}");
+        }
+        let object = |json: serde_json::Value| json.as_object().unwrap().clone();
+        assert_eq!(EgressMode::from_legacy(&object(serde_json::json!({}))), None);
+        assert_eq!(EgressMode::from_legacy(&object(serde_json::json!({"egressCheckEnabled": false}))), Some(EgressMode::Allow));
+        assert_eq!(
+            EgressMode::from_legacy(&object(serde_json::json!({"egressCheckEnabled": false, "egressRequireLocalProxy": true}))),
+            Some(EgressMode::Pause)
+        );
+        assert_eq!(
+            EgressMode::from_legacy(&object(serde_json::json!({"egressCheckEnabled": true, "egressRequireLocalProxy": false}))),
+            Some(EgressMode::Auto)
+        );
+        // Once the menu has been saved, its value wins.
+        assert_eq!(
+            EgressMode::from_legacy(&object(serde_json::json!({"egressMode": "allow", "egressRequireLocalProxy": true}))),
+            None
+        );
+        // An unknown value keeps every other setting.
+        let settings: crate::state::AppSettings =
+            serde_json::from_str(r#"{"showTokensInTray": true, "egressMode": "somethingNew"}"#).unwrap();
+        assert!(settings.show_tokens_in_tray);
+        assert_eq!(settings.egress_mode, EgressMode::Auto);
+    }
 
     #[test]
     fn trace_region_reads_only_a_two_letter_loc_line() {

@@ -60,7 +60,7 @@
 | `MenuBarController`（NSStatusItem + NSPanel） | `tray.rs` + `panel.rs`（托盘 + 标准主窗口，可调整大小）+ `window_geometry.rs`（再次打开时缩到屏幕放得下再居中） |
 | Sparkle | `services/updater.rs`（latest.json + SHA-256 + NSIS 被动模式覆盖升级，见 `docs/WINDOWS_UPDATE.md`） |
 | `SMAppService`（登录项） | `auto-launch` crate（HKCU Run 注册表键，值带 `--autostart`；带它启动时窗口照常出现；设了代理（含 PAC 暂时取不到）、有同步或配额要读时，读配额和每一次同步（手动的也算）都等到代理就绪——应用自己的代理变量，或同步服务器、各厂商主机的系统路由（含 PAC）指向的端口能连上——最多等 2 分钟，等待期间配额卡显示「正在读取」；一个代理都没设就不等，四家厂商的读取改由出口检测把关，与 macOS `LoginLaunch` 对齐；旧注册值在启动时补上参数，不碰任务管理器的启用开关） |
-| `EgressCheck`（没检测到代理时，先匿名检测出口国家再读 Codex、Claude；设置「检测网络出口」「这台电脑上网靠本机代理软件」转给 CLI 检测 Antigravity） | `src-tauri/src/egress_check.rs`（同样的检测主机、地区、缓存时长和文案；网卡地址用 `GetAdaptersAddresses` 求摘要；设置在「网络」分区；环境变量 `VIBE_USAGE_EGRESS_CHECK=0` / `VIBE_USAGE_REQUIRE_PROXY=1`） |
+| `EgressCheck`（没检测到代理时，先匿名检测出口国家再读 Codex、Claude；设置「隐私保护 → 没检测到代理时」三选一（自动判断（推荐）/ 暂停读取 / 照常读取），转给 CLI 检测 Antigravity） | `src-tauri/src/egress_check.rs`（同样的检测主机、地区、缓存时长和文案；网卡地址用 `GetAdaptersAddresses` 求摘要；设置在「隐私保护」分区，同样的弹出菜单（`MenuSelect`，自绘、对齐 macOS 原生弹出菜单），存为 `settings.json` 的 `egressMode`（开发时的两个旧字段读入时映射）；环境变量 `VIBE_USAGE_EGRESS_CHECK=1|0` / `VIBE_USAGE_REQUIRE_PROXY=1|0`） |
 | `SystemProxy`（按网址解析系统代理，PAC 由系统求值，交给 CLI、Claude Code 和厂商请求） | `src-tauri/src/system_proxy.rs`（注册表手动代理含按协议分开的写法和例外列表、PAC 由 WinHTTP 求值；reqwest 每次请求现解析；CLI 和 Claude 探测按同一份系统代理拿变量，Claude Code 只拿 HTTP 代理，纯 SOCKS 系统代理下目前不经代理，Mac 用本机中转解决、Windows 待做） |
 
 ## 平台差异（有意为之）
