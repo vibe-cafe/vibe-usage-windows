@@ -410,7 +410,7 @@ describe("quota status copy shared with macOS", () => {
     ["codex", "credentialsRejected", "登录已失效，请重新登录", "已失效"],
     ["opencode-go", "credentialsRejected", "请在 OpenCode 中重新登录后重试", "已失效"],
     ["antigravity", "programNotFound", "请安装 agy 或 Antigravity", "未安装"],
-    ["antigravity", "credentialsRejected", "请在 Antigravity 中登录", "已失效"],
+    ["antigravity", "credentialsRejected", "请在 Antigravity 中登录", "需登录"],
     ["zcode", "credentialsNotFound", "请在设置中配置 Z.ai API Key", "需 Key"],
     ["zcode", "credentialsRejected", "API Key 无效，请在设置中更换", "Key 无效"],
   ] as const)("maps %s login state %s", (provider, code, card, short) => {

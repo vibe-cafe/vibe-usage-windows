@@ -161,7 +161,9 @@ function failureCopy(
     case "credentialsExpired":
       if (provider === "opencode-go") return ["打开 OpenCode 后自动显示", "需打开"];
       return ["登录已失效", "已失效"];
-    case "credentialsRejected": return ["登录已失效", provider === "zcode" ? "Key 无效" : "已失效"];
+    // AGY reports "sign in" the same way whether it was never signed in or lapsed.
+    case "credentialsRejected":
+      return ["登录已失效", provider === "zcode" ? "Key 无效" : provider === "antigravity" ? "需登录" : "已失效"];
     case "credentialsUnreadable": return ["读不到登录信息", "读不了"];
     case "credentialsEncrypted": return ["登录信息已加密，暂时读不了", "不支持"];
     case "loginRefreshFailed": return ["登录续期失败", "续期失败"];

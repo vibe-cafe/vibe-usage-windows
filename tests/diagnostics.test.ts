@@ -137,7 +137,7 @@ describe("copyable diagnostics report", () => {
     expect(text).toContain("CLI 启动阶段失败（引导器连不上 npm 源）");
     expect(text).toContain("失败（服务器错误 502）");
     expect(text).toContain("Claude  正常 · 2 个窗口 · 读取超时 · 来源：缓存 · 数据 30 小时前");
-    expect(text).toContain("Kimi Code  需重新登录");
+    expect(text).toContain("Kimi Code  登录已失效，请重新登录");
     expect(text).toContain(
       "1）~\\.local\\bin\\claude.exe · initialize 0.9s · get_usage 超时 · 读取超时 · 被 App 结束",
     );
