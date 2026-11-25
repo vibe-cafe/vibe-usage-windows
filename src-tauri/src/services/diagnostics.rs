@@ -1015,7 +1015,7 @@ mod tests {
                     RateLimitProvider::Codex,
                     "noData",
                     Some(RateLimitSource::Live),
-                    Some(RateLimitLiveFailure::EndpointHttpStatus { status: 502 }),
+                    Some(RateLimitLiveFailure::EndpointHttpStatus { status: Some(502) }),
                     None,
                     0,
                 ),

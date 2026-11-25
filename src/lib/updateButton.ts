@@ -1,7 +1,8 @@
-// Footer 「发现更新」 button states. The click downloads the installer (tens of
-// MB) before anything else is visible, then the app quits and a passive
-// installer shows only a progress bar, so the button itself has to show that
-// work is under way and why it stopped.
+// Update button states: the panel header's 「发现更新」 badge and Settings'
+// 「安装更新」. The click downloads the installer (tens of MB) before anything
+// else is visible, then the app quits and a passive installer shows only a
+// progress bar, so the button itself has to show that work is under way and
+// why it stopped.
 
 export type UpdatePhase =
   | { kind: "idle" }

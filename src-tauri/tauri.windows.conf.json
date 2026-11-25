@@ -3,7 +3,8 @@
   "bundle": {
     "resources": {
       "resources/cli-bootstrap.mjs": "cli-bootstrap.mjs",
-      "resources/node/node.exe": "node/node.exe"
+      "resources/node/node.exe": "node/node.exe",
+      "../THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md"
     }
   }
 }

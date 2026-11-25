@@ -56,7 +56,10 @@ test("the app resolves the CLI from npm's latest at run time", () => {
   expect(packageJson.vibeUsageCliVersion).toBeUndefined();
   expect(tauriConf.bundle.resources).toEqual({
     "resources/cli-bootstrap.mjs": "cli-bootstrap.mjs",
+    // The Lobe Icons MIT notice ships with the app, as on macOS.
+    "../THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md",
   });
+  expect(windowsConf.bundle.resources["../THIRD_PARTY_NOTICES.md"]).toBe("THIRD_PARTY_NOTICES.md");
   expect(windowsConf.bundle.resources["resources/cli-bootstrap.mjs"]).toBe("cli-bootstrap.mjs");
   expect(Object.keys(windowsConf.bundle.resources)).not.toContain("resources/cli");
   // The launcher is the app's only path to the CLI, so a release has to prove it

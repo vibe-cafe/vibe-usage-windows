@@ -6,28 +6,67 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertCircle, Check, CheckCircle2, ChevronRight, ChevronsUpDown, RefreshCw } from "lucide-react";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { api, onDeviceLink, onSettingsShown, onSyncState } from "./lib/api";
+import {
+  api,
+  observeCachedRateLimits,
+  onDeviceLink,
+  onSettingsShown,
+  onSettingsUpdated,
+  onSyncState,
+  onUpdateAvailable,
+  onUpdateCleared,
+} from "./lib/api";
 import { formatInvokeError } from "./lib/errors";
 import { extraRootsLoadPatch } from "./lib/extraRoots";
 import {
   AppSettings,
   AppStatus,
   ExtraRoots,
+  ProviderRateLimit,
   QuotaProduct,
   RateLimitProvider,
   SyncState,
+  UpdateInfo,
   ZCodeCredentialStatus,
   ZCodeQuotaRegion,
 } from "./lib/types";
 import { formatRelativeTime } from "./lib/formatters";
-import { compactQuotaStatus, isZCodeConfigured, quotaProductNote, quotaProductStatusText } from "./lib/quotaProducts";
+import { isZCodeConfigured, quotaProductNote, quotaProductStatusText } from "./lib/quotaProducts";
 import { buildDiagnosticsText, copyText } from "./lib/diagnostics";
 import { EGRESS_MODES, egressModeOption } from "./lib/egressMode";
-import { ProviderIcon } from "./components/ProviderIcon";
+import { followUpdateOffer } from "./lib/updateOffer";
+import {
+  type UpdatePhase,
+  createUpdateRunner,
+  phaseForNewOffer,
+  updateButtonEnabled,
+} from "./lib/updateButton";
+import { PROVIDER_ICON_OFF_COLOR, ProviderIcon } from "./components/ProviderIcon";
 
 export function SettingsApp() {
   const [status, setStatus] = useState<AppStatus | null>(null);
-  const [settings, setSettings] = useState<AppSettings | null>(null);
+  const [settings, setSettingsState] = useState<AppSettings | null>(null);
+  // The latest settings this window knows of, including what the panel wrote
+  // since (`settings-updated`). A switch here patches this copy, never the one
+  // the window loaded when it opened: the panel persists the quota tab order
+  // and last tab on its own, and writing back a stale whole object erased a
+  // freshly dragged order (#53).
+  const settingsRef = useRef<AppSettings | null>(null);
+  const setSettings = useCallback((next: AppSettings) => {
+    settingsRef.current = next;
+    setSettingsState(next);
+  }, []);
+  // Counts `settings-updated` events. A reload waits for slower reads (the
+  // CLI's extra roots) before it applies the settings it fetched; if an event
+  // arrived meanwhile, that copy is older than the one already shown.
+  const settingsEvents = useRef(0);
+  const applyPushedSettings = useCallback(
+    (next: AppSettings) => {
+      settingsEvents.current += 1;
+      setSettings(next);
+    },
+    [setSettings],
+  );
   const [syncState, setSyncState] = useState<SyncState>({ status: "idle" });
   const [autoStart, setAutoStart] = useState(false);
 
@@ -36,6 +75,7 @@ export function SettingsApp() {
   const [relinkError, setRelinkError] = useState<string | null>(null);
   const [quotaError, setQuotaError] = useState<string | null>(null);
   const [quotaProducts, setQuotaProducts] = useState<QuotaProduct[]>([]);
+  const [quotaSnapshots, setQuotaSnapshots] = useState<ProviderRateLimit[] | null>([]);
   const [quotaBusy, setQuotaBusy] = useState(false);
   const [zCodeStatus, setZCodeStatus] = useState<ZCodeCredentialStatus>({
     bigModelConfigured: false,
@@ -45,6 +85,9 @@ export function SettingsApp() {
   const [zCodeMessage, setZCodeMessage] = useState<string | null>(null);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [updateMessage, setUpdateMessage] = useState<string | null>(null);
+  const [updateOffer, setUpdateOffer] = useState<UpdateInfo | null>(null);
+  const [updatePhase, setUpdatePhase] = useState<UpdatePhase>({ kind: "idle" });
+  const [startUpdate] = useState(() => createUpdateRunner(api.installUpdate, setUpdatePhase));
   const [diagnosticMessage, setDiagnosticMessage] = useState<string | null>(null);
   const [reportBusy, setReportBusy] = useState(false);
   const [reportMessage, setReportMessage] = useState<string | null>(null);
@@ -58,6 +101,7 @@ export function SettingsApp() {
   const [isIsolatedRootsExpanded, setIsIsolatedRootsExpanded] = useState(false);
 
   const reload = useCallback(async () => {
+    const eventsBefore = settingsEvents.current;
     // Defaults are initialized by the backend before any window starts.
     const discovered = await api.getQuotaProducts().catch(() => null);
     const [
@@ -78,7 +122,9 @@ export function SettingsApp() {
 
     if (discovered) setQuotaProducts(discovered);
     if (nextStatus.status === "fulfilled") setStatus(nextStatus.value);
-    if (nextSettings.status === "fulfilled") setSettings(nextSettings.value);
+    if (nextSettings.status === "fulfilled" && settingsEvents.current === eventsBefore) {
+      setSettings(nextSettings.value);
+    }
     if (nextSyncState.status === "fulfilled") setSyncState(nextSyncState.value);
     if (nextAutoStart.status === "fulfilled") setAutoStart(nextAutoStart.value);
     if (nextZCodeStatus.status === "fulfilled") setZCodeStatus(nextZCodeStatus.value);
@@ -87,14 +133,22 @@ export function SettingsApp() {
       setExtraRoots(extraPatch.extraRoots);
     }
     setExtraRootsError(extraPatch.extraRootsError);
-  }, []);
+  }, [setSettings]);
 
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;
 
     void reload();
+    const stopQuotaUpdates = observeCachedRateLimits(setQuotaSnapshots);
     const subs = [
       onSyncState(setSyncState),
+      onSettingsUpdated(applyPushedSettings),
+      // The same offer the panel header shows: found at startup, by the daily
+      // check or by 「检查更新」 here; withdrawn by a later check (#36).
+      followUpdateOffer(
+        { onAvailable: onUpdateAvailable, onCleared: onUpdateCleared, readCurrent: api.getUpdateInfo },
+        setUpdateOffer,
+      ),
       onSettingsShown(() => {
         void reload();
       }),
@@ -119,9 +173,19 @@ export function SettingsApp() {
       }),
     ];
     return () => {
+      stopQuotaUpdates();
       for (const p of subs) void p.then((un) => un());
     };
-  }, [reload]);
+  }, [reload, applyPushedSettings]);
+
+  // A failure belonged to the offer it tried to install (same rule as the
+  // header badge); a newer offer (e.g. found by the daily check after an
+  // earlier 「已是最新版本」) replaces the last check's line.
+  const offeredVersion = updateOffer?.version ?? null;
+  useEffect(() => {
+    setUpdatePhase(phaseForNewOffer);
+    if (offeredVersion) setUpdateMessage(null);
+  }, [offeredVersion]);
 
   const relink = async () => {
     setRelinkError(null);
@@ -144,8 +208,9 @@ export function SettingsApp() {
   };
 
   const patchSettings = (patch: Partial<AppSettings>) => {
-    if (!settings) return;
-    const next = { ...settings, ...patch };
+    const current = settingsRef.current;
+    if (!current) return;
+    const next = { ...current, ...patch };
     setSettings(next);
     void api.setSettings(next);
   };
@@ -248,10 +313,13 @@ export function SettingsApp() {
   };
 
   const checkUpdate = async () => {
+    // A recheck may withdraw the offer (a pulled release, docs/WINDOWS_UPDATE.md),
+    // so it stays available next to 「安装更新」.
     setUpdateMessage("检查中…");
     try {
       const info = await api.checkForUpdate();
-      setUpdateMessage(info ? `发现新版本 ${info.version}` : "已是最新版本");
+      setUpdateOffer(info);
+      setUpdateMessage(info ? null : "已是最新版本");
     } catch (err) {
       setUpdateMessage(`检查失败: ${formatInvokeError(err)}`);
     }
@@ -330,6 +398,13 @@ export function SettingsApp() {
   const region = settings?.zCodeQuotaRegion ?? "bigModel";
   const zCodeConfigured = isZCodeConfigured(zCodeStatus, region);
   const zCodeProduct = quotaProducts.find((product) => product.provider === "zcode");
+  const statusText = (product: QuotaProduct) => quotaProductStatusText(
+    product,
+    settings?.selectedQuotaProductIds ?? [],
+    quotaSnapshots?.find((item) => item.provider === product.provider),
+    quotaSnapshots === null,
+    zCodeConfigured,
+  );
   const isolatedRootCount = Object.values(extraRoots).reduce(
     (total, paths) => total + (paths?.length ?? 0),
     0,
@@ -415,7 +490,7 @@ export function SettingsApp() {
               <ProductRow
                 key={product.provider}
                 product={product}
-                statusText={quotaProductStatusText(product)}
+                statusText={statusText(product)}
                 selected={settings?.selectedQuotaProductIds.includes(product.provider) ?? false}
                 disabled={quotaBusy}
                 onToggle={(value) => void toggleQuotaProduct(product.provider, value)}
@@ -436,18 +511,18 @@ export function SettingsApp() {
                     className="shrink-0 transition-transform duration-150"
                     style={{ color: "#8C8C8C", transform: isZCodeExpanded ? "rotate(90deg)" : undefined }}
                   />
-                  <ProviderIcon provider="zcode" />
+                  <ProviderIcon
+                    provider="zcode"
+                    size={22}
+                    color={
+                      settings?.selectedQuotaProductIds.includes("zcode")
+                        ? undefined
+                        : PROVIDER_ICON_OFF_COLOR
+                    }
+                  />
                   <span className="flex min-w-0 flex-col">
                     <span className="text-[13px]">{zCodeProduct.displayName}</span>
-                    <span className="truncate text-[10.5px]" style={{ color: "#8C8C8C" }}>
-                      {compactQuotaStatus(
-                        quotaProductStatusText(
-                          zCodeProduct,
-                          zCodeStatus,
-                          settings?.zCodeQuotaRegion ?? "bigModel",
-                        ),
-                      )}
-                    </span>
+                    <QuotaStatusLabel text={statusText(zCodeProduct)} />
                   </span>
                 </button>
                 <Toggle
@@ -646,14 +721,45 @@ export function SettingsApp() {
             </span>
           </Row>
           <Row label="检查更新">
-            <div className="flex items-center gap-2">
-              {updateMessage && (
-                <span className="text-xs" style={{ color: "#9E9E9E" }}>
-                  {updateMessage}
-                </span>
-              )}
+            <div className="flex min-w-0 items-center gap-2">
               {status?.updatesAvailable ? (
-                <SmallButton onClick={() => void checkUpdate()}>检查更新</SmallButton>
+                <>
+                  {(() => {
+                    const failed = updatePhase.kind === "failed" ? updatePhase.reason : null;
+                    const text =
+                      failed != null
+                        ? `更新失败：${failed}`
+                        : (updateMessage ?? (updateOffer ? `发现新版本 ${updateOffer.version}` : null));
+                    return (
+                      text && (
+                        <span
+                          className="min-w-0 truncate text-xs"
+                          style={{ color: failed != null ? "#FF6B6B" : "#9E9E9E" }}
+                          title={text}
+                        >
+                          {text}
+                        </span>
+                      )
+                    );
+                  })()}
+                  <SmallButton
+                    disabled={!updateButtonEnabled(updatePhase)}
+                    onClick={() => void checkUpdate()}
+                  >
+                    检查更新
+                  </SmallButton>
+                  {updateOffer && (
+                    // Install from here: the same download-and-install as the
+                    // panel's 「发现更新」 (no second confirmation on Windows,
+                    // docs/PARITY.md 平台差异 5).
+                    <SmallButton
+                      disabled={!updateButtonEnabled(updatePhase)}
+                      onClick={() => void startUpdate()}
+                    >
+                      {settingsUpdateButtonLabel(updatePhase)}
+                    </SmallButton>
+                  )}
+                </>
               ) : status ? (
                 <span className="text-xs text-neutral-400">外测版不检查更新</span>
               ) : null}
@@ -751,7 +857,7 @@ function Section({
   );
 }
 
-/** One product switch: official icon, display name, and the discovery/read
+/** One product switch: monochrome mark, display name, and the discovery/read
  *  status line the panel's selector prints in full. */
 function ProductRow({
   product,
@@ -770,12 +876,16 @@ function ProductRow({
   return (
     <div className="flex min-h-[38px] items-center justify-between gap-3 px-3 py-1.5">
       <div className="flex min-w-0 items-center gap-2">
-        <ProviderIcon provider={product.provider} />
+        {/* A 22 px slot, on products in the primary colour, off ones dimmed
+            (macOS 订阅配额 table: ProviderGlyph 18 in a 22 frame, 72% when off). */}
+        <ProviderIcon
+          provider={product.provider}
+          size={22}
+          color={selected ? undefined : PROVIDER_ICON_OFF_COLOR}
+        />
         <span className="flex min-w-0 flex-col">
           <span className="text-[13px]">{product.displayName}</span>
-          <span className="truncate text-[10.5px]" style={{ color: "#8C8C8C" }}>
-            {statusText}
-          </span>
+          <QuotaStatusLabel text={statusText} />
           {note && (
             <span className="truncate text-[10.5px]" style={{ color: "#6A6A6A" }}>
               {note}
@@ -786,6 +896,11 @@ function ProductRow({
       <Toggle checked={selected} disabled={disabled} onChange={onToggle} />
     </div>
   );
+}
+
+function QuotaStatusLabel({ text }: { text: string }) {
+  const color = text === "出错" ? "#FF6B6B" : "#8C8C8C";
+  return <span className="truncate text-[10.5px]" style={{ color }}>{text}</span>;
 }
 
 /** Collapsed row that still shows its state, so a set-once setting costs one
@@ -993,6 +1108,19 @@ function Toggle({
   );
 }
 
+function settingsUpdateButtonLabel(phase: UpdatePhase): string {
+  switch (phase.kind) {
+    case "idle":
+      return "安装更新";
+    case "downloading":
+      return "正在下载…";
+    case "launching":
+      return "正在启动安装…";
+    case "failed":
+      return "重试";
+  }
+}
+
 function SmallButton({
   children,
   disabled,
@@ -1006,7 +1134,7 @@ function SmallButton({
     <button
       disabled={disabled}
       onClick={onClick}
-      className="rounded-md px-2.5 py-1 text-xs disabled:opacity-50"
+      className="shrink-0 whitespace-nowrap rounded-md px-2.5 py-1 text-xs disabled:opacity-50"
       style={{ background: "#48484A", color: "#E8E8E8" }}
     >
       {children}

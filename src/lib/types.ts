@@ -308,10 +308,8 @@ export type RateLimitStatus =
 /**
  * Why a source that *did* answer had no window to draw, when it can say
  * (mirrors RateLimit.swift's EmptyReason). Codex's live usage endpoint reports
- * enforced windows exhaustively and carries `allowed` / `limit_reached`, so an
- * answer without any window is a fact. Every other source cannot tell
- * "used up" apart from "nothing here", so it leaves this null and the card
- * stays neutral rather than guessing.
+ * enforced windows exhaustively and carries `allowed` / `limit_reached`.
+ * Sources without a known reason leave this null.
  */
 export type RateLimitEmptyReason =
   | "limitReached"
@@ -329,6 +327,8 @@ export type RateLimitEmptyReason =
    * instead of offering a retry that cannot produce windows.
    */
   | "sessionWithoutPlanLimits"
+  | "periodEnded"
+  | "noLocalRecord"
   /**
    * The organization's managed settings force Claude Code's nonessential
    * traffic off, which also blocks its usage read, so the app did not start
@@ -364,6 +364,13 @@ export type RateLimitLiveFailureCode =
   | "credentialsNotFound"
   | "credentialsRejected"
   | "credentialsExpired"
+  | "credentialsUnreadable"
+  | "credentialsEncrypted"
+  | "loginRefreshFailed"
+  | "programNotFound"
+  | "programOutdated"
+  | "programNoAnswer"
+  | "localRecordUnreadable"
   | "endpointTimedOut"
   | "endpointUnreachable"
   | "endpointHttpStatus"
@@ -380,7 +387,8 @@ export type RateLimitLiveFailureCode =
   // out direct and the egress check said no. Nothing was sent; no retry.
   | "egressRegionUnsupported"
   | "egressUnconfirmed"
-  | "proxyNotDetected";
+  | "proxyNotDetected"
+  | "proxyUnsupported";
 
 export interface RateLimitLiveFailure {
   code: RateLimitLiveFailureCode;

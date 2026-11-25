@@ -12,7 +12,7 @@ describe("the 「没检测到代理时」 menu", () => {
 
   it("gives each option its own short grey line", () => {
     expect(egressModeOption("auto").caption).toBe(
-      "网络在中国大陆等地区时，暂停读取 Codex、Claude、Antigravity，避免真实 IP 和账号一起暴露。",
+      "网络在中国大陆等地区时，暂停读取 Codex、Claude、Grok、Antigravity，避免真实 IP 和账号一起暴露。",
     );
     expect(egressModeOption("pause").caption).toContain("检测到代理后自动继续");
     expect(egressModeOption("allow").caption).toContain("真实 IP");

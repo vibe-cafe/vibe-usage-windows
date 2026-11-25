@@ -4,17 +4,17 @@
 // The strip is the card row's index in both directions: clicking a tab scrolls
 // the row to that product, and scrolling the row moves the highlight to the
 // card that reached the leading edge — the strip never claims a product is on
-// screen when it is not. Enabled products come first and keep their brand
-// color; products whose monitoring is off stay visible after them, desaturated,
-// and their tab opens Settings (there is no card to jump to). Tabs are
-// draggable: the order is persisted (`quotaProductOrder`), and because enabled
+// screen when it is not. Enabled products come first in the full-strength
+// monochrome mark; products whose monitoring is off stay visible after them,
+// dimmed to grey, and their tab opens Settings (there is no card to jump to).
+// Tabs are draggable: the order is persisted (`quotaProductOrder`), and because enabled
 // products render as their own group, a cross-group drop lands inside the
 // dragged product's own group instead of breaking the "enabled first" rule.
 
 import { useState } from "react";
 import { Settings } from "lucide-react";
 import { RateLimitProvider } from "../lib/types";
-import { isEgressPause, providerLabel, quotaTabShowsWarning } from "../lib/quotaProducts";
+import { isQuotaPause, providerLabel, quotaTabShowsWarning } from "../lib/quotaProducts";
 import { useAppState } from "../state/AppStateContext";
 import { api } from "../lib/api";
 import { ProviderIcon } from "./ProviderIcon";
@@ -61,7 +61,7 @@ export function QuotaTabStrip({
           state.isRefreshingRateLimits,
         );
         // A paused read keeps sound numbers: only the reading stopped.
-        const warningText = isEgressPause(snapshot?.liveFailure) ? " · 读取已暂停" : " · 数据异常";
+        const warningText = isQuotaPause(snapshot?.liveFailure) ? " · 读取已暂停" : " · 数据异常";
         const help = `${providerLabel(provider, state.quotaProducts)}${enabled ? "" : " · 未启用"}${warning ? warningText : ""}`;
         return (
           <button
@@ -77,10 +77,9 @@ export function QuotaTabStrip({
               height: 30,
               background: active ? "#1C1C1C" : "transparent",
               boxShadow: active ? "inset 0 0 0 1px #444444" : undefined,
-              // Off products keep their slot but lose their color: the icon
-              // itself carries "on / off", so a greyed tab is a product the
-              // user can look at (and enable) rather than one that is gone.
-              filter: enabled ? undefined : "grayscale(1)",
+              // Off products keep their slot but dim: the mark itself
+              // carries "on / off", so a greyed tab is a product the user
+              // can look at (and enable) rather than one that is gone.
               opacity: enabled ? 1 : 0.45,
               cursor: dragging === provider ? "grabbing" : undefined,
             }}

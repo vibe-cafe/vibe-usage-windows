@@ -149,6 +149,11 @@ pub async fn get_rate_limits(app: AppHandle, force: bool) -> Vec<ProviderRateLim
 }
 
 #[tauri::command]
+pub fn get_cached_rate_limits(app: AppHandle) -> rate_limits::CachedRateLimits {
+    rate_limits::cached_rate_limits(&app)
+}
+
+#[tauri::command]
 pub async fn enable_claude_rate_limit(app: AppHandle) -> Result<Vec<ProviderRateLimit>, String> {
     rate_limits::enable_claude(&app).await
 }
@@ -413,6 +418,9 @@ pub fn open_settings_impl(app: &AppHandle) {
         .min_inner_size(460.0, 360.0)
         .resizable(true)
         .maximizable(false)
+        // Dark title bar over the dark content even under the light Windows
+        // theme (macOS pins the settings window to `darkAqua`).
+        .theme(Some(tauri::Theme::Dark))
         .prevent_overflow()
         .center()
         .build();
