@@ -12,18 +12,21 @@ use vibe_core::statusline_hook::StatuslineHook;
 use vibe_core::{ProviderRateLimit, RateLimitLiveFailure, RateLimitProvider, RateLimitStatus};
 
 const MAX_AGE: Duration = Duration::from_secs(60);
-/// Antigravity is re-read at most every 5 minutes, also while the window stays
-/// visible (maintainer, 2026-11-24, 《Antigravity额度读取-封号风险与新做法》).
-/// The CLI decides whether Google is asked at all — only after Antigravity was
-/// used, never more often than this — so calling it sooner only starts a
-/// process that answers from its record. A forced refresh still calls it.
-const ANTIGRAVITY_MAX_AGE: Duration = Duration::from_secs(5 * 60);
+/// Antigravity and Grok are re-read at most every 5 minutes, also while the
+/// window stays visible. Antigravity (maintainer, 2026-11-24,
+/// 《Antigravity额度读取-封号风险与新做法》): the CLI decides whether Google is
+/// asked at all — only after Antigravity was used, never more often than this —
+/// so calling it sooner only starts a process that answers from its record.
+/// Grok (maintainer, 2026-11-25, 《Grok主动读取-审批门方案》): every read starts
+/// the official `grok` CLI, which asks xAI with the user's own sign-in, so a
+/// window left open must not start it every minute. A forced refresh still
+/// reads both.
+const SLOW_MAX_AGE: Duration = Duration::from_secs(5 * 60);
 
 fn max_age(provider: RateLimitProvider) -> Duration {
-    if provider == RateLimitProvider::Antigravity {
-        ANTIGRAVITY_MAX_AGE
-    } else {
-        MAX_AGE
+    match provider {
+        RateLimitProvider::Antigravity | RateLimitProvider::Grok => SLOW_MAX_AGE,
+        _ => MAX_AGE,
     }
 }
 
@@ -271,13 +274,14 @@ mod tests {
     }
 
     #[test]
-    fn antigravity_is_reread_at_most_every_five_minutes() {
+    fn antigravity_and_grok_are_reread_at_most_every_five_minutes() {
         assert_eq!(max_age(RateLimitProvider::Antigravity), Duration::from_secs(300));
+        assert_eq!(max_age(RateLimitProvider::Grok), Duration::from_secs(300));
         for provider in [
             RateLimitProvider::Codex,
             RateLimitProvider::ClaudeCode,
             RateLimitProvider::KimiCode,
-            RateLimitProvider::Grok,
+            RateLimitProvider::ZCode,
         ] {
             assert_eq!(max_age(provider), Duration::from_secs(60));
         }
