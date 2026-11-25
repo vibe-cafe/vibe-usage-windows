@@ -3,8 +3,8 @@
 // column widens with it). macOS's "在 Dock 中显示" has no Windows
 // equivalent (no Dock) and is intentionally omitted.
 
-import { useCallback, useEffect, useState } from "react";
-import { AlertCircle, CheckCircle2, ChevronRight, RefreshCw } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { AlertCircle, Check, CheckCircle2, ChevronRight, ChevronsUpDown, RefreshCw } from "lucide-react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { api, onDeviceLink, onSettingsShown, onSyncState } from "./lib/api";
 import { formatInvokeError } from "./lib/errors";
@@ -22,6 +22,7 @@ import {
 import { formatRelativeTime } from "./lib/formatters";
 import { compactQuotaStatus, isZCodeConfigured, quotaProductStatusText } from "./lib/quotaProducts";
 import { buildDiagnosticsText, copyText } from "./lib/diagnostics";
+import { EGRESS_MODES, egressModeOption } from "./lib/egressMode";
 import { ProviderIcon } from "./components/ProviderIcon";
 
 export function SettingsApp() {
@@ -539,30 +540,17 @@ export function SettingsApp() {
           )}
         </Section>
 
-        {/* 网络 — the egress check (`egress_check.rs`): Codex, Claude and
-            Antigravity read without a detected proxy only after an anonymous
-            check of the egress country, unless it is off; the manual switch
-            pauses them whenever no proxy is detected. */}
-        <Section
-          title="网络"
-          footer={
-            settings?.egressRequireLocalProxy
-              ? "未检测到代理时，暂停读取 Codex、Claude、Antigravity。"
-              : settings?.egressCheckEnabled === false
-                ? "关闭后，未检测到代理时直接读取。"
-                : "未检测到代理时，先匿名确认出口地区再读取 Codex、Claude、Antigravity。"
-          }
-        >
-          <Row label="检测网络出口">
-            <Toggle
-              checked={settings?.egressCheckEnabled ?? true}
-              onChange={(v) => patchSettings({ egressCheckEnabled: v })}
-            />
-          </Row>
-          <Row label="这台电脑上网靠本机代理软件">
-            <Toggle
-              checked={settings?.egressRequireLocalProxy ?? false}
-              onChange={(v) => patchSettings({ egressRequireLocalProxy: v })}
+        {/* 隐私保护 — the egress check (`egress_check.rs`): one three-way
+            menu, like the macOS pop-up menu (System Settings' 「显示滚动条」).
+            The grey line follows the option chosen. */}
+        <Section title="隐私保护" footer={egressModeOption(settings?.egressMode).caption}>
+          <Row label="没检测到代理时">
+            <MenuSelect
+              label="没检测到代理时"
+              value={egressModeOption(settings?.egressMode).value}
+              options={EGRESS_MODES}
+              disabled={!settings}
+              onChange={(value) => patchSettings({ egressMode: value })}
             />
           </Row>
         </Section>
@@ -843,6 +831,112 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
     >
       <span className="shrink-0 text-[13px]">{label}</span>
       {children}
+    </div>
+  );
+}
+
+/**
+ * A pop-up menu like the macOS one (System Settings' 「显示滚动条」): the
+ * button shows the chosen option; the list opens under it with a check on
+ * that option. Arrow keys move, Enter or Space picks, Escape or a click
+ * outside closes.
+ */
+function MenuSelect<T extends string>({
+  label,
+  value,
+  options,
+  disabled,
+  onChange,
+}: {
+  label: string;
+  value: T;
+  options: { value: T; label: string }[];
+  disabled?: boolean;
+  onChange: (value: T) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [active, setActive] = useState(0);
+  const root = useRef<HTMLDivElement>(null);
+  const list = useRef<HTMLUListElement>(null);
+  const selected = Math.max(0, options.findIndex((option) => option.value === value));
+
+  useEffect(() => {
+    if (!open) return;
+    setActive(selected);
+    list.current?.focus();
+    const close = (event: MouseEvent) => {
+      if (!root.current?.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [open, selected]);
+
+  const pick = (index: number) => {
+    setOpen(false);
+    if (options[index].value !== value) onChange(options[index].value);
+  };
+
+  return (
+    <div ref={root} className="relative shrink-0">
+      <button
+        type="button"
+        aria-label={label}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        disabled={disabled}
+        onClick={() => setOpen((value) => !value)}
+        onKeyDown={(event) => {
+          if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+            event.preventDefault();
+            setOpen(true);
+          }
+        }}
+        className="flex items-center gap-1.5 rounded-md bg-[#48484A] py-1 pl-2.5 pr-1.5 text-xs text-white outline-none focus-visible:ring-2 focus-visible:ring-[#0A84FF] disabled:opacity-50"
+      >
+        <span>{options[selected]?.label}</span>
+        <ChevronsUpDown size={12} className="text-white/70" />
+      </button>
+      {open && (
+        <ul
+          ref={list}
+          role="listbox"
+          aria-label={label}
+          tabIndex={-1}
+          aria-activedescendant={`${label}-${active}`}
+          onKeyDown={(event) => {
+            if (event.key === "ArrowDown") {
+              event.preventDefault();
+              setActive((index) => Math.min(options.length - 1, index + 1));
+            } else if (event.key === "ArrowUp") {
+              event.preventDefault();
+              setActive((index) => Math.max(0, index - 1));
+            } else if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              pick(active);
+            } else if (event.key === "Escape" || event.key === "Tab") {
+              setOpen(false);
+            }
+          }}
+          className="absolute right-0 top-full z-20 mt-1 min-w-full rounded-lg border border-white/10 bg-[#2C2C2E] p-1 shadow-xl outline-none"
+        >
+          {options.map((option, index) => (
+            <li
+              key={option.value}
+              id={`${label}-${index}`}
+              role="option"
+              aria-selected={index === selected}
+              onMouseEnter={() => setActive(index)}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => pick(index)}
+              className="flex cursor-default items-center gap-1.5 whitespace-nowrap rounded-md py-1 pl-1.5 pr-3 text-xs text-white"
+              style={{ background: index === active ? "#0A84FF" : "transparent" }}
+            >
+              <Check size={12} className={index === selected ? "opacity-100" : "opacity-0"} />
+              {option.label}
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

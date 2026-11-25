@@ -25,10 +25,8 @@ pub struct AppSettings {
     pub selected_quota_product_ids: Vec<RateLimitProvider>,
     pub quota_selection_initialized: bool,
     pub z_code_quota_region: ZCodeQuotaRegion,
-    /// 「检测网络出口」 (`egress_check`), default on.
-    pub egress_check_enabled: bool,
-    /// 「这台电脑上网靠本机代理软件」 (`egress_check`), default off.
-    pub egress_require_local_proxy: bool,
+    /// 「没检测到代理时」 (`egress_check::EgressMode`), default 「自动判断」.
+    pub egress_mode: crate::egress_check::EgressMode,
 }
 
 impl Default for AppSettings {
@@ -41,18 +39,14 @@ impl Default for AppSettings {
             selected_quota_product_ids: Vec::new(),
             quota_selection_initialized: false,
             z_code_quota_region: ZCodeQuotaRegion::default(),
-            egress_check_enabled: true,
-            egress_require_local_proxy: false,
+            egress_mode: crate::egress_check::EgressMode::default(),
         }
     }
 }
 
 impl AppSettings {
     pub fn egress(&self) -> crate::egress_check::Settings {
-        crate::egress_check::Settings {
-            enabled: self.egress_check_enabled,
-            require_proxy: self.egress_require_local_proxy,
-        }
+        self.egress_mode.settings()
     }
 
     pub fn set_quota_selection(&mut self, selection: Vec<RateLimitProvider>) {
@@ -170,18 +164,23 @@ impl AppCtx {
     pub fn new(app_config_dir: PathBuf) -> Self {
         let settings_path = app_config_dir.join("settings.json");
         let raw_settings = std::fs::read_to_string(&settings_path).ok();
-        let had_legacy_selection = raw_settings
+        let raw_object = raw_settings
             .as_deref()
             .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
-            .and_then(|value| value.as_object().cloned())
-            .is_some_and(|object| {
-                object.contains_key("codexRateLimitEnabled")
-                    || object.contains_key("claudeRateLimitEnabled")
-            });
+            .and_then(|value| value.as_object().cloned());
+        let had_legacy_selection = raw_object.as_ref().is_some_and(|object| {
+            object.contains_key("codexRateLimitEnabled")
+                || object.contains_key("claudeRateLimitEnabled")
+        });
         let mut settings: AppSettings = raw_settings
             .as_deref()
             .and_then(|raw| serde_json::from_str(raw).ok())
             .unwrap_or_default();
+        // The two egress switches of development builds become the menu's
+        // option; the next save writes `egressMode` only.
+        if let Some(mode) = raw_object.as_ref().and_then(crate::egress_check::EgressMode::from_legacy) {
+            settings.egress_mode = mode;
+        }
         let migrated_legacy_selection =
             !settings.quota_selection_initialized && had_legacy_selection;
         if migrated_legacy_selection {

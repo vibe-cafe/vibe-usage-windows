@@ -117,8 +117,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   quotaSelectedTabId: null,
   quotaSelectionInitialized: false,
   zCodeQuotaRegion: "bigModel",
-  egressCheckEnabled: true,
-  egressRequireLocalProxy: false,
+  egressMode: "auto",
 };
 
 /**
