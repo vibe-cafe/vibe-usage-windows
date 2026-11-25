@@ -49,16 +49,18 @@ pub fn run() {
             if launched_at_login {
                 let handle = app.handle().clone();
                 let ctx = handle.state::<AppCtx>();
-                // Nothing to send (not linked, no selected product that
-                // reads the network): no reason to look at the proxy at all.
+                // Nothing to send (not linked, no selected product): no
+                // reason to look at the proxy at all. Every product reads the
+                // network now that Cursor goes through the CLI too (Grok's
+                // meters come from a local log, but the CLI that reads it may
+                // check npm first).
                 let has_network_work = ctx.config.is_configured()
-                    || ctx
+                    || !ctx
                         .settings
                         .lock()
                         .unwrap()
                         .selected_quota_product_ids
-                        .iter()
-                        .any(|provider| services::rate_limits::reads_network(*provider));
+                        .is_empty();
                 if has_network_work {
                     let urls = system_proxy::launch_probe_urls(&ctx.config.load_api_url());
                     tauri::async_runtime::spawn(async move {

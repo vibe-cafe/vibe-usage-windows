@@ -8,19 +8,23 @@ import { AppStateValue, useAppState } from "../state/AppStateContext";
 import {
   ProviderRateLimit,
   RateLimitMeter,
+  RateLimitMeterPart,
   RateLimitProvider,
   RateLimitWindow,
 } from "../lib/types";
 import {
+  QuotaTooltipLine,
   canonicalQuotaMeters,
   codexFiveHourPlaceholder,
   providerLabel,
   quotaEmptyStateText,
   quotaProvenanceText,
   quotaRetryableText,
+  quotaTooltipLines,
+  quotaTooltipTitle,
 } from "../lib/quotaProducts";
 import { elapsedPercent, utilizationColor } from "../lib/aggregate";
-import { formatPercent, formatTimeUntil } from "../lib/formatters";
+import { formatPercent } from "../lib/formatters";
 import { MiddleTruncateLabel } from "./MiddleTruncateLabel";
 import { ProviderIcon } from "./ProviderIcon";
 import { QuotaTabStrip } from "./QuotaTabStrip";
@@ -159,7 +163,7 @@ export function RateLimitCards() {
   const snapshot = (provider: RateLimitProvider): ProviderRateLimit =>
     state.rateLimits.find((item) => item.provider === provider) ?? {
       provider,
-      status: { kind: provider === "cursor" ? "disabled" : "noData" },
+      status: { kind: "noData" },
     };
 
   return (
@@ -218,7 +222,7 @@ const TOOLTIP_GAP = 6;
 const TOOLTIP_MARGIN = 8;
 
 type RowItem =
-  | { kind: "live"; label: string; window: RateLimitWindow }
+  | { kind: "live"; label: string; window: RateLimitWindow; breakdown?: RateLimitMeterPart[] }
   | { kind: "placeholder"; label: string; message: string };
 
 function meterWindow(meter: RateLimitMeter): RateLimitWindow {
@@ -239,6 +243,7 @@ function ProviderCard({ snapshot }: { snapshot: ProviderRateLimit }) {
     kind: "live",
     label: meter.label,
     window: meterWindow(meter),
+    breakdown: meter.breakdown,
   }));
   if (rows.length === 0) {
     if (snapshot.fiveHour) {
@@ -277,13 +282,8 @@ function ProviderCard({ snapshot }: { snapshot: ProviderRateLimit }) {
       </div>
 
       {snapshot.status.kind === "ok" && <QuotaRows rows={visibleRows} />}
-      {snapshot.status.kind === "disabled" && snapshot.provider !== "cursor" && (
-        <MessageContent text="订阅配额未启用" />
-      )}
-      {(snapshot.status.kind === "noData" ||
-        (snapshot.status.kind === "disabled" && snapshot.provider === "cursor")) && (
-        <QuietText text={emptyStateText(snapshot, state)} />
-      )}
+      {snapshot.status.kind === "disabled" && <MessageContent text="订阅配额未启用" />}
+      {snapshot.status.kind === "noData" && <QuietText text={emptyStateText(snapshot, state)} />}
       {snapshot.status.kind === "unauthorized" && (
         <MessageContent text={unauthorizedText(snapshot.provider, state.settings.zCodeQuotaRegion, name)} />
       )}
@@ -314,6 +314,8 @@ function unauthorizedText(provider: RateLimitProvider, region: "bigModel" | "zAI
     return `请在设置中配置 ${region === "bigModel" ? "BigModel" : "Z.ai"} API Key`;
   }
   if (provider === "kimi-code") return "请重新登录 Kimi Code 后重试";
+  // The CLI reads Cursor's own signed-in session (same sentence as macOS).
+  if (provider === "cursor") return "请在 Cursor 中重新登录后重试";
   // The key comes from OpenCode's own store; only OpenCode can re-issue it.
   if (provider === "opencode-go") return "请在 OpenCode 中重新登录后重试";
   // The CLI reports this both when no `agy` is installed and when it is
@@ -325,13 +327,6 @@ function unauthorizedText(provider: RateLimitProvider, region: "bigModel" | "zAI
 /** Local discovery result only — never a credential or network read. It
  *  separates "installed but nothing to show yet" from "not on this machine". */
 function emptyStateText(snapshot: ProviderRateLimit, state: AppStateValue): string {
-  // Cursor is a placeholder on Windows: nothing is read for it.
-  if (snapshot.provider === "cursor") {
-    const detected = state.quotaProducts.find((item) => item.provider === "cursor")?.isDetected;
-    return detected
-      ? "已识别 Cursor · 等待官方配额接口"
-      : "未检测到 Cursor · 等待官方配额接口";
-  }
   if (state.isRefreshingRateLimits) return "正在读取订阅配额…";
   const detected =
     state.quotaProducts.find((item) => item.provider === snapshot.provider)?.isDetected === true;
@@ -368,9 +363,13 @@ function QuotaRows({ rows }: { rows: RowItem[] }) {
       )}
       {rows.length === 0 && <span className="text-[11px] text-neutral-500">暂无订阅配额数据</span>}
 
-      {hovered && hoveredRow && hoveredWindow && (
+      {hovered && hoveredRow?.kind === "live" && hoveredWindow && (
         <TooltipLayer anchor={hovered.anchor}>
-          <Tooltip label={hoveredRow.label} window={hoveredWindow} />
+          <Tooltip
+            label={hoveredRow.label}
+            window={hoveredWindow}
+            breakdown={hoveredRow.breakdown}
+          />
         </TooltipLayer>
       )}
     </div>
@@ -434,29 +433,47 @@ function EmptyQuotaRow({ label, message }: { label: string; message: string }) {
   );
 }
 
-function Tooltip({ label, window: quotaWindow }: { label: string; window: RateLimitWindow }) {
-  const elapsed = elapsedPercent(quotaWindow);
-  const remaining =
-    quotaWindow.resetsAt != null
-      ? formatTimeUntil(new Date(quotaWindow.resetsAt * 1000))
-      : null;
+/**
+ * Same content and colours as macOS `TooltipView` (PARITY rule 7): a title,
+ * then one dotted line per fact — Token 用量, the window's time, and each part
+ * of a meter's breakdown (Cursor's own vs third-party models).
+ */
+function Tooltip({
+  label,
+  window: quotaWindow,
+  breakdown,
+}: {
+  label: string;
+  window: RateLimitWindow;
+  breakdown?: RateLimitMeterPart[];
+}) {
   return (
     <div
       className="flex flex-col gap-[5px] whitespace-nowrap rounded-[5px] bg-black px-2.5 py-2 text-[11px] shadow-[0_2px_5px_rgba(0,0,0,0.5)]"
       style={{ border: "0.5px solid #383838" }}
     >
-      <span className="font-semibold text-white">{label}</span>
-      <span style={{ color: utilizationColor(quotaWindow.utilization) }}>
-        已使用 {formatPercent(quotaWindow.utilization)}
-      </span>
-      <span className="text-neutral-400">
-        {elapsed != null && remaining != null
-          ? `已过去 ${formatPercent(elapsed)} · 剩余 ${remaining}`
-          : remaining != null
-            ? `重置剩余 ${remaining}`
-            : "重置时间未知"}
-      </span>
+      <span className="font-semibold text-white">{quotaTooltipTitle(label)}</span>
+      {quotaTooltipLines(quotaWindow, breakdown).map((line, index) => (
+        <TooltipLine key={`${line.kind}-${index}`} line={line} />
+      ))}
     </div>
+  );
+}
+
+function TooltipLine({ line }: { line: QuotaTooltipLine }) {
+  // macOS Color(white:): 0.55 → #8C8C8C, 0.82 → #D1D1D1, 0.5 → #808080,
+  // 0.3 → #4D4D4D.
+  const usageColor = utilizationColor(line.utilization ?? 0);
+  const dot = line.kind === "usage" ? usageColor : line.kind === "time" ? "#8C8C8C" : "#4D4D4D";
+  const valueColor = line.kind === "usage" ? usageColor : line.muted ? "#808080" : "#D1D1D1";
+  return (
+    <span className="flex items-center gap-1.5">
+      <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: dot }} />
+      <span style={{ color: "#8C8C8C" }}>{line.label}</span>
+      <span style={{ color: valueColor, fontWeight: line.kind === "usage" ? 500 : 400 }}>
+        {line.value}
+      </span>
+    </span>
   );
 }
 

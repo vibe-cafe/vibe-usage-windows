@@ -381,7 +381,7 @@ function failureReason(reason: SyncReason | null | undefined): string {
   }
 }
 
-function quotaStatusText(status: string, meterCount: number, provider: RateLimitProvider): string {
+function quotaStatusText(status: string, meterCount: number): string {
   switch (status) {
     case "ok":
       return `正常 · ${meterCount} 个窗口`;
@@ -394,7 +394,7 @@ function quotaStatusText(status: string, meterCount: number, provider: RateLimit
     case "error":
       return "读取失败";
     case "disabled":
-      return provider === "cursor" ? "待接入" : "未启用";
+      return "未启用";
     case "notRead":
       return "本次启动以来未读取";
     default:
@@ -872,7 +872,7 @@ export function formatDiagnosticsReport(
   if (report.quotas.length === 0) lines.push("  没有开启任何产品");
   for (const card of report.quotas) {
     const name = providerLabel(card.provider, products);
-    const parts = [quotaStatusText(card.status, number(card.meterCount) ?? 0, card.provider)];
+    const parts = [quotaStatusText(card.status, number(card.meterCount) ?? 0)];
     if (card.emptyReason) {
       parts.push(
         quotaEmptyStateText(

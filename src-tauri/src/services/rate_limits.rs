@@ -175,9 +175,6 @@ pub fn cached_rate_limits(app: &AppHandle) -> Vec<ProviderRateLimit> {
     selected
         .into_iter()
         .map(|provider| {
-            if provider == RateLimitProvider::Cursor {
-                return ProviderRateLimit::empty(provider, RateLimitStatus::Disabled);
-            }
             cache
                 .snapshots
                 .get(&provider)
@@ -198,13 +195,6 @@ pub async fn after_settings_change(app: &AppHandle) -> Vec<ProviderRateLimit> {
         return cached_rate_limits(app);
     }
     get_rate_limits(app, true).await
-}
-
-/// Products whose card starts network work: all but Cursor, a placeholder on
-/// Windows (Grok's meters come from a local log, but the CLI that reads it
-/// may check npm first).
-pub fn reads_network(provider: RateLimitProvider) -> bool {
-    provider != RateLimitProvider::Cursor
 }
 
 /// Compatibility command retained for older frontends. New UI uses the

@@ -10,7 +10,7 @@ use tauri::AppHandle;
 use vibe_core::quota_product::{cli_id, cli_provider, ZCodeQuotaRegion};
 use vibe_core::{
     ProviderRateLimit, RateLimitEmptyReason, RateLimitLiveFailure, RateLimitMeter,
-    RateLimitProvider, RateLimitSource, RateLimitStatus,
+    RateLimitMeterPart, RateLimitProvider, RateLimitSource, RateLimitStatus,
 };
 
 const SCHEMA_VERSION: u32 = 1;
@@ -124,6 +124,32 @@ struct Meter {
     utilization: f64,
     resets_at: Option<String>,
     window_seconds: Option<f64>,
+    /// Optional in the CLI contract (Cursor's Month row today).
+    #[serde(default)]
+    breakdown: Vec<MeterPart>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MeterPart {
+    id: String,
+    label: String,
+    utilization: f64,
+}
+
+/// The CLI speaks English labels; the cards are Chinese. Only ids this app
+/// knows are renamed, so a new CLI meter still renders as reported. Same map
+/// as macOS `QuotaCLIBridge.displayLabel`.
+fn display_label(provider: RateLimitProvider, id: &str, label: String) -> String {
+    if provider != RateLimitProvider::Cursor {
+        return label;
+    }
+    match id {
+        // Same row name as Claude's pay-as-you-go spend.
+        "on-demand" => "额外".into(),
+        "auto" => "Cursor 模型".into(),
+        "api" => "第三方模型".into(),
+        _ => label,
+    }
 }
 
 pub async fn fetch(
@@ -232,11 +258,19 @@ fn map_product(product: Product) -> Result<ProviderRateLimit, FetchError> {
         .meters
         .into_iter()
         .map(|meter| RateLimitMeter {
+            label: display_label(provider, &meter.id, meter.label),
             id: meter.id,
-            label: meter.label,
             utilization: meter.utilization.clamp(0.0, 100.0),
             resets_at: meter.resets_at.as_deref().and_then(parse_epoch),
             window_duration: meter.window_seconds.filter(|value| *value > 0.0),
+            breakdown: meter
+                .breakdown
+                .into_iter()
+                .map(|part| RateLimitMeterPart {
+                    label: display_label(provider, &part.id, part.label),
+                    utilization: part.utilization.clamp(0.0, 100.0),
+                })
+                .collect(),
         })
         .collect::<Vec<_>>();
     // OpenCode Go reads OpenCode's own login, which the user cannot fix here:
@@ -408,6 +442,75 @@ mod tests {
         assert_eq!(snapshots[0].provider, RateLimitProvider::Grok);
         assert_eq!(snapshots[0].meters[0].label, "7d");
         assert_eq!(snapshots[0].meters[0].utilization, 30.0);
+    }
+
+    #[test]
+    fn cursor_month_carries_its_split_and_on_demand_reads_like_claude_extra() {
+        let snapshots = decode(
+            br#"{"schemaVersion":1,"products":[{"id":"cursor","status":"ok","meters":[{"id":"plan","label":"Month","utilization":48,"resetsAt":"2026-12-01T00:00:00.000Z","windowSeconds":2678400,"breakdown":[{"id":"auto","label":"Cursor models","utilization":4},{"id":"api","label":"Third-party models","utilization":88}]},{"id":"on-demand","label":"On-demand","utilization":25}],"planLabel":"Pro","fetchedAt":"2026-10-23T00:00:00Z","source":"live"}]}"#,
+            &[RateLimitProvider::Cursor],
+        )
+        .unwrap();
+        let cursor = &snapshots[0];
+        assert_eq!(cursor.provider, RateLimitProvider::Cursor);
+        assert_eq!(cursor.status, RateLimitStatus::Ok);
+        assert_eq!(cursor.plan_label.as_deref(), Some("Pro"));
+        assert_eq!(
+            cursor.meters.iter().map(|m| m.label.as_str()).collect::<Vec<_>>(),
+            ["Month", "额外"]
+        );
+        assert_eq!(cursor.meters[0].window_duration, Some(2678400.0));
+        assert!(cursor.meters[0].resets_at.is_some());
+        assert_eq!(
+            cursor.meters[0].breakdown,
+            vec![
+                RateLimitMeterPart {
+                    label: "Cursor 模型".into(),
+                    utilization: 4.0
+                },
+                RateLimitMeterPart {
+                    label: "第三方模型".into(),
+                    utilization: 88.0
+                },
+            ]
+        );
+        assert!(cursor.meters[1].breakdown.is_empty());
+        assert_eq!(cursor.live_failure, None);
+    }
+
+    #[test]
+    fn only_cursor_meter_ids_are_renamed() {
+        let snapshots = decode(
+            br#"{"schemaVersion":1,"products":[{"id":"kimi-code","status":"ok","meters":[{"id":"on-demand","label":"On-demand","utilization":10,"breakdown":[{"id":"auto","label":"Auto","utilization":5}]}],"fetchedAt":"2026-10-23T00:00:00Z"}]}"#,
+            &[RateLimitProvider::KimiCode],
+        )
+        .unwrap();
+        assert_eq!(snapshots[0].meters[0].label, "On-demand");
+        assert_eq!(snapshots[0].meters[0].breakdown[0].label, "Auto");
+    }
+
+    #[test]
+    fn cursor_login_states_map_like_the_macos_card() {
+        let product = |status: &str| {
+            let payload = format!(
+                r#"{{"schemaVersion":1,"products":[{{"id":"cursor","status":"{status}","meters":[],"fetchedAt":"2026-11-25T00:00:00.000Z","source":"live","message":"free text the card never shows"}}]}}"#
+            );
+            decode(payload.as_bytes(), &[RateLimitProvider::Cursor])
+                .unwrap()
+                .remove(0)
+        };
+        // An encrypted Cursor login, or a proxy the CLI cannot follow: nothing
+        // was sent. No data, no retry, no sign-in prompt (signing in again
+        // writes the same ciphertext), and the message text is not kept.
+        let unsupported = product("unsupported");
+        assert_eq!(unsupported.status, RateLimitStatus::NoData);
+        assert_eq!(unsupported.live_failure, None);
+        assert!(unsupported.meters.is_empty());
+        // No login found, or cursor.com rejected it: sign in to Cursor.
+        for status in ["missing_credentials", "unauthorized"] {
+            assert_eq!(product(status).status, RateLimitStatus::Unauthorized);
+        }
+        assert_eq!(product("retryable_error").status, RateLimitStatus::RetryableError);
     }
 
     #[test]

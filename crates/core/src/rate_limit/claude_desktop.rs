@@ -250,6 +250,7 @@ pub fn parse(bytes: &[u8], now: f64) -> Result<ProviderRateLimit, RateLimitLiveF
             utilization,
             resets_at: None,
             window_duration: None,
+            breakdown: Vec::new(),
         });
     }
     if meters.is_empty() {
