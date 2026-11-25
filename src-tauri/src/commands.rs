@@ -149,6 +149,11 @@ pub async fn get_rate_limits(app: AppHandle, force: bool) -> Vec<ProviderRateLim
 }
 
 #[tauri::command]
+pub fn get_cached_rate_limits(app: AppHandle) -> rate_limits::CachedRateLimits {
+    rate_limits::cached_rate_limits(&app)
+}
+
+#[tauri::command]
 pub async fn enable_claude_rate_limit(app: AppHandle) -> Result<Vec<ProviderRateLimit>, String> {
     rate_limits::enable_claude(&app).await
 }

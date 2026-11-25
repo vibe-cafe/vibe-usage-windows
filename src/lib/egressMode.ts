@@ -9,17 +9,17 @@ export const EGRESS_MODES: { value: EgressMode; label: string; caption: string }
   {
     value: "auto",
     label: "自动判断（推荐）",
-    caption: "网络在中国大陆等地区时，暂停读取 Codex、Claude、Antigravity，避免真实 IP 和账号一起暴露。",
+    caption: "网络在中国大陆等地区时，暂停读取 Codex、Claude、Grok、Antigravity，避免真实 IP 和账号一起暴露。",
   },
   {
     value: "pause",
     label: "暂停读取",
-    caption: "暂停读取 Codex、Claude、Antigravity，检测到代理后自动继续。",
+    caption: "暂停读取 Codex、Claude、Grok、Antigravity，检测到代理后自动继续。",
   },
   {
     value: "allow",
     label: "照常读取",
-    caption: "照常读取 Codex、Claude、Antigravity，厂商可能看到你的真实 IP。",
+    caption: "照常读取 Codex、Claude、Grok、Antigravity，厂商可能看到你的真实 IP。",
   },
 ];
 

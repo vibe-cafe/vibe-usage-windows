@@ -10,7 +10,7 @@
 // the CLI doctor section reuses the CLI's own `doctor` wording. Nothing is
 // uploaded: the user copies it.
 
-import { providerLabel, quotaEmptyStateText, quotaFailureText, quotaSourceText } from "./quotaProducts";
+import { providerLabel, quotaAuthorizationText, quotaEmptyStateText, quotaFailureText, quotaSourceText } from "./quotaProducts";
 import {
   QuotaProduct,
   RateLimitEmptyReason,
@@ -411,7 +411,7 @@ function attemptLine(attempt: ProbeAttempt, index: number): string {
   else if (timedOut) steps.push("initialize 超时");
   if (number(attempt.getUsageMs) != null) steps.push(`get_usage ${seconds(attempt.getUsageMs)}`);
   else if (timedOut && number(attempt.initializeMs) != null) steps.push("get_usage 超时");
-  const result = attempt.failure ? quotaFailureText(attempt.failure, "Claude") : "读取成功";
+  const result = attempt.failure ? quotaFailureText(attempt.failure, "claudeCode") : "读取成功";
   const exit =
     attempt.exit.kind === "exited"
       ? number(attempt.exit.code) != null
@@ -453,7 +453,7 @@ function claudeLines(report: DiagnosticsReport): string[] {
   } else {
     const desktop =
       probe.desktop.kind === "used"
-        ? `用了桌面端记录${probe.desktop.failure ? `（${quotaFailureText(probe.desktop.failure, "Claude")}）` : ""}，没有启动 Claude Code`
+        ? `用了桌面端记录${probe.desktop.failure ? `（${quotaFailureText(probe.desktop.failure, "claudeCode")}）` : ""}，没有启动 Claude Code`
         : "桌面端记录：没有";
     const tried =
       probe.desktop.kind === "used"
@@ -872,7 +872,18 @@ export function formatDiagnosticsReport(
   if (report.quotas.length === 0) lines.push("  没有开启任何产品");
   for (const card of report.quotas) {
     const name = providerLabel(card.provider, products);
-    const parts = [quotaStatusText(card.status, number(card.meterCount) ?? 0, card.provider)];
+    // Login cards say what the card says (ZCode: which region's key is not known here).
+    const unauthorized = card.status === "unauthorized";
+    const parts = [
+      unauthorized
+        ? card.provider === "zcode"
+          ? "API Key 缺失或无效"
+          : quotaAuthorizationText(
+              { provider: card.provider, status: { kind: "unauthorized" }, liveFailure: card.liveFailure },
+              "bigModel",
+            )
+        : quotaStatusText(card.status, number(card.meterCount) ?? 0, card.provider),
+    ];
     if (card.emptyReason) {
       parts.push(
         quotaEmptyStateText(
@@ -883,7 +894,7 @@ export function formatDiagnosticsReport(
         ),
       );
     }
-    if (card.liveFailure) parts.push(quotaFailureText(card.liveFailure, name, card.provider));
+    if (card.liveFailure && !unauthorized) parts.push(quotaFailureText(card.liveFailure, card.provider));
     if (card.source) parts.push(`来源：${quotaSourceText(card.source)}`);
     const asOf = number(card.dataAsOf);
     if (asOf != null && card.source && card.source !== "live") {

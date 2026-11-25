@@ -8,6 +8,7 @@ import { AlertCircle, Check, CheckCircle2, ChevronRight, ChevronsUpDown, Refresh
 import { open, save } from "@tauri-apps/plugin-dialog";
 import {
   api,
+  observeCachedRateLimits,
   onDeviceLink,
   onSettingsShown,
   onSettingsUpdated,
@@ -21,6 +22,7 @@ import {
   AppSettings,
   AppStatus,
   ExtraRoots,
+  ProviderRateLimit,
   QuotaProduct,
   RateLimitProvider,
   SyncState,
@@ -29,7 +31,7 @@ import {
   ZCodeQuotaRegion,
 } from "./lib/types";
 import { formatRelativeTime } from "./lib/formatters";
-import { compactQuotaStatus, isZCodeConfigured, quotaProductNote, quotaProductStatusText } from "./lib/quotaProducts";
+import { isZCodeConfigured, quotaProductNote, quotaProductStatusText } from "./lib/quotaProducts";
 import { buildDiagnosticsText, copyText } from "./lib/diagnostics";
 import { EGRESS_MODES, egressModeOption } from "./lib/egressMode";
 import { followUpdateOffer } from "./lib/updateOffer";
@@ -73,6 +75,7 @@ export function SettingsApp() {
   const [relinkError, setRelinkError] = useState<string | null>(null);
   const [quotaError, setQuotaError] = useState<string | null>(null);
   const [quotaProducts, setQuotaProducts] = useState<QuotaProduct[]>([]);
+  const [quotaSnapshots, setQuotaSnapshots] = useState<ProviderRateLimit[] | null>([]);
   const [quotaBusy, setQuotaBusy] = useState(false);
   const [zCodeStatus, setZCodeStatus] = useState<ZCodeCredentialStatus>({
     bigModelConfigured: false,
@@ -136,6 +139,7 @@ export function SettingsApp() {
     if (!("__TAURI_INTERNALS__" in window)) return;
 
     void reload();
+    const stopQuotaUpdates = observeCachedRateLimits(setQuotaSnapshots);
     const subs = [
       onSyncState(setSyncState),
       onSettingsUpdated(applyPushedSettings),
@@ -169,6 +173,7 @@ export function SettingsApp() {
       }),
     ];
     return () => {
+      stopQuotaUpdates();
       for (const p of subs) void p.then((un) => un());
     };
   }, [reload, applyPushedSettings]);
@@ -393,6 +398,13 @@ export function SettingsApp() {
   const region = settings?.zCodeQuotaRegion ?? "bigModel";
   const zCodeConfigured = isZCodeConfigured(zCodeStatus, region);
   const zCodeProduct = quotaProducts.find((product) => product.provider === "zcode");
+  const statusText = (product: QuotaProduct) => quotaProductStatusText(
+    product,
+    settings?.selectedQuotaProductIds ?? [],
+    quotaSnapshots?.find((item) => item.provider === product.provider),
+    quotaSnapshots === null,
+    zCodeConfigured,
+  );
   const isolatedRootCount = Object.values(extraRoots).reduce(
     (total, paths) => total + (paths?.length ?? 0),
     0,
@@ -478,7 +490,7 @@ export function SettingsApp() {
               <ProductRow
                 key={product.provider}
                 product={product}
-                statusText={quotaProductStatusText(product)}
+                statusText={statusText(product)}
                 selected={settings?.selectedQuotaProductIds.includes(product.provider) ?? false}
                 disabled={quotaBusy}
                 onToggle={(value) => void toggleQuotaProduct(product.provider, value)}
@@ -510,15 +522,7 @@ export function SettingsApp() {
                   />
                   <span className="flex min-w-0 flex-col">
                     <span className="text-[13px]">{zCodeProduct.displayName}</span>
-                    <span className="truncate text-[10.5px]" style={{ color: "#8C8C8C" }}>
-                      {compactQuotaStatus(
-                        quotaProductStatusText(
-                          zCodeProduct,
-                          zCodeStatus,
-                          settings?.zCodeQuotaRegion ?? "bigModel",
-                        ),
-                      )}
-                    </span>
+                    <QuotaStatusLabel text={statusText(zCodeProduct)} />
                   </span>
                 </button>
                 <Toggle
@@ -881,9 +885,7 @@ function ProductRow({
         />
         <span className="flex min-w-0 flex-col">
           <span className="text-[13px]">{product.displayName}</span>
-          <span className="truncate text-[10.5px]" style={{ color: "#8C8C8C" }}>
-            {statusText}
-          </span>
+          <QuotaStatusLabel text={statusText} />
           {note && (
             <span className="truncate text-[10.5px]" style={{ color: "#6A6A6A" }}>
               {note}
@@ -894,6 +896,11 @@ function ProductRow({
       <Toggle checked={selected} disabled={disabled} onChange={onToggle} />
     </div>
   );
+}
+
+function QuotaStatusLabel({ text }: { text: string }) {
+  const color = text === "出错" ? "#FF6B6B" : "#8C8C8C";
+  return <span className="truncate text-[10.5px]" style={{ color }}>{text}</span>;
 }
 
 /** Collapsed row that still shows its state, so a set-once setting costs one

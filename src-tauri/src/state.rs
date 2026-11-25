@@ -105,6 +105,7 @@ pub struct UpdateInfo {
 
 #[derive(Default)]
 pub struct RateLimitCache {
+    pub refreshing: bool,
     pub snapshots: HashMap<RateLimitProvider, (ProviderRateLimit, Instant)>,
     zcode_generation: u64,
 }

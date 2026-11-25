@@ -3,26 +3,30 @@
 
 use crate::services::{claude_usage, codex_usage, quota_cli, test_diagnostics};
 use crate::state::AppCtx;
+use serde::Serialize;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
 use vibe_core::quota_product::update_selection;
 use vibe_core::rate_limit::codex;
 use vibe_core::statusline_hook::StatuslineHook;
-use vibe_core::{ProviderRateLimit, RateLimitProvider, RateLimitStatus};
+use vibe_core::{ProviderRateLimit, RateLimitLiveFailure, RateLimitProvider, RateLimitStatus};
 
 const MAX_AGE: Duration = Duration::from_secs(60);
-/// Antigravity is re-read at most every 5 minutes, also while the window stays
-/// visible (maintainer, 2026-11-24, 《Antigravity额度读取-封号风险与新做法》).
-/// The CLI decides whether Google is asked at all — only after Antigravity was
-/// used, never more often than this — so calling it sooner only starts a
-/// process that answers from its record. A forced refresh still calls it.
-const ANTIGRAVITY_MAX_AGE: Duration = Duration::from_secs(5 * 60);
+/// Antigravity and Grok are re-read at most every 5 minutes, also while the
+/// window stays visible. Antigravity (maintainer, 2026-11-24,
+/// 《Antigravity额度读取-封号风险与新做法》): the CLI decides whether Google is
+/// asked at all — only after Antigravity was used, never more often than this —
+/// so calling it sooner only starts a process that answers from its record.
+/// Grok (maintainer, 2026-11-25, 《Grok主动读取-审批门方案》): every read starts
+/// the official `grok` CLI, which asks xAI with the user's own sign-in, so a
+/// window left open must not start it every minute. A forced refresh still
+/// reads both.
+const SLOW_MAX_AGE: Duration = Duration::from_secs(5 * 60);
 
 fn max_age(provider: RateLimitProvider) -> Duration {
-    if provider == RateLimitProvider::Antigravity {
-        ANTIGRAVITY_MAX_AGE
-    } else {
-        MAX_AGE
+    match provider {
+        RateLimitProvider::Antigravity | RateLimitProvider::Grok => SLOW_MAX_AGE,
+        _ => MAX_AGE,
     }
 }
 
@@ -61,9 +65,23 @@ fn needs_refresh(app: &AppHandle, provider: RateLimitProvider, force: bool) -> b
             .get(&provider)
             .map(|(snapshot, at)| {
                 at.elapsed() > max_age(provider)
-                    || snapshot.live_failure.is_some_and(|failure| failure.is_pause())
+                    || recheck_egress(snapshot)
             })
             .unwrap_or(true)
+}
+
+// A read the egress check paused is read again at the next refresh, whatever
+// its status (numbers kept from a local record included). `ProxyUnsupported`
+// is a pause too, but it keeps the normal interval: as before #190.
+fn recheck_egress(snapshot: &ProviderRateLimit) -> bool {
+    matches!(
+        snapshot.live_failure,
+        Some(
+            RateLimitLiveFailure::EgressRegionUnsupported { .. }
+                | RateLimitLiveFailure::EgressUnconfirmed
+                | RateLimitLiveFailure::ProxyNotDetected
+        )
+    )
 }
 
 fn store_snapshot(app: &AppHandle, snapshot: ProviderRateLimit, generation: u64) {
@@ -87,6 +105,8 @@ pub async fn get_rate_limits(app: &AppHandle, force: bool) -> Vec<ProviderRateLi
         Err(_) => (ctx.rate_limit_refresh.lock().await, false),
     };
     let selected = selected_providers(app);
+    ctx.rate_limits.lock().unwrap().refreshing = true;
+    let _ = app.emit("rate-limits-updated", ());
     // Lock order is settings -> cache, also used by credential mutation commands.
     let (region, generation) = {
         let settings = ctx.settings.lock().unwrap();
@@ -159,20 +179,28 @@ pub async fn get_rate_limits(app: &AppHandle, force: bool) -> Vec<ProviderRateLi
         }
     }
 
-    let result = cached_rate_limits(app);
+    let result = cached_rate_limits(app).snapshots;
+    ctx.rate_limits.lock().unwrap().refreshing = false;
+    let _ = app.emit("rate-limits-updated", &result);
     for snapshot in &result {
         test_diagnostics::record_result(snapshot);
     }
     result
 }
 
+#[derive(Serialize)]
+pub struct CachedRateLimits {
+    snapshots: Vec<ProviderRateLimit>,
+    refreshing: bool,
+}
+
 /// What the cards show without reading anything: the last results, or an
 /// empty placeholder per selected product.
-pub fn cached_rate_limits(app: &AppHandle) -> Vec<ProviderRateLimit> {
+pub fn cached_rate_limits(app: &AppHandle) -> CachedRateLimits {
     let ctx = app.state::<AppCtx>();
     let selected = selected_providers(app);
     let cache = ctx.rate_limits.lock().unwrap();
-    selected
+    let snapshots = selected
         .into_iter()
         .map(|provider| {
             if provider == RateLimitProvider::Cursor {
@@ -184,7 +212,11 @@ pub fn cached_rate_limits(app: &AppHandle) -> Vec<ProviderRateLimit> {
                 .map(|(snapshot, _)| snapshot.clone())
                 .unwrap_or_else(|| ProviderRateLimit::empty(provider, RateLimitStatus::NoData))
         })
-        .collect::<Vec<_>>()
+        .collect();
+    CachedRateLimits {
+        snapshots,
+        refreshing: cache.refreshing || !ctx.launch_network_ready(),
+    }
 }
 
 /// A settings command's answer (product selection, ZCode region or key):
@@ -195,7 +227,7 @@ pub fn cached_rate_limits(app: &AppHandle) -> Vec<ProviderRateLimit> {
 /// picks up the new product or key (its cache entry is missing or cleared).
 pub async fn after_settings_change(app: &AppHandle) -> Vec<ProviderRateLimit> {
     if !app.state::<AppCtx>().launch_network_ready() {
-        return cached_rate_limits(app);
+        return cached_rate_limits(app).snapshots;
     }
     get_rate_limits(app, true).await
 }
@@ -232,13 +264,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn antigravity_is_reread_at_most_every_five_minutes() {
+    fn egress_pauses_are_reread_at_the_next_refresh_whatever_their_status() {
+        use RateLimitLiveFailure::{EgressUnconfirmed, ProxyUnsupported};
+        let snapshot = |provider, status, reason| ProviderRateLimit::failed(provider, status, None, reason);
+        assert!(recheck_egress(&snapshot(RateLimitProvider::ClaudeCode, RateLimitStatus::Ok, EgressUnconfirmed)));
+        assert!(recheck_egress(&snapshot(RateLimitProvider::Antigravity, RateLimitStatus::NoData, EgressUnconfirmed)));
+        assert!(recheck_egress(&snapshot(RateLimitProvider::Grok, RateLimitStatus::Ok, EgressUnconfirmed)));
+        assert!(!recheck_egress(&snapshot(RateLimitProvider::Antigravity, RateLimitStatus::NoData, ProxyUnsupported)));
+    }
+
+    #[test]
+    fn antigravity_and_grok_are_reread_at_most_every_five_minutes() {
         assert_eq!(max_age(RateLimitProvider::Antigravity), Duration::from_secs(300));
+        assert_eq!(max_age(RateLimitProvider::Grok), Duration::from_secs(300));
         for provider in [
             RateLimitProvider::Codex,
             RateLimitProvider::ClaudeCode,
             RateLimitProvider::KimiCode,
-            RateLimitProvider::Grok,
+            RateLimitProvider::ZCode,
         ] {
             assert_eq!(max_age(provider), Duration::from_secs(60));
         }
