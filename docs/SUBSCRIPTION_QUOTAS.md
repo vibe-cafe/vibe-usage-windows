@@ -79,7 +79,7 @@ Credential Manager 读取失败只影响 ZCode，其他产品仍可请求。CLI 
 1. 在两种区域都已配置的测试环境中，先读到 BigModel 配额，再切到 Z.ai 并模拟请求失败；不得显示 BigModel 数据。同一区域替换、删除 Key 也需复测。
 2. 在旧请求尚未结束时切换区域/Key，确认旧返回不覆盖新上下文；同时验证设置窗与托盘面板的显示一致性。
 3. 模拟 ZCode 凭据库读取失败，确认另一个已选产品仍能返回；验证失败后不会继续把过期配额显示为成功。
-4. 使用固定 CLI 验证 Kimi/ZCode/Grok/OpenCode Go 的正常、无数据和失败状态，以及旧设置迁移、首次推荐、空选择和「选择第三项后仍保留前两项」；OpenCode Go 另需用没有 Go 订阅的 Key 复测 403 对应的未订阅空态。Antigravity / AGY 另需复测：agy 只装在默认位置 `%LOCALAPPDATA%\agy\bin`、不在 App 的 PATH 上时仍能读到 5h / 7d；没装 agy 时卡片显示「请安装 agy 命令行并登录后重试」，装了没登录时显示「请在 agy 中登录后重试」。2026-11-24 起另需复测：只装桌面端、桌面端开着时能读（第二步）；桌面端关着时能读（第三步，确认 `resources\app\package.json` 或 `resources\app.asar` 存在，否则这一步不会启动）；agy 登录失效时不弹浏览器；不用 Antigravity 时窗口一直开着，5 分钟后 `~\.vibe-usage\antigravity-quota.json` 的 `attemptAt` 不变。
+4. 使用固定 CLI 验证 Kimi/ZCode/Grok/OpenCode Go 的正常、无数据和失败状态，以及旧设置迁移、首次推荐、空选择和「选择第三项后仍保留前两项」；OpenCode Go 另需用没有 Go 订阅的 Key 复测 403 对应的未订阅空态。Antigravity / AGY 另需复测：agy 只装在默认位置 `%LOCALAPPDATA%\agy\bin`、不在 App 的 PATH 上时仍能读到 5h / 7d；agy 和桌面端都没装时卡片显示「请安装 agy 命令行并登录后重试」，装了没登录时显示「请在 agy 中登录后重试」。2026-11-24 起另需复测：只装桌面端、桌面端开着时能读（第二步）；桌面端关着时能读（第三步，确认 `resources\app\package.json` 或 `resources\app.asar` 存在，否则这一步不会启动）；agy 登录失效时不弹浏览器；不用 Antigravity 时窗口一直开着，5 分钟后 `~\.vibe-usage\antigravity-quota.json` 的 `attemptAt` 不变。
 5. 重跑生命周期准入测试：关闭准入前子进程可运行，关闭后确有 Job 限额拒绝；继续验证取消、退出、无关 Node 存活、忙时立即卸载和升级。
 
 本地 Rust 测试覆盖缓存失效、旧请求回写、请求/响应集合校验及凭据错误隔离；Mac 的通过不替代以上 Windows 实测。账户条件不满足记为 BLOCKED；ZCode Key 由用户在 GUI 输入。

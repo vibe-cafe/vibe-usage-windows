@@ -430,43 +430,57 @@ async fn run_cli_sync(app: &AppHandle) -> CliRun {
 }
 
 /// Markers of a request that never reached the sync server (Node's error
-/// codes and fetch's own message), read from the run's final error line only:
-/// an earlier tool warning (e.g. a skipped Cursor export) may carry one too.
-const NETWORK_MARKERS: [&str; 9] = [
+/// codes and messages), read from the run's final error line only: an earlier
+/// tool warning (e.g. a skipped Cursor export) may carry one too. Same codes
+/// as the CLI's own `network_failed` category (`src/sync-history.js`).
+const NETWORK_MARKERS: [&str; 13] = [
     "fetch failed",
     "ECONNREFUSED",
-    "ENOTFOUND",
-    "ETIMEDOUT",
     "ECONNRESET",
+    "ECONNABORTED",
+    "ENOTFOUND",
     "EAI_AGAIN",
+    "ETIMEDOUT",
     "EHOSTUNREACH",
     "ENETUNREACH",
+    "ENETDOWN",
+    "EPIPE",
     "socket hang up",
+    "secure TLS connection",
 ];
+
+/// The CLI's key hint (`API Key 无效，请运行 … 重新配置。`), the older
+/// English markers, and a bare 401. A 403 alone is not the key: the CLI keeps
+/// it as an HTTP error, and a proxy or access rule can send it too.
+const KEY_MARKERS: [&str; 4] = ["API Key 无效", "Invalid API key", "UNAUTHORIZED", "HTTP 401"];
 
 const KEY_REJECTED: &str = "API Key 无效，请重新配置";
 
 /// The status bar's line for a failed run: our own short sentence chosen from
-/// the run's typed category, never the raw output of the CLI or the launcher
-/// (English, sometimes with local paths, and too long for the tray tooltip).
-/// The CLI's own Chinese hints keep their meaning in our words; the full
-/// output stays in `sync.log`. The launcher sentences and the crash case are
-/// macOS's (`SyncEngine.launcherFailureText`, `friendlyFailureMessage`);
-/// macOS still shows the raw line for the rest. `final_line` is the run's
-/// error line (`extract_error_line`), `output` all of stdout and stderr.
+/// the run's typed category and final error line, never the raw output of the
+/// CLI or the launcher (English, sometimes with local paths or the server's
+/// response body, and too long for the tray tooltip). The CLI's own Chinese
+/// hints keep their meaning in our words; the full output stays in `sync.log`.
+/// The launcher sentences and the crash case are macOS's
+/// (`SyncEngine.launcherFailureText`, `friendlyFailureMessage`); macOS still
+/// shows the raw line for the rest. `final_line` is the run's error line
+/// (`extract_error_line`), `output` all of stdout and stderr.
 fn failure_message(reason: &SyncReason, final_line: &str, output: &str) -> String {
-    // The server refused the key, or the CLI printed an older key marker
-    // anywhere (the check the status bar has always made).
-    if output.contains("Invalid API key") || output.contains("UNAUTHORIZED") {
-        return KEY_REJECTED.into();
-    }
-    // The CLI held Codex back and synced everything else (its closing line,
-    // `CODEX_ULTRAFAST_HOLD_FAILURE`): not a failed sync of the other tools.
-    if final_line.contains("Codex 本次未上传") {
-        return "Codex 本次未上传，下次同步自动补传".into();
-    }
     // `部分完成（已上传 …）: <reason>`: the other tools' data did arrive.
-    let head = if final_line.contains("部分完成") { "同步部分完成" } else { "同步失败" };
+    let partial = final_line.contains("部分完成");
+    let head = if partial { "同步部分完成" } else { "同步失败" };
+    // The CLI held Codex back (its closing line, `CODEX_ULTRAFAST_HOLD_FAILURE`).
+    if final_line.contains("Codex 本次未上传") {
+        let head = if partial { head } else { "同步未完成" };
+        return format!("{head}: Codex 本次未上传，下次同步自动补传");
+    }
+    if KEY_MARKERS.iter().any(|marker| final_line.contains(marker)) {
+        return if partial {
+            format!("{head}: {KEY_REJECTED}")
+        } else {
+            KEY_REJECTED.into()
+        };
+    }
     let detail = match reason {
         SyncReason::Launcher { stage } => match stage {
             LauncherStage::Network => "连不上 npm 源，CLI 没有下载成功".to_string(),
@@ -476,24 +490,35 @@ fn failure_message(reason: &SyncReason, final_line: &str, output: &str) -> Strin
             LauncherStage::Other => "CLI 启动失败".to_string(),
         },
         SyncReason::ServerStatus { status } => format!("服务器返回错误 {status}"),
+        // The history counts 401 / 403 as a rejected key; a 401 or the CLI's
+        // key hint returned above, so what is left is a bare 403.
+        SyncReason::KeyRejected => "服务器返回错误 403".to_string(),
         SyncReason::RuntimeUnavailable | SyncReason::SpawnFailed => "同步工具启动失败".to_string(),
         SyncReason::WaitFailed => "同步工具异常退出".to_string(),
-        SyncReason::KeyRejected => return KEY_REJECTED.into(),
-        SyncReason::CliExit { exit_code } => {
-            if output.contains("RangeError: Invalid string length")
-                || output.contains("node:internal/readline")
-            {
-                "CLI 读取本机历史记录时崩溃".to_string()
-            } else if final_line.contains("暂时无法读取上传设置") {
-                "暂时读不到上传设置，未上传数据，请稍后重试".to_string()
-            } else if NETWORK_MARKERS.iter().any(|marker| final_line.contains(marker)) {
-                "连不上同步服务器".to_string()
-            } else {
-                format!("退出码 {exit_code}")
-            }
-        }
+        SyncReason::CliExit { exit_code } => cli_exit_detail(*exit_code, final_line, output),
     };
     format!("{head}: {detail}")
+}
+
+/// A CLI run that ended without a status number: the CLI's own errors, named
+/// by the fixed start of their messages (`src/api.js`, `src/sync.js`).
+fn cli_exit_detail(exit_code: i32, final_line: &str, output: &str) -> String {
+    if output.contains("RangeError: Invalid string length") || output.contains("node:internal/readline")
+    {
+        "CLI 读取本机历史记录时崩溃".into()
+    } else if final_line.contains("暂时无法读取上传设置") {
+        "暂时读不到上传设置，未上传数据，请稍后重试".into()
+    } else if final_line.contains("Request timed out") {
+        "连接同步服务器超时".into()
+    } else if final_line.contains("Invalid JSON response") {
+        "服务器返回了无法识别的数据".into()
+    } else if final_line.to_ascii_lowercase().contains("certificate") || final_line.contains("CERT_") {
+        "同步服务器的证书校验失败".into()
+    } else if NETWORK_MARKERS.iter().any(|marker| final_line.contains(marker)) {
+        "连不上同步服务器".into()
+    } else {
+        format!("退出码 {exit_code}")
+    }
 }
 
 /// Drain stdout and stderr at the same time. Reading stdout to EOF before
@@ -828,15 +853,45 @@ mod tests {
             "API Key 无效，请重新配置"
         );
         assert_eq!(bar("Error: UNAUTHORIZED"), "API Key 无效，请重新配置");
+        // A bare 403 (a proxy or access rule) is not a rejected key.
+        assert_eq!(
+            bar("✗ 同步失败: HTTP 403: <html>Forbidden</html>"),
+            "同步失败: 服务器返回错误 403"
+        );
+        assert_eq!(
+            bar("✗ 同步失败: Request timed out (60s)"),
+            "同步失败: 连接同步服务器超时"
+        );
+        assert_eq!(
+            bar("✗ 同步失败: Invalid JSON response: <html>captive portal</html>"),
+            "同步失败: 服务器返回了无法识别的数据"
+        );
+        assert_eq!(
+            bar("✗ 同步失败: self-signed certificate in certificate chain"),
+            "同步失败: 同步服务器的证书校验失败"
+        );
+        assert_eq!(
+            bar("✗ 同步失败: Client network socket disconnected before secure TLS connection was established"),
+            "同步失败: 连不上同步服务器"
+        );
         let unknown = bar("✗ 同步失败: Cannot read properties of undefined (reading 'x') at C:\\Users\\me\\a.js");
         assert_eq!(unknown, "同步失败: 退出码 1");
     }
 
     #[test]
     fn the_clis_own_chinese_hints_keep_their_meaning() {
+        // Other tools did upload: the line says so, and Codex waits.
         assert_eq!(
             bar("✗ 部分完成（已上传 3 buckets）: Codex 本次未上传：服务端暂时没有答复这台设备的 Ultrafast 档位起点，其他工具已正常同步，下次同步自动补传。"),
-            "Codex 本次未上传，下次同步自动补传"
+            "同步部分完成: Codex 本次未上传，下次同步自动补传"
+        );
+        assert_eq!(
+            bar("✗ 同步未完成: Codex 本次未上传：服务端暂时没有答复这台设备的 Ultrafast 档位起点，其他工具已正常同步，下次同步自动补传。"),
+            "同步未完成: Codex 本次未上传，下次同步自动补传"
+        );
+        assert_eq!(
+            bar("✗ 部分完成（已上传 12 buckets）: API Key 无效，请运行 `npx @vibe-cafe/vibe-usage init` 重新配置。"),
+            "同步部分完成: API Key 无效，请重新配置"
         );
         assert_eq!(
             bar("✗ 暂时无法读取上传设置，本次同步已安全取消（未上传数据）。请稍后重试。"),
