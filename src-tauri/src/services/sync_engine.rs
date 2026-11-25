@@ -566,6 +566,15 @@ pub(crate) fn extract_error_line(msg: &str) -> String {
             || l.starts_with("syscall")
     };
     let lines: Vec<&str> = msg.lines().map(str::trim).collect();
+    // 0) The CLI's own failure line (`✗ …`, `src/output.js`): it prints one
+    //    only right before exiting, and an HTTP error appends the server's
+    //    response body after it, so a multi-line error page would otherwise
+    //    win step 1 with whatever HTML line says "Error".
+    if let Some(l) = lines.iter().rev().find(|l| l.contains('✗')) {
+        let mut s = l.to_string();
+        s.truncate(s.char_indices().map(|(i, _)| i).nth(120).unwrap_or(s.len()));
+        return s;
+    }
     // 1) Bottom-up: a line that clearly states an error.
     if let Some(l) = lines.iter().rev().find(|l| {
         !is_noise(l)
@@ -873,6 +882,15 @@ mod tests {
         assert_eq!(
             bar("✗ 同步失败: Client network socket disconnected before secure TLS connection was established"),
             "同步失败: 连不上同步服务器"
+        );
+        // An error page appended after the CLI's line: the ✗ line still decides.
+        assert_eq!(
+            bar("✗ 部分完成（已上传 12 buckets）: HTTP 502: <!DOCTYPE html>\n<html>\n<head><title>vibefriends.com | 502: Bad gateway</title></head>\n<body><span>Error code 502</span>\n</body></html>"),
+            "同步部分完成: 服务器返回错误 502"
+        );
+        assert_eq!(
+            bar("✗ 同步失败: HTTP 403: <html>\n<head><title>Login Error</title></head>\n</html>"),
+            "同步失败: 服务器返回错误 403"
         );
         let unknown = bar("✗ 同步失败: Cannot read properties of undefined (reading 'x') at C:\\Users\\me\\a.js");
         assert_eq!(unknown, "同步失败: 退出码 1");
