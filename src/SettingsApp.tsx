@@ -20,7 +20,7 @@ import {
   ZCodeQuotaRegion,
 } from "./lib/types";
 import { formatRelativeTime } from "./lib/formatters";
-import { compactQuotaStatus, isZCodeConfigured, quotaProductStatusText } from "./lib/quotaProducts";
+import { compactQuotaStatus, isZCodeConfigured, quotaProductNote, quotaProductStatusText } from "./lib/quotaProducts";
 import { buildDiagnosticsText, copyText } from "./lib/diagnostics";
 import { ProviderIcon } from "./components/ProviderIcon";
 
@@ -778,6 +778,7 @@ function ProductRow({
   disabled: boolean;
   onToggle: (selected: boolean) => void;
 }) {
+  const note = quotaProductNote(product.provider);
   return (
     <div className="flex min-h-[38px] items-center justify-between gap-3 px-3 py-1.5">
       <div className="flex min-w-0 items-center gap-2">
@@ -787,6 +788,11 @@ function ProductRow({
           <span className="truncate text-[10.5px]" style={{ color: "#8C8C8C" }}>
             {statusText}
           </span>
+          {note && (
+            <span className="truncate text-[10.5px]" style={{ color: "#6A6A6A" }}>
+              {note}
+            </span>
+          )}
         </span>
       </div>
       <Toggle checked={selected} disabled={disabled} onChange={onToggle} />
