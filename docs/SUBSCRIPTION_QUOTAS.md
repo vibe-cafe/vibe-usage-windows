@@ -13,7 +13,7 @@ Codex 付费套餐（Plus / Pro / Prolite / Business / Business ProLite）没有
 - `crates/core/src/quota_product.rs`：应用侧产品目录，集中维护名称、可用性、CLI 路由、常规目录和命令检测。Windows 应用安装位置在同一模块适配。
 - `commands.rs`：启动时初始化一次默认选择，后续产品查询不写设置；处理选择、区域和用户输入的凭据。
 - `rate_limits.rs`：刷新调度和短期内存缓存。Codex/Claude 保留原读取实现（Claude 原生探测的 `rate_limits_available:false` 直接给出 `sessionWithoutPlanLimits` 空态原因），其他已接入产品通过 `quota_cli.rs` 使用固定 CLI 的 JSON 协议；CLI 结果里的可选 `emptyReason` 会映射到 `RateLimitEmptyReason`，缺失或未知取值保持 `None`（向前兼容）。每张卡片的快照另带 `source`（实际来源）和 `liveFailure`（固定失败原因），见下文「失败原因和来源（不放原文）」。
-- 前端从目录获取产品名称，使用共享卡片展示配额；官方图标资产（七家，@2x）由 `src/assets/` 提供，卡片与设置页共用 `src/components/ProviderIcon.tsx`。Antigravity / AGY 在 macOS 也没有图标资产，两端都画星光符号（macOS `sparkles`，Windows lucide `Sparkles`）。类型定义保留编译期检查，产品特有的登录提示仍由 UI 处理。
+- 前端从目录获取产品名称，使用共享卡片展示配额；品牌图形是与 macOS 同一份的 Lobe Icons 单色路径（八家都有，包括 Antigravity / AGY），图标行、卡片与设置页共用 `src/components/ProviderIcon.tsx`。类型定义保留编译期检查，产品特有的登录提示仍由 UI 处理。
 
 ## Claude 探测约束（与 macOS 逐项一致）
 
@@ -80,7 +80,7 @@ CLI 是独立版本的依赖：应用不再内置 CLI 快照，每次都通过 `
 2026-11-09 起（一键诊断方案 1a），读取已经得出的失败原因不再只写进看不到的 `log::debug!`，而是作为固定代码带到卡片上。代码与 macOS `ProviderRateLimit.LiveFailure` 共用，文案在 `src/lib/quotaProducts.ts:quotaFailureText`，与 macOS 卡片一致。只传分类，不传任何原文：Claude Code 的 stderr、启动错误文本、HTTP 响应正文、CLI 的 `message` 都不保留。
 
 - Claude 实时读取的固定原因是「未找到 Claude Code」「启动失败」「读取超时」「没有响应」「没有返回额度」。
-- Claude 桌面端记录（仅 Windows，原先统一显示「桌面额度记录缺失、过期或账号不明确」）：Claude 桌面端记录已过期（最新样本超过 24 小时）/ 装了多份 Claude 桌面端，账号不明确（包后缀不同，或普通安装与 MSIX 包同时有记录；同一个包的新旧目录不算）/ Claude 桌面端记录涉及多个组织，账号不明确（同一份记录里 `org` 不一致；同一账号在个人组织和 Team 组织之间切换也会这样，所以只说组织不同，不断言换过账号）/ Claude 桌面端记录无法解析（读不了、超过 2 MB、格式或版本不符、窗口值非法、时间戳在未来）。
+- Claude 桌面端记录的四种原因（只有 Windows 有这四种；记录本身 macOS 也读。原先统一显示「桌面额度记录缺失、过期或账号不明确」）：Claude 桌面端记录已过期（最新样本超过 24 小时）/ 装了多份 Claude 桌面端，账号不明确（包后缀不同，或普通安装与 MSIX 包同时有记录；同一个包的新旧目录不算）/ Claude 桌面端记录涉及多个组织，账号不明确（同一份记录里 `org` 不一致；同一账号在个人组织和 Team 组织之间切换也会这样，所以只说组织不同，不断言换过账号）/ Claude 桌面端记录无法解析（读不了、超过 2 MB、格式或版本不符、窗口值非法、时间戳在未来）。
 - 接口或凭据失败使用「读取超时」「连接失败」「接口报错 502」（无数字时为「接口报错」）「返回数据无法识别」「未找到登录信息」「登录已失效」。CLI 还能区分读不到登录信息、登录信息已加密、登录续期失败、找不到程序、版本较旧、程序没有返回额度和读不了本机记录。
 - CLI 调用本身可能显示「缺少 Node.js」「读取超时」「配额 CLI 出错」「配额 CLI 输出无法识别」「配额 CLI 版本不兼容」「配额 CLI 没有返回结果」。Windows 凭据管理器读取失败沿用「无法读取 Windows 凭据管理器」。CLI 的 `failureReason` 只映射已知代码，`httpStatus` 只用于接口报错。
 

@@ -16,7 +16,7 @@
 
 | 什么时候 | 发给谁 | 发送的内容 |
 |---|---|---|
-| App 启动时和之后每 24 小时 | GitHub（`github.com`） | 读取最新版本说明 `latest.json`。你点「发现更新」后，从 GitHub 下载安装包，并用 SHA-256 校验文件。 |
+| App 启动时和之后每 24 小时 | GitHub（`github.com`） | 读取最新版本说明 `latest.json`。你点面板上的「发现更新」或设置里的「安装更新」后，从 GitHub 下载安装包，并用 SHA-256 校验文件。 |
 | 需要运行 CLI 时（同步，或读取 Kimi Code、ZCode、Grok、OpenCode Go、Antigravity / AGY 的配额） | npm 官方源（`registry.npmjs.org`） | 查询 `@vibe-cafe/vibe-usage` 的最新版本，下载、校验后缓存在本机。连不上时改用本机缓存。 |
 | 安装时，仅在电脑缺少 WebView2 时 | 微软 | 安装程序下载微软的 WebView2 引导程序。 |
 | 订阅配额卡开启时 | 见下文 | 用你本机已有的登录信息查询额度。 |

@@ -41,6 +41,16 @@ describe("window configuration", () => {
       preventOverflow: true,
     });
   });
+
+  it("asks for a dark title bar on both windows, like the dark macOS panel and settings", () => {
+    // Without it Windows' light theme draws a white title bar over the dark
+    // content. The settings window's recovery builder (commands.rs) sets the
+    // same theme.
+    expect(windows.popover.theme).toBe("Dark");
+    expect(windows.settings.theme).toBe("Dark");
+    const commands = readFileSync("src-tauri/src/commands.rs", "utf-8");
+    expect(commands).toContain(".theme(Some(tauri::Theme::Dark))");
+  });
 });
 
 describe("filter dropdown position", () => {

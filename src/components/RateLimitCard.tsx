@@ -211,6 +211,8 @@ export function RateLimitCards() {
   );
 }
 
+/** macOS `Color(red: 0.95, green: 0.72, blue: 0.25)`. */
+const RESET_CREDITS_COLOR = "#F2B840";
 const ROW_HEIGHT = 16;
 const ROW_SPACING = 6;
 /** Offset between the hovered row and its floating tooltip, plus the minimum
@@ -263,6 +265,15 @@ function ProviderCard({ snapshot }: { snapshot: ProviderRateLimit }) {
       <div className="flex items-center gap-1.5">
         <ProviderIcon provider={snapshot.provider} />
         <span className="truncate text-[13px] font-semibold text-white">{name}</span>
+        {snapshot.resetCreditsCount != null && snapshot.resetCreditsCount > 0 && (
+          // Amber capsule beside the name (macOS `RateLimitCardView.header`).
+          <span
+            className="shrink-0 whitespace-nowrap rounded-full px-1.5 py-0.5 text-[9px] font-medium leading-none"
+            style={{ color: RESET_CREDITS_COLOR, background: "rgba(242,184,64,0.12)" }}
+          >
+            重置券 ×{snapshot.resetCreditsCount}
+          </span>
+        )}
         <div className="grow" />
         {state.isRefreshingRateLimits && <div className="spinner h-3 w-3 shrink-0" />}
         {snapshot.planLabel && (
@@ -506,16 +517,20 @@ function TooltipLayer({ anchor, children }: { anchor: HTMLElement; children: Rea
   );
 }
 
+/**
+ * When a Claude Desktop record was written: that source can lag the live
+ * account, so the Windows card says how old it is (macOS shows no age line
+ * for it). A live or cached read adds no age line — macOS dropped
+ * 「数据截至 N 分钟前」 (maintainer, 2026-10-24: too noisy), and the reset
+ * credits sit beside the name.
+ */
 function FreshnessNote({ snapshot }: { snapshot: ProviderRateLimit }) {
-  const ageMinutes = snapshot.dataAsOf
-    ? Math.max(0, Math.floor((Date.now() / 1000 - snapshot.dataAsOf) / 60))
-    : 0;
-  const notes = [
-    snapshot.sourceLabel && snapshot.dataAsOf ? `记录时间 ${new Date(snapshot.dataAsOf * 1000).toLocaleString()}` : ageMinutes >= 5 ? `数据截至 ${ageMinutes} 分钟前` : null,
-    snapshot.resetCreditsCount ? `重置券 ×${snapshot.resetCreditsCount}` : null,
-  ].filter(Boolean);
-  if (notes.length === 0) return null;
-  return <div className="truncate text-[10px] text-neutral-500">{notes.join(" · ")}</div>;
+  if (!snapshot.sourceLabel || !snapshot.dataAsOf) return null;
+  return (
+    <div className="truncate text-[10px] text-neutral-500">
+      记录时间 {new Date(snapshot.dataAsOf * 1000).toLocaleString()}
+    </div>
+  );
 }
 
 function MessageContent({ text }: { text: string }) {

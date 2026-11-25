@@ -25,6 +25,7 @@
         "maximizable": false,
         "minimizable": true,
         "decorations": true,
+        "theme": "Dark",
         "transparent": false,
         "shadow": true,
         "alwaysOnTop": false,
@@ -45,6 +46,7 @@
         "resizable": true,
         "maximizable": false,
         "minimizable": false,
+        "theme": "Dark",
         "visible": false,
         "focus": false
       }
@@ -65,7 +67,8 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "resources/cli-bootstrap.mjs": "cli-bootstrap.mjs"
+      "resources/cli-bootstrap.mjs": "cli-bootstrap.mjs",
+      "../THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md"
     },
     "windows": {
       "webviewInstallMode": {

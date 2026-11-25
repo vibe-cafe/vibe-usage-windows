@@ -1,4 +1,4 @@
-// The footer's 「发现更新」 offer. The backend checks for an update right at
+// The header's 「发现更新」 offer. The backend checks for an update right at
 // startup and then once a day, announces a find with `update-available` and a
 // withdrawn one with `update-cleared` (#36). That first check can finish
 // before this window has attached its listeners; the event is then lost and
