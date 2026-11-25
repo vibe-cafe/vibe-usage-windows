@@ -173,10 +173,13 @@ export function SettingsApp() {
     };
   }, [reload, applyPushedSettings]);
 
-  // A failure belonged to the offer it tried to install (same rule as the header badge).
+  // A failure belonged to the offer it tried to install (same rule as the
+  // header badge); a newer offer (e.g. found by the daily check after an
+  // earlier 「已是最新版本」) replaces the last check's line.
   const offeredVersion = updateOffer?.version ?? null;
   useEffect(() => {
     setUpdatePhase(phaseForNewOffer);
+    if (offeredVersion) setUpdateMessage(null);
   }, [offeredVersion]);
 
   const relink = async () => {
