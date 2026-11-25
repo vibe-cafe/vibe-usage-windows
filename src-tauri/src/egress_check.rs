@@ -214,8 +214,8 @@ pub enum ClaudeRoute {
 /// from the app: Claude Code cannot use SOCKS, and the app has no local relay
 /// yet (macOS `ClaudeSOCKSRelay`). Claude Code reaches such a host through
 /// its proxy only when it has an HTTP proxy (another host's HTTP route, or its
-/// own `settings.json`; a `socks…://` value in `HTTPS_PROXY` / `HTTP_PROXY` is
-/// none) and its bypass list cannot name that host under any reading. Else
+/// own `settings.json`; only a full `http://` / `https://` URL in
+/// `HTTPS_PROXY` / `HTTP_PROXY` counts) and its bypass list cannot name that host under any reading. Else
 /// it would connect direct with the user's login: `SocksUnusable`, decided
 /// before any host is picked for the check, so the check never goes to a host
 /// the system sends through SOCKS (Claude Code's own bypass list rules Claude
@@ -232,7 +232,13 @@ pub fn claude_route(effective: &HashMap<String, String>, routes: &[(String, Rout
         .filter_map(|name| effective.get(*name).cloned())
         .collect::<Vec<_>>()
         .join(",");
-    let http_proxy = proxy.is_some_and(|value| !value.to_ascii_lowercase().starts_with("socks"));
+    // Claude Code takes only a full `http://` / `https://` URL: a `socks…://`
+    // value, or a bare `host:port` copied from a proxy client, makes it
+    // connect direct.
+    let http_proxy = proxy.is_some_and(|value| {
+        let value = value.to_ascii_lowercase();
+        value.starts_with("http://") || value.starts_with("https://")
+    });
     let socks_unusable = routes
         .iter()
         .any(|(host, route)| matches!(route, Route::Socks(_)) && (!http_proxy || bypass_possibly(host, &bypass)));
@@ -755,7 +761,9 @@ mod tests {
         assert_eq!(claude_route(&env(&[]), &socks), ClaudeRoute::SocksUnusable);
         assert_eq!(claude_route(&env(&[("HTTPS_PROXY", "socks5://127.0.0.1:7891")]), &socks), ClaudeRoute::SocksUnusable);
         assert_eq!(claude_route(&env(&[("https_proxy", " SOCKS5H://127.0.0.1:7891 ")]), &socks), ClaudeRoute::SocksUnusable);
+        assert_eq!(claude_route(&env(&[("HTTP_PROXY", "127.0.0.1:7890")]), &socks), ClaudeRoute::SocksUnusable);
         assert_eq!(claude_route(&env(&[("HTTPS_PROXY", proxy)]), &socks), ClaudeRoute::Proxied);
+        assert_eq!(claude_route(&env(&[("HTTPS_PROXY", "https://proxy.example:8443")]), &socks), ClaudeRoute::Proxied);
         assert!(bypass_surely("api.anthropic.com", "localhost, api.anthropic.com:443"));
         assert!(!bypass_surely("api.anthropic.com", ".anthropic.com"));
         assert!(bypass_possibly("api.anthropic.com", "anthropic.com"));
@@ -843,6 +851,10 @@ mod tests {
             launched(&socks, &no_pac, &[], &[("HTTPS_PROXY", "socks5://127.0.0.1:7891")]),
             ClaudeRoute::SocksUnusable
         );
+        // An address copied without its scheme: Claude Code rejects it and
+        // connects direct, so it is no HTTP proxy either.
+        assert_eq!(launched(&socks, &no_pac, &[], &[("HTTP_PROXY", "127.0.0.1:7890")]), ClaudeRoute::SocksUnusable);
+        assert_eq!(launched(&socks, &no_pac, &[], &[("HTTP_PROXY", "http://127.0.0.1:7890")]), ClaudeRoute::Proxied);
         assert_eq!(launched(&socks, &no_pac, &[], &[("NO_PROXY", "localhost")]), ClaudeRoute::SocksUnusable);
         // The app's own proxy variables win over the system's, as before.
         assert_eq!(launched(&socks, &no_pac, &[("HTTPS_PROXY", "http://127.0.0.1:7890")], &[]), ClaudeRoute::Proxied);
@@ -924,6 +936,7 @@ mod tests {
             launched(&socks, &no_pac, &[], &[http[0], ("NO_PROXY", "api.anthropic.com")]),
             launched(&socks, &no_pac, &[], &[http[0], ("no_proxy", "*.anthropic.com")]),
             launched(&pac_only(), &mixed, &[], &[("NO_PROXY", "api.anthropic.com")]),
+            launched(&socks, &no_pac, &[], &[("HTTPS_PROXY", "127.0.0.1:7890")]),
         ];
         let (script, checker) = scripted(Some("US"));
         for (index, route) in routes.into_iter().enumerate() {
