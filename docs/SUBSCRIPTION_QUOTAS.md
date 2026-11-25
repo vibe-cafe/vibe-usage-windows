@@ -48,8 +48,8 @@ Codex 付费套餐（Plus / Pro / Prolite / Business / Business ProLite）没有
 读取全部由 CLI 完成（`quota fetch --product grok`，vibe-cafe/vibe-usage 的 Grok 主动读取 PR，要等它发到 npm 才生效）：
 
 - CLI 找到官方 `grok.exe`（`%USERPROFILE%\.grok\bin`、PATH；不认 `.cmd` / `.bat`）后，先过出口检测，再启动 `grok agent --no-leader stdio`，只发 `initialize` 和 `_x.ai/billing` 两条消息问当前账期，拿到就结束进程，整次最多 10 秒。不建会话、不发提示词、不耗额度；Grok 用它自己的登录问 xAI，App 和 CLI 都不读 Grok 的登录文件。子进程里设 `GROK_DISABLE_AUTOUPDATER=1`，去掉 ZCode 的两个 Key 变量，代理变量原样继承（`system_proxy.rs` 给 CLI 的那一套）。
-- 结果：问到当前账期 → `source: live`；没登录 → `unauthorized`，不显示旧数；用 xAI API Key 登录 → 「当前登录方式不含订阅额度」；其他失败（账单服务出错、Grok 太旧、超时、没装）→ 照旧读 Grok 日志末尾里它上次查到的数（`source: local`）。本周还没用过时 Grok 不写百分比，按 0% 显示（和 Grok 自己的界面一致）。
-- 出口检测：Grok 在 CLI 的 `EGRESS_GATED_PRODUCTS` 里，检测主机是 `cli-chat-proxy.grok.com` 自己。暂停时不启动 Grok：日志里有本账期的数就照常显示（CLI 结果是 `ok` + `source: local`，另带 `pauseReason`；现在的 `quota_cli.rs` 只在 `unsupported` 时认这个字段，所以来源行暂不标暂停），没有就是 `unsupported` + `pauseReason`，卡片一行原因，和 Antigravity 一样。
+- 结果：问到当前账期 → `source: live`；没登录 → `unauthorized` + `credentialsMissing`，不显示旧数；用 xAI API Key 登录 → 「当前登录方式不含订阅额度」；其他失败（账单服务出错、Grok 太旧、超时、没装）→ 照旧读 Grok 日志末尾里它上次查到的数（`source: local`），并带 `failureReason`（`programNoAnswer` / `programOutdated` / `timedOut` / `programNotFound`），来源行写明原因。本周还没用过时 Grok 不写百分比，按 0% 显示（和 Grok 自己的界面一致）。
+- 出口检测：Grok 在 CLI 的 `EGRESS_GATED_PRODUCTS` 里，检测主机是 `cli-chat-proxy.grok.com` 自己。暂停时不启动 Grok：日志里有本账期的数就照常显示（CLI 结果是 `ok` + `source: local`，另带 `pauseReason`，来源行写明暂停原因），没有就是 `unsupported` + `pauseReason`，卡片一行原因，和 Antigravity 一样。
 - App 这边：窗口可见时 Grok 最多 5 分钟读一次（`rate_limits.rs` 的 `SLOW_MAX_AGE`），手动刷新照样读。出口检测暂停时例外，下一次刷新就重读（`recheck_egress`，见下节），暂停期间 CLI 不启动 Grok，只重新判断出口。
 - **真机待测**：`grok.exe` 的实际安装位置、能否直接启动、超时后进程树收尾（`taskkill /T /F`）。
 
