@@ -514,7 +514,7 @@ fn variable_names(names: impl IntoIterator<Item = String>) -> VariableNames {
     }
 }
 
-fn claude_settings_file() -> std::path::PathBuf {
+pub(crate) fn claude_settings_file() -> std::path::PathBuf {
     std::env::var_os("CLAUDE_CONFIG_DIR")
         .filter(|value| !value.is_empty())
         .map(std::path::PathBuf::from)

@@ -38,11 +38,16 @@ fn selected_providers(app: &AppHandle) -> Vec<RateLimitProvider> {
 fn needs_refresh(app: &AppHandle, provider: RateLimitProvider, force: bool) -> bool {
     let ctx = app.state::<AppCtx>();
     let cache = ctx.rate_limits.lock().unwrap();
+    // A read the egress check paused is tried again at the next refresh (the
+    // check keeps its own one-minute answer, so nothing extra goes out while
+    // the route stays direct).
     force
         || cache
             .snapshots
             .get(&provider)
-            .map(|(_, at)| at.elapsed() > MAX_AGE)
+            .map(|(snapshot, at)| {
+                at.elapsed() > MAX_AGE || snapshot.live_failure.is_some_and(|failure| failure.is_pause())
+            })
             .unwrap_or(true)
 }
 
@@ -73,13 +78,15 @@ pub async fn get_rate_limits(app: &AppHandle, force: bool) -> Vec<ProviderRateLi
         let cache = ctx.rate_limits.lock().unwrap();
         (settings.z_code_quota_region, cache.zcode_generation())
     };
+    // The egress-check settings as they are right before each product's read.
+    let egress = || app.state::<AppCtx>().settings.lock().unwrap().egress();
     test_diagnostics::record_refresh_started(selected.clone());
 
     if selected.contains(&RateLimitProvider::Codex)
         && needs_refresh(app, RateLimitProvider::Codex, effective_force)
     {
         let http = app.state::<AppCtx>().http.clone();
-        let live = codex_usage::fetch(&http).await;
+        let live = codex_usage::fetch(&http, egress()).await;
         let snapshot = match live {
             Ok(snapshot) => snapshot,
             Err(error) => {
@@ -97,7 +104,7 @@ pub async fn get_rate_limits(app: &AppHandle, force: bool) -> Vec<ProviderRateLi
     if selected.contains(&RateLimitProvider::ClaudeCode)
         && needs_refresh(app, RateLimitProvider::ClaudeCode, effective_force)
     {
-        let snapshot = match claude_usage::fetch().await {
+        let snapshot = match claude_usage::fetch(egress()).await {
             Ok(snapshot) => snapshot,
             Err(failure) => {
                 log::debug!("Claude live quota unavailable: {failure:?}");

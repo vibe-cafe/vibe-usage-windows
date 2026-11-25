@@ -25,6 +25,10 @@ pub struct AppSettings {
     pub selected_quota_product_ids: Vec<RateLimitProvider>,
     pub quota_selection_initialized: bool,
     pub z_code_quota_region: ZCodeQuotaRegion,
+    /// 「检测网络出口」 (`egress_check`), default on.
+    pub egress_check_enabled: bool,
+    /// 「这台电脑上网靠本机代理软件」 (`egress_check`), default off.
+    pub egress_require_local_proxy: bool,
 }
 
 impl Default for AppSettings {
@@ -37,11 +41,20 @@ impl Default for AppSettings {
             selected_quota_product_ids: Vec::new(),
             quota_selection_initialized: false,
             z_code_quota_region: ZCodeQuotaRegion::default(),
+            egress_check_enabled: true,
+            egress_require_local_proxy: false,
         }
     }
 }
 
 impl AppSettings {
+    pub fn egress(&self) -> crate::egress_check::Settings {
+        crate::egress_check::Settings {
+            enabled: self.egress_check_enabled,
+            require_proxy: self.egress_require_local_proxy,
+        }
+    }
+
     pub fn set_quota_selection(&mut self, selection: Vec<RateLimitProvider>) {
         self.selected_quota_product_ids = normalize_selection(selection);
         self.quota_selection_initialized = true;
