@@ -15,5 +15,6 @@ pub mod version;
 
 pub use rate_limit::{
     EgressRegion, ProviderRateLimit, RateLimitEmptyReason, RateLimitLiveFailure, RateLimitMeter,
-    RateLimitMeterPart, RateLimitProvider, RateLimitSource, RateLimitStatus, RateLimitWindow,
+    RateLimitMeterPart, RateLimitProvider, RateLimitSignIn, RateLimitSource, RateLimitStatus,
+    RateLimitWindow,
 };

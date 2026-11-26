@@ -165,6 +165,26 @@ pub async fn output(command: &mut tokio::process::Command) -> io::Result<Output>
     child.wait_with_output().await
 }
 
+/// Like `output`, with `input` written to the child's stdin, which is then
+/// closed (the CLI's `--cursor-login-stdin` reads to the end). Written while
+/// the outputs drain, so neither side can block on a full pipe.
+pub async fn output_with_input(command: &mut tokio::process::Command, input: &[u8]) -> io::Result<Output> {
+    command.stdin(std::process::Stdio::piped());
+    let (mut child, _guard) = spawn(command)?;
+    let stdin = child.stdin.take();
+    let write = async move {
+        use tokio::io::AsyncWriteExt;
+        if let Some(mut stdin) = stdin {
+            // A child that exits without reading is not this call's error:
+            // its exit status and output say what happened.
+            let _ = stdin.write_all(input).await;
+            let _ = stdin.shutdown().await;
+        }
+    };
+    let (_, output) = tokio::join!(write, child.wait_with_output());
+    output
+}
+
 pub fn output_sync(command: &mut std::process::Command) -> io::Result<Output> {
     supervisor().output_sync(command)
 }

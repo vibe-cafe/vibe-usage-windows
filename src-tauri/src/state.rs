@@ -108,11 +108,20 @@ pub struct RateLimitCache {
     pub refreshing: bool,
     pub snapshots: HashMap<RateLimitProvider, (ProviderRateLimit, Instant)>,
     zcode_generation: u64,
+    cursor_generation: u64,
+}
+
+/// Which credentials a refresh started with: a ZCode region/key and a Cursor
+/// sign-in changed since then make its answer for that product stale.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CacheGeneration {
+    zcode: u64,
+    cursor: u64,
 }
 
 impl RateLimitCache {
-    pub fn zcode_generation(&self) -> u64 {
-        self.zcode_generation
+    pub fn generation(&self) -> CacheGeneration {
+        CacheGeneration { zcode: self.zcode_generation, cursor: self.cursor_generation }
     }
 
     /// Called while holding settings, before exposing a changed region/key.
@@ -121,10 +130,20 @@ impl RateLimitCache {
         self.snapshots.remove(&RateLimitProvider::ZCode);
     }
 
-    pub fn store(&mut self, snapshot: ProviderRateLimit, zcode_generation: u64) {
-        if snapshot.provider == RateLimitProvider::ZCode
-            && zcode_generation != self.zcode_generation
-        {
+    /// The Cursor sign-in changed (signed in, out, or ended): drop the card,
+    /// and an answer still in flight for the previous sign-in.
+    pub fn invalidate_cursor(&mut self) {
+        self.cursor_generation += 1;
+        self.snapshots.remove(&RateLimitProvider::Cursor);
+    }
+
+    pub fn store(&mut self, snapshot: ProviderRateLimit, generation: CacheGeneration) {
+        let stale = match snapshot.provider {
+            RateLimitProvider::ZCode => generation.zcode != self.zcode_generation,
+            RateLimitProvider::Cursor => generation.cursor != self.cursor_generation,
+            _ => false,
+        };
+        if stale {
             return;
         }
         self.snapshots
@@ -159,6 +178,11 @@ pub struct AppCtx {
     /// (`system_proxy::wait_for_launch_proxy`): quota reads and syncs wait for
     /// it (`wait_launch_network`). True otherwise.
     pub launch_network: tokio::sync::watch::Sender<bool>,
+    /// The Cursor sign-in this app keeps (`services::cursor_login`).
+    pub cursor_login: crate::services::cursor_login::CursorLogin,
+    /// Where the settings window should scroll when it next shows (the
+    /// Cursor card's sign-in prompt asks for its row), taken once.
+    pub settings_focus: Mutex<Option<String>>,
 }
 
 impl AppCtx {
@@ -231,6 +255,8 @@ impl AppCtx {
             update_info: Mutex::new(None),
             tray_stats: Mutex::new(None),
             launch_network: tokio::sync::watch::channel(true).0,
+            cursor_login: Default::default(),
+            settings_focus: Mutex::new(None),
         }
     }
 
@@ -274,7 +300,7 @@ mod tests {
     fn region_or_key_change_discards_cached_and_in_flight_zcode_results() {
         use vibe_core::RateLimitStatus;
         let mut cache = RateLimitCache::default();
-        let old_request = cache.zcode_generation();
+        let old_request = cache.generation();
         let mut old_account =
             ProviderRateLimit::empty(RateLimitProvider::ZCode, RateLimitStatus::Ok);
         old_account.plan_label = Some("old account".into());
@@ -288,7 +314,7 @@ mod tests {
             old_request,
         );
         assert!(cache.snapshots.contains_key(&RateLimitProvider::Grok));
-        let current_request = cache.zcode_generation();
+        let current_request = cache.generation();
         cache.store(
             ProviderRateLimit::empty(RateLimitProvider::ZCode, RateLimitStatus::RetryableError),
             current_request,
@@ -300,6 +326,26 @@ mod tests {
     }
 
     #[test]
+    fn a_cursor_answer_for_the_previous_sign_in_is_not_kept() {
+        use vibe_core::RateLimitStatus;
+        let mut cache = RateLimitCache::default();
+        let before = cache.generation();
+        let mut previous = ProviderRateLimit::empty(RateLimitProvider::Cursor, RateLimitStatus::Ok);
+        previous.plan_label = Some("previous account".into());
+        cache.store(previous.clone(), before);
+        // Signed out (or in as someone else) while a read was in flight.
+        cache.invalidate_cursor();
+        assert!(!cache.snapshots.contains_key(&RateLimitProvider::Cursor));
+        cache.store(previous, before);
+        assert!(!cache.snapshots.contains_key(&RateLimitProvider::Cursor));
+        // Other products of that refresh are kept; a read that started after it counts.
+        cache.store(ProviderRateLimit::empty(RateLimitProvider::Grok, RateLimitStatus::NoData), before);
+        assert!(cache.snapshots.contains_key(&RateLimitProvider::Grok));
+        cache.store(ProviderRateLimit::empty(RateLimitProvider::Cursor, RateLimitStatus::NoData), cache.generation());
+        assert!(cache.snapshots.contains_key(&RateLimitProvider::Cursor));
+    }
+
+    #[test]
     fn refresh_failure_replaces_old_success_instead_of_reviving_expired_meters() {
         use vibe_core::RateLimitStatus;
         let mut cache = RateLimitCache::default();
@@ -308,10 +354,10 @@ mod tests {
             RateLimitProvider::ZCode,
             RateLimitProvider::Grok,
         ] {
-            cache.store(ProviderRateLimit::empty(provider, RateLimitStatus::Ok), 0);
+            cache.store(ProviderRateLimit::empty(provider, RateLimitStatus::Ok), CacheGeneration::default());
             cache.store(
                 ProviderRateLimit::empty(provider, RateLimitStatus::RetryableError),
-                0,
+                CacheGeneration::default(),
             );
             assert_eq!(
                 cache.snapshots[&provider].0.status,

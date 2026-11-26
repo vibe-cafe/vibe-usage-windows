@@ -443,7 +443,7 @@ fn evaluate_pac(_pac_url: &str, _target: &str) -> Option<String> {
 
 /// Hosts the CLI reaches. A PAC can answer per host; one `HTTPS_PROXY`
 /// cannot, so hosts the PAC sends direct join `NO_PROXY`.
-pub const CLI_HOSTS: [&str; 15] = [
+pub const CLI_HOSTS: [&str; 16] = [
     "vibefriends.com",
     "registry.npmjs.org",
     "api.kimi.com",
@@ -452,6 +452,9 @@ pub const CLI_HOSTS: [&str; 15] = [
     "api.z.ai",
     "opencode.ai",
     "cursor.com",
+    // The Cursor sign-in the CLI runs for this app (vibe-cafe/vibe-usage#210):
+    // waiting for the browser confirmation and renewing the sign-in.
+    "api2.cursor.sh",
     // The official `grok` the CLI starts (vibe-cafe/vibe-usage#189): billing,
     // settings and models, token refresh, and the xAI API.
     "cli-chat-proxy.grok.com",

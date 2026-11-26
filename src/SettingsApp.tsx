@@ -9,6 +9,7 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import {
   api,
   observeCachedRateLimits,
+  onCursorLogin,
   onDeviceLink,
   onSettingsShown,
   onSettingsUpdated,
@@ -21,6 +22,7 @@ import { extraRootsLoadPatch } from "./lib/extraRoots";
 import {
   AppSettings,
   AppStatus,
+  CursorLoginStatus,
   ExtraRoots,
   ProviderRateLimit,
   QuotaProduct,
@@ -31,8 +33,9 @@ import {
   ZCodeQuotaRegion,
 } from "./lib/types";
 import { formatRelativeTime } from "./lib/formatters";
-import { isZCodeConfigured, quotaProductNote, quotaProductStatusText } from "./lib/quotaProducts";
+import { isZCodeConfigured, quotaProductStatusText } from "./lib/quotaProducts";
 import { buildDiagnosticsText, copyText } from "./lib/diagnostics";
+import { CURSOR_LOGOUT_CONFIRM, CURSOR_LOGOUT_TITLE, cursorLoginRow } from "./lib/cursorLogin";
 import { EGRESS_MODES, egressModeOption } from "./lib/egressMode";
 import { followUpdateOffer } from "./lib/updateOffer";
 import {
@@ -97,8 +100,14 @@ export function SettingsApp() {
   const [extraRootsBusy, setExtraRootsBusy] = useState(false);
   const [extraRootsError, setExtraRootsError] = useState<string | null>(null);
   const [isZCodeExpanded, setZCodeExpanded] = useState(false);
-  const [isQuotaSourcesExpanded, setQuotaSourcesExpanded] = useState(false);
   const [isIsolatedRootsExpanded, setIsIsolatedRootsExpanded] = useState(false);
+  const [cursorLogin, setCursorLogin] = useState<CursorLoginStatus | null>(null);
+  const [cursorLogoutConfirm, setCursorLogoutConfirm] = useState(false);
+  const [cursorLogoutError, setCursorLogoutError] = useState<string | null>(null);
+  // The Cursor card's sign-in prompt opened this window: scroll to the row.
+  const [focusCursorLogin, setFocusCursorLogin] = useState(false);
+  const [highlightCursorLogin, setHighlightCursorLogin] = useState(false);
+  const cursorLoginRef = useRef<HTMLDivElement>(null);
 
   const reload = useCallback(async () => {
     const eventsBefore = settingsEvents.current;
@@ -120,6 +129,13 @@ export function SettingsApp() {
       api.getZCodeCredentialStatus(),
     ]);
 
+    void api.getCursorLogin().then(setCursorLogin).catch(() => {});
+    void api
+      .takeSettingsFocus()
+      .then((focus) => {
+        if (focus === "cursorLogin") setFocusCursorLogin(true);
+      })
+      .catch(() => {});
     if (discovered) setQuotaProducts(discovered);
     if (nextStatus.status === "fulfilled") setStatus(nextStatus.value);
     if (nextSettings.status === "fulfilled" && settingsEvents.current === eventsBefore) {
@@ -143,6 +159,7 @@ export function SettingsApp() {
     const subs = [
       onSyncState(setSyncState),
       onSettingsUpdated(applyPushedSettings),
+      onCursorLogin(setCursorLogin),
       // The same offer the panel header shows: found at startup, by the daily
       // check or by 「检查更新」 here; withdrawn by a later check (#36).
       followUpdateOffer(
@@ -177,6 +194,21 @@ export function SettingsApp() {
       for (const p of subs) void p.then((un) => un());
     };
   }, [reload, applyPushedSettings]);
+
+  useEffect(() => {
+    if (!focusCursorLogin) return;
+    const row = cursorLoginRef.current;
+    if (!row) return;
+    setFocusCursorLogin(false);
+    row.scrollIntoView({ block: "center" });
+    setHighlightCursorLogin(true);
+  }, [focusCursorLogin, quotaProducts]);
+
+  useEffect(() => {
+    if (!highlightCursorLogin) return;
+    const timer = window.setTimeout(() => setHighlightCursorLogin(false), 1600);
+    return () => window.clearTimeout(timer);
+  }, [highlightCursorLogin]);
 
   // A failure belonged to the offer it tried to install (same rule as the
   // header badge); a newer offer (e.g. found by the daily check after an
@@ -298,6 +330,30 @@ export function SettingsApp() {
       setQuotaError(formatInvokeError(err));
     } finally {
       setQuotaBusy(false);
+    }
+  };
+
+  const runCursorLoginAction = async (kind: "start" | "cancel" | "logout") => {
+    setCursorLogoutError(null);
+    if (kind === "logout") {
+      // An ended sign-in has nothing left on cursor.com to revoke: remove it.
+      if (cursorLogin?.state === "expired") void logoutCursor();
+      else setCursorLogoutConfirm(true);
+      return;
+    }
+    try {
+      setCursorLogin(await (kind === "start" ? api.startCursorLogin() : api.cancelCursorLogin()));
+    } catch (err) {
+      setCursorLogoutError(formatInvokeError(err));
+    }
+  };
+
+  const logoutCursor = async () => {
+    setCursorLogoutConfirm(false);
+    try {
+      setCursorLogin(await api.logoutCursor());
+    } catch (err) {
+      setCursorLogoutError(formatInvokeError(err));
     }
   };
 
@@ -480,22 +536,44 @@ export function SettingsApp() {
         {/* 订阅配额 — every product is a plain switch, so the section stays
             flat; only ZCode (the one product that needs a key) owns a row that
             opens, and it sits last. */}
-        <Section
-          title={`订阅配额（${settings?.selectedQuotaProductIds.length ?? 0}）`}
-          footer="选中的产品会在面板中各显示一张卡片。"
-        >
+        <Section title={`订阅配额（${settings?.selectedQuotaProductIds.length ?? 0}）`}>
           {quotaProducts
             .filter((product) => product.provider !== "zcode")
-            .map((product) => (
-              <ProductRow
-                key={product.provider}
-                product={product}
-                statusText={statusText(product)}
-                selected={settings?.selectedQuotaProductIds.includes(product.provider) ?? false}
-                disabled={quotaBusy}
-                onToggle={(value) => void toggleQuotaProduct(product.provider, value)}
-              />
-            ))}
+            .map((product) => {
+              const row = (
+                <ProductRow
+                  key={product.provider}
+                  product={product}
+                  statusText={statusText(product)}
+                  selected={settings?.selectedQuotaProductIds.includes(product.provider) ?? false}
+                  disabled={quotaBusy}
+                  onToggle={(value) => void toggleQuotaProduct(product.provider, value)}
+                />
+              );
+              if (product.provider !== "cursor") return row;
+              // Cursor's own sign-in for Vibe Usage sits under its switch: it
+              // serves the quota card and the usage sync alike.
+              return (
+                <div
+                  key={product.provider}
+                  ref={cursorLoginRef}
+                  className="flex flex-col transition-colors duration-500"
+                  style={{ background: highlightCursorLogin ? "rgba(10,132,255,0.14)" : undefined }}
+                >
+                  {row}
+                  {cursorLogin && (
+                    <CursorLoginBlock
+                      status={cursorLogin}
+                      confirmingLogout={cursorLogoutConfirm}
+                      error={cursorLogoutError}
+                      onAction={(kind) => void runCursorLoginAction(kind)}
+                      onConfirmLogout={() => void logoutCursor()}
+                      onCancelLogout={() => setCursorLogoutConfirm(false)}
+                    />
+                  )}
+                </div>
+              );
+            })}
 
           {zCodeProduct && (
             <div className="flex flex-col">
@@ -572,38 +650,22 @@ export function SettingsApp() {
                       </button>
                     )}
                   </div>
-                  <span className="text-[10.5px]" style={{ color: "#8C8C8C" }}>
-                    只使用这里填写的区域 Key，不读取 ZCode 登录凭据。
-                  </span>
                   {zCodeMessage && <span className="text-[11px] text-emerald-400">{zCodeMessage}</span>}
                 </div>
               )}
             </div>
           )}
 
-          <Disclosure
-            label="数据来源与检测"
-            expanded={isQuotaSourcesExpanded}
-            onToggle={() => setQuotaSourcesExpanded((value) => !value)}
-          >
-            <p className="text-[10.5px] leading-relaxed" style={{ color: "#8C8C8C" }}>
-              检测状态仅用于推荐，所有产品都可手动选择；未选择的产品不会联网读取配额。
-            </p>
-            <p className="text-[10.5px] leading-relaxed" style={{ color: "#8C8C8C" }}>
-              Grok 仅从官方 CLI 普通日志读取结构化订阅配额；Cursor 复用 Cursor 自己的登录读取官方用量汇总，不读取浏览器
-              Cookie。
-            </p>
-            <p className="text-[10.5px] leading-relaxed" style={{ color: "#8C8C8C" }}>
-              Kimi Code 使用其官方 CLI 登录；Antigravity / AGY 使用官方 agy 登录。
-            </p>
-            <div className="flex justify-end">
-              <SmallButton disabled={quotaBusy} onClick={() => void rediscoverQuotaProducts()}>
-                <span className="flex items-center gap-1.5">
-                  <RefreshCw size={11} /> 重新检测
-                </span>
-              </SmallButton>
-            </div>
-          </Disclosure>
+          {/* The explanations that used to sit here (how each product is read)
+              live in PRIVACY.md; the settings keep only what the user acts on
+              (maintainer, 2026-11-26). */}
+          <Row label="数据来源与检测">
+            <SmallButton disabled={quotaBusy} onClick={() => void rediscoverQuotaProducts()}>
+              <span className="flex items-center gap-1.5">
+                <RefreshCw size={11} /> 重新检测
+              </span>
+            </SmallButton>
+          </Row>
 
           {quotaError && (
             <div
@@ -617,8 +679,9 @@ export function SettingsApp() {
 
         {/* 隐私保护 — the egress check (`egress_check.rs`): one three-way
             menu, like the macOS pop-up menu (System Settings' 「显示滚动条」).
-            The grey line follows the option chosen. */}
-        <Section title="隐私保护" footer={egressModeOption(settings?.egressMode).caption}>
+            No explanatory line under it (maintainer, 2026-11-26); what each
+            option does is in PRIVACY.md. */}
+        <Section title="隐私保护">
           <Row label="没检测到代理时">
             <MenuSelect
               label="没检测到代理时"
@@ -691,15 +754,12 @@ export function SettingsApp() {
                 ))}
               </div>
             ))}
-            <p className="text-[10.5px] leading-relaxed" style={{ color: "#8C8C8C" }}>
-              可为每种工具添加多个 Multica 或其他隔离目录；默认目录仍会照常统计。
-            </p>
             {extraRootsError && <span className="text-xs text-red-400">{extraRootsError}</span>}
           </Disclosure>
         </Section>
 
         {status?.testDiagnosticsAvailable && (
-          <Section title="测试诊断" footer="仅测试构建可用；只含脱敏错误码、Provider、版本与系统信息，不含路径、账号、Key。">
+          <Section title="测试诊断">
             <Row label="外测日志">
               <div className="flex items-center gap-2">
                 {diagnosticMessage && (
@@ -872,7 +932,6 @@ function ProductRow({
   disabled: boolean;
   onToggle: (selected: boolean) => void;
 }) {
-  const note = quotaProductNote(product.provider);
   return (
     <div className="flex min-h-[38px] items-center justify-between gap-3 px-3 py-1.5">
       <div className="flex min-w-0 items-center gap-2">
@@ -886,14 +945,79 @@ function ProductRow({
         <span className="flex min-w-0 flex-col">
           <span className="text-[13px]">{product.displayName}</span>
           <QuotaStatusLabel text={statusText} />
-          {note && (
-            <span className="truncate text-[10.5px]" style={{ color: "#6A6A6A" }}>
-              {note}
-            </span>
-          )}
         </span>
       </div>
       <Toggle checked={selected} disabled={disabled} onChange={onToggle} />
+    </div>
+  );
+}
+
+/** The Cursor sign-in under its switch: state on the left, the button on the
+ *  right (copy in `lib/cursorLogin`, same as macOS). */
+function CursorLoginBlock({
+  status,
+  confirmingLogout,
+  error,
+  onAction,
+  onConfirmLogout,
+  onCancelLogout,
+}: {
+  status: CursorLoginStatus;
+  confirmingLogout: boolean;
+  error: string | null;
+  onAction: (kind: "start" | "cancel" | "logout") => void;
+  onConfirmLogout: () => void;
+  onCancelLogout: () => void;
+}) {
+  const row = cursorLoginRow(status);
+  if (!row.text && !row.action) return null;
+  const errorText = error ?? row.error;
+  return (
+    <div className="flex flex-col gap-1.5 px-3 pb-2.5 pl-[42px]">
+      {confirmingLogout ? (
+        <div className="flex flex-col gap-2">
+          <span className="flex flex-col gap-0.5">
+            <span className="text-xs font-medium" style={{ color: "#E8E8E8" }}>
+              {CURSOR_LOGOUT_TITLE}
+            </span>
+            <span className="text-xs leading-relaxed" style={{ color: "#B0B0B0" }}>
+              {CURSOR_LOGOUT_CONFIRM}
+            </span>
+          </span>
+          <div className="flex justify-end gap-2">
+            <SmallButton onClick={onCancelLogout}>取消</SmallButton>
+            <button
+              className="rounded-md bg-red-500 px-3 py-1 text-xs font-medium text-white"
+              onClick={onConfirmLogout}
+            >
+              退出
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="flex items-center gap-2">
+          <span
+            className={`min-w-0 grow text-xs ${status.state === "waiting" ? "leading-relaxed" : "truncate"}`}
+            style={{ color: "#B0B0B0" }}
+            title={row.text ?? undefined}
+          >
+            {row.text}
+          </span>
+          {row.secondary && (
+            <button
+              className="shrink-0 text-xs underline-offset-2 hover:underline"
+              style={{ color: "#9E9E9E" }}
+              onClick={() => onAction(row.secondary!.kind)}
+            >
+              {row.secondary.label}
+            </button>
+          )}
+          {row.action && (
+            <SmallButton onClick={() => onAction(row.action!.kind)}>{row.action.label}</SmallButton>
+          )}
+        </div>
+      )}
+      {errorText && <span className="text-[11px] text-red-400">{errorText}</span>}
     </div>
   );
 }

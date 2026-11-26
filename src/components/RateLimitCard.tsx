@@ -1,10 +1,11 @@
 // Subscription quota selector and provider-neutral cards.
 
 import { ReactNode, useCallback, useLayoutEffect, useRef, useState } from "react";
-import { ChevronDown, ChevronUp } from "lucide-react";
+import { ChevronDown, ChevronRight, ChevronUp } from "lucide-react";
 import { createPortal } from "react-dom";
 
 import { AppStateValue, useAppState } from "../state/AppStateContext";
+import { api } from "../lib/api";
 import {
   ProviderRateLimit,
   RateLimitMeter,
@@ -21,6 +22,7 @@ import {
   quotaEmptyStateText,
   quotaProvenanceText,
   quotaRetryableText,
+  quotaSignInText,
   quotaTooltipLines,
   quotaTooltipTitle,
 } from "../lib/quotaProducts";
@@ -264,9 +266,31 @@ function ProviderCard({ snapshot }: { snapshot: ProviderRateLimit }) {
   const compactMeterLimit = 3;
   const visibleRows = expanded ? rows : rows.slice(0, compactMeterLimit);
   const foldedMeterCount = Math.max(0, rows.length - compactMeterLimit);
+  // The CLI asks for the app's own Cursor sign-in: the whole card opens the
+  // Cursor row in Settings (no retry: reading again changes nothing).
+  const signIn = snapshot.status.kind === "noData" && !state.isRefreshingRateLimits ? snapshot.signIn : null;
+  const openSignIn = () => void api.openSettingsWindow("cursorLogin");
 
   return (
-    <div className="flex h-full min-w-0 flex-col gap-2.5 rounded-card border border-card-border bg-card px-3 py-[11px]">
+    <div
+      className={`flex h-full min-w-0 flex-col gap-2.5 rounded-card border border-card-border bg-card px-3 py-[11px] ${
+        signIn ? "cursor-pointer transition-colors hover:bg-white/[0.06]" : ""
+      }`}
+      {...(signIn
+        ? {
+            role: "button",
+            tabIndex: 0,
+            "aria-label": quotaSignInText(signIn),
+            onClick: openSignIn,
+            onKeyDown: (event: React.KeyboardEvent) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                openSignIn();
+              }
+            },
+          }
+        : {})}
+    >
       <div className="flex items-center gap-1.5">
         <ProviderIcon provider={snapshot.provider} />
         <span className="truncate text-[13px] font-semibold text-white">{name}</span>
@@ -295,7 +319,14 @@ function ProviderCard({ snapshot }: { snapshot: ProviderRateLimit }) {
 
       {snapshot.status.kind === "ok" && <QuotaRows rows={visibleRows} />}
       {snapshot.status.kind === "disabled" && <MessageContent text="订阅配额未启用" />}
-      {snapshot.status.kind === "noData" && <QuietText text={emptyStateText(snapshot, state)} />}
+      {signIn ? (
+        <span className="flex items-center gap-1 text-[11px] leading-snug text-t-muted">
+          <span className="min-w-0 grow">{quotaSignInText(signIn)}</span>
+          <ChevronRight size={12} className="shrink-0 text-neutral-500" />
+        </span>
+      ) : (
+        snapshot.status.kind === "noData" && <QuietText text={emptyStateText(snapshot, state)} />
+      )}
       {snapshot.status.kind === "unauthorized" && (
         <MessageContent text={quotaAuthorizationText(snapshot, state.settings.zCodeQuotaRegion)} />
       )}

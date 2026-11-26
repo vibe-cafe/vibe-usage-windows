@@ -248,6 +248,17 @@ impl EgressRegion {
     }
 }
 
+/// The CLI asks the app to offer its own Cursor sign-in (`signIn`, CLI
+/// vibe-cafe/vibe-usage#210): Cursor's local login is encrypted
+/// (`required`), or the sign-in this app keeps was ended by Cursor
+/// (`expired`). Only ever repeats what the CLI reported.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RateLimitSignIn {
+    Required,
+    Expired,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderRateLimit {
@@ -279,6 +290,9 @@ pub struct ProviderRateLimit {
     /// Absent means "the source did not say" — the UI must not render a verdict.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub empty_reason: Option<RateLimitEmptyReason>,
+    /// Absent unless the CLI asked for a Cursor sign-in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sign_in: Option<RateLimitSignIn>,
     pub status: RateLimitStatus,
 }
 
@@ -298,6 +312,7 @@ impl ProviderRateLimit {
             five_hour_not_enforced: false,
             reset_credits_count: None,
             empty_reason: None,
+            sign_in: None,
             status,
         }
     }

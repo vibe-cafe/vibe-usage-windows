@@ -2,8 +2,8 @@
 
 use crate::services::api_client::{self, UsageQuery};
 use crate::services::{
-    auto_launch, device_link, rate_limits, scheduler, sync_engine, test_diagnostics, updater,
-    zcode_credentials,
+    auto_launch, cursor_login, device_link, rate_limits, scheduler, sync_engine, test_diagnostics,
+    updater, zcode_credentials,
 };
 use crate::state::{AppCtx, AppSettings, SyncState, UpdateInfo};
 use serde::Serialize;
@@ -308,6 +308,39 @@ pub async fn set_zcode_api_key(
     Ok(rate_limits::after_settings_change(&app).await)
 }
 
+// -- Cursor sign-in (`services::cursor_login`) ------------------------------------
+
+/// The settings row's state. While the settings window is on screen, also
+/// asks the CLI in the background whether it offers the sign-in (the answer
+/// arrives with `cursor-login-updated`); the hidden window preloaded at
+/// startup does not, so nothing runs before the user opens Settings.
+#[tauri::command]
+pub fn get_cursor_login(app: AppHandle) -> cursor_login::LoginStatus {
+    let shown = app
+        .get_webview_window("settings")
+        .and_then(|window| window.is_visible().ok())
+        .unwrap_or(false);
+    if shown {
+        cursor_login::check_support(&app);
+    }
+    cursor_login::status(&app)
+}
+
+#[tauri::command]
+pub fn start_cursor_login(app: AppHandle) -> cursor_login::LoginStatus {
+    cursor_login::start(&app)
+}
+
+#[tauri::command]
+pub fn cancel_cursor_login(app: AppHandle) -> cursor_login::LoginStatus {
+    cursor_login::cancel(&app)
+}
+
+#[tauri::command]
+pub fn logout_cursor(app: AppHandle) -> Result<cursor_login::LoginStatus, String> {
+    cursor_login::logout(&app)
+}
+
 // -- Settings -------------------------------------------------------------------
 
 #[tauri::command]
@@ -434,9 +467,19 @@ pub fn open_settings_impl(app: &AppHandle) {
     }
 }
 
+/// `focus` names a part of the settings to scroll to (`cursorLogin`: the
+/// Cursor card's sign-in prompt); the window takes it once it shows.
 #[tauri::command]
-pub fn open_settings_window(app: AppHandle) {
+pub fn open_settings_window(app: AppHandle, focus: Option<String>) {
+    if let Some(focus) = focus.filter(|focus| focus == "cursorLogin") {
+        *app.state::<AppCtx>().settings_focus.lock().unwrap() = Some(focus);
+    }
     open_settings_impl(&app);
+}
+
+#[tauri::command]
+pub fn take_settings_focus(app: AppHandle) -> Option<String> {
+    app.state::<AppCtx>().settings_focus.lock().unwrap().take()
 }
 
 #[tauri::command]
