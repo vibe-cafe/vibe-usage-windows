@@ -87,7 +87,7 @@ Codex 付费套餐（Plus / Pro / Prolite / Business / Business ProLite）没有
 | `limitReached`（Codex 接口报告已用满） | 额度已用满 · 等待重置 | 已用满 |
 | `noWindow` | 没有生效的额度窗口 | 无窗口 |
 | `notEntitled`（如 OpenCode Go 无订阅） | 未订阅 <产品名> | 未订阅 |
-| `sessionWithoutPlanLimits`（Claude Code 返回 `rate_limits_available:false`） | 当前登录方式不含订阅额度 | 不适用 |
+| `sessionWithoutPlanLimits`（Claude Code 返回 `rate_limits_available:false`：用了令牌（如 Magpie、中转站）、API Key、云厂商，或没登录；令牌优先于已存的 claude.ai 登录，订阅用户也会落到这里） | Claude「Claude Code 未使用订阅登录」，其他产品「当前登录方式不含订阅额度」 | Claude「未用订阅登录」，其他产品「不适用」 |
 | `periodEnded` | Grok「账期已结束 · 用一次 Grok 后更新」，AGY「额度已重置 · 下次读取时更新」，其他产品「上个周期已结束」 | 待更新 |
 | `noLocalRecord` | Grok「暂无记录 · 用一次 Grok 后更新」，AGY「用过 Antigravity 后显示」，其他产品「本机暂无记录」 | 无记录 |
 | 应用本地的 `nonessentialTrafficDisabled` | 组织策略关闭了 Claude Code 非必要流量 · 无法读取 | 已禁止 |
