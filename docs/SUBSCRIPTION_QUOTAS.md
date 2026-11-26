@@ -6,7 +6,7 @@
 
 Codex 付费套餐（Plus / Pro / Prolite / Business / Business ProLite）没有拿到 5h 窗口时，卡片仍保留 5h 这一行并说明原因，规则与 macOS 相同（维护者 2026-10-24 定，见 macOS `AGENTS.md`「"Not enforced" vs "no data" for the Codex 5h window」）：实时用量接口会列出所有生效的窗口，它没给 5h 就说明官方关掉了这个限额（`fiveHourNotEnforced`），显示「不限额」；OpenAI 对 Pro / Prolite 一直关着 5h，这两种套餐不论数据来自接口还是本地日志都显示「不限额」；其余情况数据来自本地会话日志，少了 5h 窗口可能只是近 5 小时没用，显示「近 5 小时无活动」。Business ProLite 不算 Pro 套餐，只在接口确认没有 5h 时显示「不限额」。实现在 `src/lib/quotaProducts.ts:codexFiveHourPlaceholder`。
 
-用户可以选择任意数量的订阅产品，选择顺序即卡片顺序；面板为每个已选产品始终渲染一张卡片，多于两张时横向滚动，不折叠成一句通用提示。自动检测只影响首次推荐（首次启动会勾选全部已检测且已就绪的产品）；手动选择不受安装路径限制。
+用户可以选择任意数量的订阅产品，选择顺序即卡片顺序；面板为每个已选产品始终渲染一张卡片，多于两张时横向滚动，不折叠成一句通用提示。自动检测只影响首次推荐（首次启动会勾选全部已检测且已就绪的产品，Antigravity / AGY 除外：Google 表示不支持第三方读取额度，要用户自己打开；已保存的选择不变）；手动选择不受安装路径限制。
 
 ## 数据流和职责
 
@@ -40,7 +40,7 @@ Codex 付费套餐（Plus / Pro / Prolite / Business / Business ProLite）没有
 - CLI 找 `agy.exe` 的顺序：`ANTIGRAVITY_CLI_PATH`（测试用）→ `~\.local\bin\agy.exe` → PATH 上的 `agy.exe` → 官方安装位置 `%LOCALAPPDATA%\agy\bin\agy.exe`。最后一项由 vibe-cafe/vibe-usage#176 加入（要等它发到 npm 才生效）；官方文档（antigravity.google/docs/getting-started）和安装脚本 `install.ps1` / `install.cmd` 都装到这里，要等 `agy install` 改了用户环境变量才进 PATH，而开机自启、一直挂在托盘的 App 看不到之后改的 PATH（App 把自己启动时的 PATH 传给 CLI）。CLI 发版前，agy 不在 App 的 PATH 上时卡片会显示「请安装 agy 或 Antigravity」。
 - 代理（`src-tauri/src/system_proxy.rs`）：每次 CLI 运行都按当下的系统代理（手动代理、按协议分开的写法、例外列表、PAC 由 WinHTTP 求值）给出 `HTTPS_PROXY` / `HTTP_PROXY` 和 `NODE_USE_ENV_PROXY=1`；只开 SOCKS 时传 `socks5://` 并把开关设为 `0`；PAC 求值失败时，系统里同时开着手动代理就用手动代理（和 Windows 自己一样），否则指向一个关闭的本机端口，让请求失败而不是直连；App 自己的环境里已有代理变量（含 `ALL_PROXY`）时沿用它，不注入系统代理。Node 22.21+/24 在这种环境下连 `127.0.0.1` 也会交给代理，代理不在本机或 Clash 走全局模式时就读不到额度，所以 `NO_PROXY` 总会并进 `localhost,127.0.0.1,::1`（大小写两种写法合并，保留用户原有的条目，`*` 保持原样），同步、配额、诊断都经过 `sync_engine::cli_command` 这一处；CLI 发往 agy 的请求自己也不走代理（vibe-cafe/vibe-usage#176）。
 - 只认 `agy.exe`，不认 `.cmd` / `.bat`：官方渠道只发 exe；Node 不经 shell 启动不了 `.cmd`；有报道说 Antigravity 桌面端也会注册 `agy` 这个命令名，那种启动器会打开桌面端，而不是读额度。
-- App 的「已检测」（`quota_product.rs`）：`~\.gemini\antigravity-cli`、`~\.gemini\antigravity`、上面两个固定位置（`quota_product::antigravity_cli_paths`，与 CLI 的 `antigravityInstallPaths()` 是同一份列表，改一边要改另一边）、PATH 上的 `agy`（按 PATHEXT，和其他产品一样）、桌面端 `Programs\Antigravity\Antigravity.exe`（Antigravity 2.0 桌面端和 1.x IDE 共用）和 `Programs\Antigravity IDE\Antigravity IDE.exe`（2.x 独立 IDE），根目录是 `%LOCALAPPDATA%`、`%LOCALAPPDATA%\Programs` 和 Program Files。官方文档没写桌面端装在哪，这两个位置来自 Google AI 开发者论坛的用户报告，是推断。只装了桌面端或 IDE、没装 agy 也算「已检测」（macOS 认 `Antigravity.app` 也是这样），首次启动会勾上，卡片提示去装 agy。
+- App 的「已检测」（`quota_product.rs`）：`~\.gemini\antigravity-cli`、`~\.gemini\antigravity`、上面两个固定位置（`quota_product::antigravity_cli_paths`，与 CLI 的 `antigravityInstallPaths()` 是同一份列表，改一边要改另一边）、PATH 上的 `agy`（按 PATHEXT，和其他产品一样）、桌面端 `Programs\Antigravity\Antigravity.exe`（Antigravity 2.0 桌面端和 1.x IDE 共用）和 `Programs\Antigravity IDE\Antigravity IDE.exe`（2.x 独立 IDE），根目录是 `%LOCALAPPDATA%`、`%LOCALAPPDATA%\Programs` 和 Program Files。官方文档没写桌面端装在哪，这两个位置来自 Google AI 开发者论坛的用户报告，是推断。只装了桌面端或 IDE、没装 agy 也算「已检测」（macOS 认 `Antigravity.app` 也是这样）；首次启动不会自动勾上（2026-11-26 起 Antigravity 一律由用户自己打开），用户打开后卡片提示去装 agy。
 - Antigravity / AGY 卡片显示一个模型组的 5h / 7d（优先 Gemini）。`programNotFound` 或旧 CLI 的 `missing_credentials` 显示「请安装 agy 或 Antigravity」，登录被拒显示「请在 Antigravity 中登录」。`programNoAnswer` 显示「没有返回额度」。有缓存时保留额度条，在下面写「来源：缓存 · 没有返回额度」。
 
 ## Grok 主动读取（2026-11-25 Hogan 批准，工作区《Grok主动读取-审批门方案》）
