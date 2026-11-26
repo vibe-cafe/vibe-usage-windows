@@ -5,6 +5,7 @@ import {
   RateLimitMeter,
   RateLimitMeterPart,
   RateLimitProvider,
+  RateLimitSignIn,
   RateLimitSource,
   RateLimitWindow,
   ZCodeCredentialStatus,
@@ -181,6 +182,7 @@ export function quotaProductStatusText(
         if (provider === "zcode") return zCodeConfigured ? "Key 无效" : "需 Key";
         return provider === "opencode-go" ? "需登录" : "已失效";
       case "noData":
+        if (snapshot.signIn) return snapshot.signIn === "required" ? "需登录" : "已失效";
         if (snapshot.emptyReason) {
           return {
             notEntitled: "未订阅",
@@ -326,6 +328,7 @@ export function quotaEmptyStateText(
   providerName?: string,
 ): string {
   if (isRefreshing) return "正在读取订阅配额…";
+  if (snapshot.signIn) return quotaSignInText(snapshot.signIn);
   const name = providerName ?? snapshot.provider;
   switch (snapshot.emptyReason) {
     case "limitReached":
@@ -354,6 +357,12 @@ export function quotaEmptyStateText(
   if (snapshot.sourceLabel) return "桌面额度记录缺失、过期或账号不明确";
   if (snapshot.fetchedAt == null) return "尚未读取";
   return isDetected ? "没读到额度，原因未知" : "未检测到安装";
+}
+
+/** The Cursor card's sign-in prompt: only what the CLI asked for (`signIn`).
+ *  Same words as macOS; a click opens the Cursor row in Settings. */
+export function quotaSignInText(signIn: RateLimitSignIn): string {
+  return signIn === "required" ? "需要登录 Cursor" : "Cursor 登录已失效";
 }
 
 /** First line of a retryable card: the fixed reason when the read named one. */

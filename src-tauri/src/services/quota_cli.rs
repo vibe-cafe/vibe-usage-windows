@@ -1,5 +1,6 @@
 //! Typed, JSON-only bridge to the vendored CLI subscription quota contract.
 
+use crate::services::cursor_login::{self, AfterRejection, Handover};
 use crate::services::{sync_engine, test_diagnostics, zcode_credentials};
 use chrono::DateTime;
 use serde::Deserialize;
@@ -10,7 +11,7 @@ use tauri::AppHandle;
 use vibe_core::quota_product::{cli_id, cli_provider, ZCodeQuotaRegion};
 use vibe_core::{
     ProviderRateLimit, RateLimitEmptyReason, RateLimitLiveFailure, RateLimitMeter,
-    RateLimitMeterPart, RateLimitProvider, RateLimitSource, RateLimitStatus,
+    RateLimitMeterPart, RateLimitProvider, RateLimitSignIn, RateLimitSource, RateLimitStatus,
 };
 
 const SCHEMA_VERSION: u32 = 1;
@@ -116,6 +117,10 @@ struct Product {
     pause_reason: Option<String>,
     #[serde(default)]
     egress_region: Option<String>,
+    /// Cursor only (CLI vibe-cafe/vibe-usage#210): offer the app's own
+    /// sign-in, `required` or `expired`.
+    #[serde(default)]
+    sign_in: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -181,8 +186,70 @@ pub async fn fetch(
         return Ok(snapshots);
     }
 
+    // The app's own Cursor sign-in, renewed first when due, goes on stdin.
+    let cursor = if providers.contains(&RateLimitProvider::Cursor) {
+        cursor_login::for_cli(app).await
+    } else {
+        None
+    };
+    let mut answers = run(app, &providers, zcode_key.as_deref(), region, cursor.as_ref()).await?;
+    if let Some(handover) = cursor.filter(Handover::is_live) {
+        if let Some(index) = answers.iter().position(|snapshot| {
+            snapshot.provider == RateLimitProvider::Cursor && snapshot.sign_in == Some(RateLimitSignIn::Expired)
+        }) {
+            answers[index] = after_cursor_rejection(app, region, handover, answers[index].clone()).await;
+        }
+    }
+    snapshots.extend(answers);
+    Ok(snapshots)
+}
+
+/// Cursor rejected the handed-over sign-in (or it lapsed): renew it once and
+/// read Cursor again, as the CLI does for its own stored sign-in. Cursor
+/// refusing the renewal, or the renewed one, leaves the CLI's 「登录已失效」;
+/// a renewal that did not complete says so, like the CLI's
+/// `loginRefreshFailed`.
+async fn after_cursor_rejection(
+    app: &AppHandle,
+    region: ZCodeQuotaRegion,
+    handover: Handover,
+    rejected: ProviderRateLimit,
+) -> ProviderRateLimit {
+    match cursor_login::after_rejection(app, &handover).await {
+        AfterRejection::Renewed(next) => {
+            match run(app, &[RateLimitProvider::Cursor], None, region, Some(&next)).await {
+                Ok(mut again) => {
+                    let snapshot = again.remove(0);
+                    if snapshot.sign_in == Some(RateLimitSignIn::Expired) {
+                        // Rejected right after renewal: ended.
+                        cursor_login::after_rejection(app, &next).await;
+                    }
+                    snapshot
+                }
+                Err(error) => error.snapshot(RateLimitProvider::Cursor),
+            }
+        }
+        AfterRejection::Retry => ProviderRateLimit::failed(
+            RateLimitProvider::Cursor,
+            RateLimitStatus::RetryableError,
+            Some(RateLimitSource::Live),
+            RateLimitLiveFailure::LoginRefreshFailed,
+        ),
+        AfterRejection::Ended | AfterRejection::Gone => rejected,
+    }
+}
+
+/// One `quota fetch` for `providers`. The ZCode key goes in its region's
+/// variable, the Cursor sign-in on stdin; neither in an argument.
+async fn run(
+    app: &AppHandle,
+    providers: &[RateLimitProvider],
+    zcode_key: Option<&str>,
+    region: ZCodeQuotaRegion,
+    cursor: Option<&Handover>,
+) -> Result<Vec<ProviderRateLimit>, FetchError> {
     let mut args = vec!["quota".to_string(), "fetch".to_string()];
-    for provider in &providers {
+    for provider in providers {
         args.push("--product".into());
         args.push(
             cli_id(*provider)
@@ -191,6 +258,9 @@ pub async fn fetch(
         );
     }
     args.push("--json".into());
+    if cursor.is_some() {
+        args.push("--cursor-login-stdin".into());
+    }
 
     let mut command =
         sync_engine::quota_command(app, &args).map_err(|_| FetchError::RuntimeUnavailable)?;
@@ -198,18 +268,21 @@ pub async fn fetch(
         .env_remove("BIGMODEL_API_KEY")
         .env_remove("Z_AI_API_KEY")
         .stdin(Stdio::null());
-    if let Some(key) = zcode_key.as_deref() {
+    if let Some(key) = zcode_key {
         command.env(region.environment_key(), key);
     }
-    let output = tokio::time::timeout(TIMEOUT, crate::process_lifecycle::output(&mut command))
-        .await
-        .map_err(|_| FetchError::Timeout)?
-        .map_err(|_| FetchError::Launch)?;
+    let output = match cursor {
+        Some(handover) => {
+            tokio::time::timeout(TIMEOUT, crate::process_lifecycle::output_with_input(&mut command, &handover.input)).await
+        }
+        None => tokio::time::timeout(TIMEOUT, crate::process_lifecycle::output(&mut command)).await,
+    }
+    .map_err(|_| FetchError::Timeout)?
+    .map_err(|_| FetchError::Launch)?;
     if !output.status.success() {
         return Err(FetchError::ProcessFailure);
     }
-    snapshots.extend(decode(&output.stdout, &providers)?);
-    Ok(snapshots)
+    decode(&output.stdout, providers)
 }
 
 fn isolate_credential_failure(
@@ -322,6 +395,11 @@ fn map_product(product: Product) -> Result<ProviderRateLimit, FetchError> {
     if product.source.as_deref() == Some("cache") {
         failure.get_or_insert(Failure::CliReportedFailure);
     }
+    let sign_in = match product.sign_in.as_deref() {
+        Some("required") if provider == RateLimitProvider::Cursor => Some(RateLimitSignIn::Required),
+        Some("expired") if provider == RateLimitProvider::Cursor => Some(RateLimitSignIn::Expired),
+        _ => None,
+    };
     Ok(ProviderRateLimit {
         provider,
         meters,
@@ -336,6 +414,7 @@ fn map_product(product: Product) -> Result<ProviderRateLimit, FetchError> {
         empty_reason: product.empty_reason.as_deref().and_then(empty_reason),
         source: product.source.as_deref().and_then(source),
         live_failure: failure,
+        sign_in,
         status,
     })
 }
@@ -558,6 +637,34 @@ mod tests {
             assert_eq!(product(status).status, RateLimitStatus::Unauthorized);
         }
         assert_eq!(product("retryable_error").status, RateLimitStatus::RetryableError);
+    }
+
+    #[test]
+    fn a_cursor_sign_in_request_is_kept_only_as_the_cli_said_it() {
+        let product = |id: &str, extra: &str| {
+            let payload = format!(
+                r#"{{"schemaVersion":1,"products":[{{"id":"{id}","status":"unsupported","meters":[],"fetchedAt":"2026-11-26T00:00:00.000Z","source":"live"{extra}}}]}}"#
+            );
+            let provider = cli_provider(id).unwrap();
+            decode(payload.as_bytes(), &[provider]).unwrap().remove(0)
+        };
+        // CLI 0.15.10+: Cursor's local login is encrypted, offer the sign-in.
+        let required = product("cursor", r#","failureReason":"credentialsEncrypted","signIn":"required""#);
+        assert_eq!(required.status, RateLimitStatus::NoData);
+        assert_eq!(required.sign_in, Some(RateLimitSignIn::Required));
+        assert_eq!(required.live_failure, Some(RateLimitLiveFailure::CredentialsEncrypted));
+        // The app's own sign-in was ended by Cursor.
+        let expired = product("cursor", r#","failureReason":"credentialsRejected","signIn":"expired""#);
+        assert_eq!(expired.sign_in, Some(RateLimitSignIn::Expired));
+        assert_eq!(expired.live_failure, Some(RateLimitLiveFailure::CredentialsRejected));
+        // An older CLI says nothing; an unknown value or another product is ignored.
+        assert_eq!(product("cursor", "").sign_in, None);
+        assert_eq!(product("cursor", r#","signIn":"later""#).sign_in, None);
+        assert_eq!(product("grok", r#","signIn":"required""#).sign_in, None);
+        // Serialized for the cards only when present.
+        let json = serde_json::to_value(&expired).unwrap();
+        assert_eq!(json["signIn"], "expired");
+        assert!(serde_json::to_value(product("cursor", "")).unwrap().get("signIn").is_none());
     }
 
     #[test]

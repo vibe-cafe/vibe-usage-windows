@@ -9,6 +9,7 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import {
   api,
   observeCachedRateLimits,
+  onCursorLogin,
   onDeviceLink,
   onSettingsShown,
   onSettingsUpdated,
@@ -21,6 +22,7 @@ import { extraRootsLoadPatch } from "./lib/extraRoots";
 import {
   AppSettings,
   AppStatus,
+  CursorLoginStatus,
   ExtraRoots,
   ProviderRateLimit,
   QuotaProduct,
@@ -33,6 +35,7 @@ import {
 import { formatRelativeTime } from "./lib/formatters";
 import { isZCodeConfigured, quotaProductNote, quotaProductStatusText } from "./lib/quotaProducts";
 import { buildDiagnosticsText, copyText } from "./lib/diagnostics";
+import { CURSOR_LOGIN_NOTE, CURSOR_LOGOUT_CONFIRM, cursorLoginRow } from "./lib/cursorLogin";
 import { EGRESS_MODES, egressModeOption } from "./lib/egressMode";
 import { followUpdateOffer } from "./lib/updateOffer";
 import {
@@ -99,6 +102,13 @@ export function SettingsApp() {
   const [isZCodeExpanded, setZCodeExpanded] = useState(false);
   const [isQuotaSourcesExpanded, setQuotaSourcesExpanded] = useState(false);
   const [isIsolatedRootsExpanded, setIsIsolatedRootsExpanded] = useState(false);
+  const [cursorLogin, setCursorLogin] = useState<CursorLoginStatus | null>(null);
+  const [cursorLogoutConfirm, setCursorLogoutConfirm] = useState(false);
+  const [cursorLogoutError, setCursorLogoutError] = useState<string | null>(null);
+  // The Cursor card's sign-in prompt opened this window: scroll to the row.
+  const [focusCursorLogin, setFocusCursorLogin] = useState(false);
+  const [highlightCursorLogin, setHighlightCursorLogin] = useState(false);
+  const cursorLoginRef = useRef<HTMLDivElement>(null);
 
   const reload = useCallback(async () => {
     const eventsBefore = settingsEvents.current;
@@ -120,6 +130,13 @@ export function SettingsApp() {
       api.getZCodeCredentialStatus(),
     ]);
 
+    void api.getCursorLogin().then(setCursorLogin).catch(() => {});
+    void api
+      .takeSettingsFocus()
+      .then((focus) => {
+        if (focus === "cursorLogin") setFocusCursorLogin(true);
+      })
+      .catch(() => {});
     if (discovered) setQuotaProducts(discovered);
     if (nextStatus.status === "fulfilled") setStatus(nextStatus.value);
     if (nextSettings.status === "fulfilled" && settingsEvents.current === eventsBefore) {
@@ -143,6 +160,7 @@ export function SettingsApp() {
     const subs = [
       onSyncState(setSyncState),
       onSettingsUpdated(applyPushedSettings),
+      onCursorLogin(setCursorLogin),
       // The same offer the panel header shows: found at startup, by the daily
       // check or by 「检查更新」 here; withdrawn by a later check (#36).
       followUpdateOffer(
@@ -177,6 +195,21 @@ export function SettingsApp() {
       for (const p of subs) void p.then((un) => un());
     };
   }, [reload, applyPushedSettings]);
+
+  useEffect(() => {
+    if (!focusCursorLogin) return;
+    const row = cursorLoginRef.current;
+    if (!row) return;
+    setFocusCursorLogin(false);
+    row.scrollIntoView({ block: "center" });
+    setHighlightCursorLogin(true);
+  }, [focusCursorLogin, quotaProducts]);
+
+  useEffect(() => {
+    if (!highlightCursorLogin) return;
+    const timer = window.setTimeout(() => setHighlightCursorLogin(false), 1600);
+    return () => window.clearTimeout(timer);
+  }, [highlightCursorLogin]);
 
   // A failure belonged to the offer it tried to install (same rule as the
   // header badge); a newer offer (e.g. found by the daily check after an
@@ -298,6 +331,28 @@ export function SettingsApp() {
       setQuotaError(formatInvokeError(err));
     } finally {
       setQuotaBusy(false);
+    }
+  };
+
+  const runCursorLoginAction = async (kind: "start" | "cancel" | "logout") => {
+    setCursorLogoutError(null);
+    if (kind === "logout") {
+      setCursorLogoutConfirm(true);
+      return;
+    }
+    try {
+      setCursorLogin(await (kind === "start" ? api.startCursorLogin() : api.cancelCursorLogin()));
+    } catch (err) {
+      setCursorLogoutError(formatInvokeError(err));
+    }
+  };
+
+  const logoutCursor = async () => {
+    setCursorLogoutConfirm(false);
+    try {
+      setCursorLogin(await api.logoutCursor());
+    } catch (err) {
+      setCursorLogoutError(formatInvokeError(err));
     }
   };
 
@@ -486,16 +541,41 @@ export function SettingsApp() {
         >
           {quotaProducts
             .filter((product) => product.provider !== "zcode")
-            .map((product) => (
-              <ProductRow
-                key={product.provider}
-                product={product}
-                statusText={statusText(product)}
-                selected={settings?.selectedQuotaProductIds.includes(product.provider) ?? false}
-                disabled={quotaBusy}
-                onToggle={(value) => void toggleQuotaProduct(product.provider, value)}
-              />
-            ))}
+            .map((product) => {
+              const row = (
+                <ProductRow
+                  key={product.provider}
+                  product={product}
+                  statusText={statusText(product)}
+                  selected={settings?.selectedQuotaProductIds.includes(product.provider) ?? false}
+                  disabled={quotaBusy}
+                  onToggle={(value) => void toggleQuotaProduct(product.provider, value)}
+                />
+              );
+              if (product.provider !== "cursor") return row;
+              // Cursor's own sign-in for Vibe Usage sits under its switch: it
+              // serves the quota card and the usage sync alike.
+              return (
+                <div
+                  key={product.provider}
+                  ref={cursorLoginRef}
+                  className="flex flex-col transition-colors duration-500"
+                  style={{ background: highlightCursorLogin ? "rgba(10,132,255,0.14)" : undefined }}
+                >
+                  {row}
+                  {cursorLogin && (
+                    <CursorLoginBlock
+                      status={cursorLogin}
+                      confirmingLogout={cursorLogoutConfirm}
+                      error={cursorLogoutError}
+                      onAction={(kind) => void runCursorLoginAction(kind)}
+                      onConfirmLogout={() => void logoutCursor()}
+                      onCancelLogout={() => setCursorLogoutConfirm(false)}
+                    />
+                  )}
+                </div>
+              );
+            })}
 
           {zCodeProduct && (
             <div className="flex flex-col">
@@ -590,8 +670,10 @@ export function SettingsApp() {
               检测状态仅用于推荐，所有产品都可手动选择；未选择的产品不会联网读取配额。
             </p>
             <p className="text-[10.5px] leading-relaxed" style={{ color: "#8C8C8C" }}>
-              Grok 仅从官方 CLI 普通日志读取结构化订阅配额；Cursor 复用 Cursor 自己的登录读取官方用量汇总，不读取浏览器
-              Cookie。
+              Grok 仅从官方 CLI 普通日志读取结构化订阅配额。
+            </p>
+            <p className="text-[10.5px] leading-relaxed" style={{ color: "#8C8C8C" }}>
+              Cursor 优先用你在这里登录的账号；没登录时读 Cursor 自己保存的登录，读不了就提示登录。不读取浏览器 Cookie。
             </p>
             <p className="text-[10.5px] leading-relaxed" style={{ color: "#8C8C8C" }}>
               Kimi Code 使用其官方 CLI 登录；Antigravity / AGY 使用官方 agy 登录。
@@ -894,6 +976,75 @@ function ProductRow({
         </span>
       </div>
       <Toggle checked={selected} disabled={disabled} onChange={onToggle} />
+    </div>
+  );
+}
+
+/** The Cursor sign-in under its switch: state on the left, one button on the
+ *  right, the grey line below (copy in `lib/cursorLogin`, same as macOS). */
+function CursorLoginBlock({
+  status,
+  confirmingLogout,
+  error,
+  onAction,
+  onConfirmLogout,
+  onCancelLogout,
+}: {
+  status: CursorLoginStatus;
+  confirmingLogout: boolean;
+  error: string | null;
+  onAction: (kind: "start" | "cancel" | "logout") => void;
+  onConfirmLogout: () => void;
+  onCancelLogout: () => void;
+}) {
+  const row = cursorLoginRow(status);
+  if (!row.text && !row.action) return null;
+  const errorText = error ?? row.error;
+  // Signed out: the grey line sits beside 「登录」 instead of under an empty row.
+  const inlineNote = !row.text && row.showNote;
+  return (
+    <div className="flex flex-col gap-1.5 px-3 pb-2.5 pl-[42px]">
+      {confirmingLogout ? (
+        <div className="flex flex-col gap-2">
+          <span className="text-xs leading-relaxed" style={{ color: "#B0B0B0" }}>
+            {CURSOR_LOGOUT_CONFIRM}
+          </span>
+          <div className="flex justify-end gap-2">
+            <SmallButton onClick={onCancelLogout}>取消</SmallButton>
+            <button
+              className="rounded-md bg-red-500 px-3 py-1 text-xs font-medium text-white"
+              onClick={onConfirmLogout}
+            >
+              退出
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="flex items-center gap-2">
+          {inlineNote ? (
+            <span className="min-w-0 grow text-[10.5px]" style={{ color: "#8C8C8C" }}>
+              {CURSOR_LOGIN_NOTE}
+            </span>
+          ) : (
+            <span
+              className={`min-w-0 grow text-xs ${status.state === "waiting" ? "leading-relaxed" : "truncate"}`}
+              style={{ color: "#B0B0B0" }}
+              title={row.text ?? undefined}
+            >
+              {row.text}
+            </span>
+          )}
+          {row.action && (
+            <SmallButton onClick={() => onAction(row.action!.kind)}>{row.action.label}</SmallButton>
+          )}
+        </div>
+      )}
+      {errorText && <span className="text-[11px] text-red-400">{errorText}</span>}
+      {row.showNote && !inlineNote && (
+        <span className="text-[10.5px]" style={{ color: "#8C8C8C" }}>
+          {CURSOR_LOGIN_NOTE}
+        </span>
+      )}
     </div>
   );
 }

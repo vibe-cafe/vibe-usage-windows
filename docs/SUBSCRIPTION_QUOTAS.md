@@ -53,15 +53,26 @@ Codex 付费套餐（Plus / Pro / Prolite / Business / Business ProLite）没有
 - App 这边：窗口可见时 Grok 最多 5 分钟读一次（`rate_limits.rs` 的 `SLOW_MAX_AGE`），手动刷新照样读。出口检测暂停时例外，下一次刷新就重读（`recheck_egress`，见下节），暂停期间 CLI 不启动 Grok，只重新判断出口。
 - **真机待测**：`grok.exe` 的实际安装位置、能否直接启动、超时后进程树收尾（`taskkill /T /F`）。
 
-## Cursor 探测约束（与 macOS 0.7.4 一致）
+## Cursor 探测约束（单独登录：2026-11-25 Hogan 批准，工作区《Cursor-加密凭据-方案》）
 
-2026-11-25 接入，对齐 macOS（vibe-cafe/vibe-usage-app#53）；最初由外部贡献者在 vibe-cafe/vibe-usage-windows#23 实现，这里在最新 main 上只保留了 Cursor 部分。读取全部由 CLI 完成（`quota fetch --product cursor`，CLI 规则见 vibe-cafe/vibe-usage `AGENTS.md`「Subscription quota isolation」）：
+2026-11-25 接入，对齐 macOS（vibe-cafe/vibe-usage-app#53）；最初由外部贡献者在 vibe-cafe/vibe-usage-windows#23 实现，这里在最新 main 上只保留了 Cursor 部分。Cursor 3.27 起把本机登录加密（vibe-cafe/vibe-usage#144），不解密；同日 Hogan 批准「单独登录」：用户在设置里登录一次 Cursor，App 保存这份登录，CLI 用它读用量和额度（CLI vibe-cafe/vibe-usage#210，0.15.10 起）。读取和联网全部由 CLI 完成（`quota fetch --product cursor`，CLI 规则见 vibe-cafe/vibe-usage `AGENTS.md`「Subscription quota isolation」和 Cursor 单独登录的审批记录）：
 
-- **读什么。** CLI 只读 Cursor 自己的 `%APPDATA%\Cursor\User\globalStorage\state.vscdb` 里 `cursorAuth/accessToken` 这一行（`CURSOR_CONFIG_DIR` / `CURSOR_STATE_DB_PATH` 可改位置），在内存里拼成会话 Cookie，请求 `https://cursor.com/api/usage-summary`。不读浏览器 Cookie、不读 refresh token、不续期、不写 Cursor 的库。App 自己不碰 Cursor 的任何文件；「已检测」只看 `~\.cursor`、`%APPDATA%\Cursor`、`Programs\Cursor\Cursor.exe` 和 PATH 上的 `cursor`。
-- **代理。** 和其他 CLI 产品一样经 `sync_engine::cli_command` 注入当下的系统代理（`system_proxy.rs`，`cursor.com` 已在开机代理探测的主机清单里）；CLI 照不了的代理（如只开 SOCKS4）返回 `unsupported`，不发请求。只靠 Windows「自动检测设置」（WPAD）下发代理、没有 PAC 地址和代理变量的网络，`system_proxy.rs` 目前认不出，会按直连（已知缺口，工作区《隐私修复/B块按第6条复查》记为后续；Windows 上的 Cursor 同步原来就走这条路）。Cursor 不在出口检测名单里（名单只有维护者点名的四家），与 macOS 和 CLI 相同。
+- **读什么。** CLI 认登录的顺序：App 经标准输入递来的单独登录（`--cursor-login-stdin`）→ CLI 自己存的 `~/.vibe-usage/cursor-login.json`（只用命令行的用户）→ Cursor 自己 `%APPDATA%\Cursor\User\globalStorage\state.vscdb` 里的 `cursorAuth/accessToken`（只读这一行，不续期、不写 Cursor 的库）。在内存里拼成会话 Cookie，请求 `https://cursor.com/api/usage-summary`。不读浏览器 Cookie。App 自己不碰 Cursor 的任何文件；「已检测」只看 `~\.cursor`、`%APPDATA%\Cursor`、`Programs\Cursor\Cursor.exe` 和 PATH 上的 `cursor`。
+- **单独登录（`services/cursor_login.rs`）。** 设置「订阅配额」里 Cursor 开关下面一行，四种状态：未登录「登录」；等待中「请在浏览器里确认；如果 Cursor 让你去邮箱确认，点完邮件里的链接再回来」+「取消」；已登录显示邮箱（读不到写「Cursor 账号」）+「退出」；已失效「登录已失效」+「重新登录」。下方灰字「以 Cursor 命令行的身份登录，只用来读用量」。文案和 macOS 逐字一致，清单在 `src/lib/cursorLogin.ts`。
+  - **登录**：App 启动 `login cursor --json`。CLI 先输出 `{"event":"open","url":…}`，App 核对地址确实是 `https://cursor.com/loginDeepControl`（https、主机就是 `cursor.com`、没有端口和用户名、路径一致，`is_login_url`），通过才用默认浏览器打开，否则停掉 CLI，显示「登录地址不对，已取消」。登录成功后 CLI 输出 `{"event":"credential",…}`，App 存进凭据管理器；失败时输出 `{"event":"error","code":…}`，App 只认固定代码（`timeout` / `network` / `proxy`，其余算「Cursor 没有完成登录，请重试」），不保留 `message`。「取消」直接结束这个 CLI 和它启动的一切（Job 对象）。App 自己再兜一层 6 分钟上限（CLI 最多等 5 分钟，启动器可能先查 npm）。
+  - **保存**：Windows 凭据管理器里 Vibe Usage 自己的一条 `ai.vibecafe.vibe-usage.windows/cursor/login`（`services/credential_store.rs`，和 ZCode Key 同一套读写，`windows-sys` 的 `Win32_Security_Credentials` 原本就有，只存取我们自己的条目）。只留 CLI 凭据里已知的字段，刷新令牌和访问令牌相同就不重复存。单条上限 2560 字节，超过时分成最多 4 条（`/2`…`/4`），主条目最后写、最先删，读到缺条就当作读不了。
+  - **交给 CLI**：每次 `sync` 和 `quota fetch` 都加 `--cursor-login-stdin`，凭据从标准输入递过去，写完就关；不放进参数和环境变量。App 没有单独登录时不加这个参数，CLI 照旧读 Cursor 本机登录（没被加密的用户体验不变）。
+  - **续期**：离到期（凭据自带的 `expiresAt`，约登录后 60 天）不到 7 天时，在交给 CLI 之前先跑 `login cursor --refresh --json --cursor-login-stdin`：拿到新凭据就存好再用；Cursor 说结束（`{"event":"expired"}`）就判定失效；其他失败 6 小时内不再试，旧凭据没过期就照用。续期一次只跑一个（每续期一次，cursor.com 的 Sessions 里多一条）。
+  - **被拒后**：CLI 对 App 递来的凭据不续期，被 Cursor 拒绝（或已过期）就报 `signIn: expired`（同步里是「Cursor 登录已失效…」那句提示，告警码 `cursor_login_expired`）。App 收到后续期一次：成功就存好，额度这次立刻用新凭据再读一次（同步等下一次）；续期被拒，或者续期后马上又被拒，就判定失效；续期没完成（网络等）卡片显示「登录续期失败」。
+  - **失效**：凭据管理器里只留失效时间和邮箱，令牌删掉。之后每次运行仍递这条不含令牌的记录，CLI 把它当作无法使用的登录：额度报 `signIn: expired`，同步跳过 Cursor，不发任何带登录的请求，也不退回去读 Cursor 本机登录（和 CLI 自己存的失效文件行为一致）。「重新登录」或「退出」后恢复。
+  - **退出**：点「退出」先在同一行展开确认，写明撤销办法（cursor.com 设置的 Sessions 里显示为「Desktop App」，每续期一次多一条，按时间认，别撤正在用的 Cursor 编辑器那条，最多 10 分钟生效；后一句与 CLI `logout cursor` 的提示逐字相同）。确认后删掉凭据管理器里的条目。Cursor 没有公开的注销接口，官网那边的登录留到自然过期或用户自己撤销。
+  - **CLI 支不支持**：设置窗口打开时，App 在后台跑一次 `help --all`，看有没有 `login cursor`；没有（CLI 早于 0.15.10）就不显示「登录」和灰字，已登录或已失效的仍能「退出」。支持的结论记到退出 App，不支持的一小时后再查，查失败下次打开设置再查。
+  - **不进日志**：登录和续期命令的标准输出只在内存里解析，标准错误直接丢弃，不写 `sync.log`、诊断和同步记录。同步本身的输出照旧进 `sync.log`，CLI 保证不在里面打印凭据。
+- **代理。** 和其他 CLI 产品一样经 `sync_engine::cli_command` 注入当下的系统代理（`system_proxy.rs`）。`cursor.com` 和 `api2.cursor.sh`（登录轮询、续期）都在开机代理探测和代理变量的主机清单里，PAC 对这两个主机给出的答案都会交给 CLI。CLI 照不了的代理（如只开 SOCKS4）返回 `unsupported` + `proxyUnsupported`，不发请求；登录时报 `proxy`，设置里显示「无法按你的代理设置连接 Cursor，未发送任何请求」。只靠 Windows「自动检测设置」（WPAD）下发代理、没有 PAC 地址和代理变量的网络，`system_proxy.rs` 目前认不出，会按直连（已知缺口，工作区《隐私修复/B块按第6条复查》记为后续；Windows 上的 Cursor 同步原来就走这条路，登录和续期也受影响）。Cursor 不在出口检测名单里（名单只有维护者点名的四家），登录和续期同样不检测，与 macOS 和 CLI 相同。
 - **卡片。** 一行 `Month`（本计费周期，带时间进度条），按需额度显示为「额外」；Cursor 模型 / 第三方模型各用了多少只放在 `Month` 的悬停提示里（CLI 的 `breakdown`，标签映射 `quota_cli.rs:display_label`，与 macOS `QuotaCLIBridge.displayLabel` 相同）。套餐名在标题旁。悬停提示与 macOS `TooltipView` 一致：标题把 `5h` / `7d` / `Month` 写成「5 小时窗口 / 7 天窗口 / 月度窗口」，每行带「Token 用量」「时间」或「重置」小标签（对所有产品生效，PARITY 第 7 条）。
-- **状态。** 没找到登录（`missing_credentials`）或 cursor.com 拒绝（`unauthorized`）→「请在 Cursor 中重新登录后重试」+ 重试；`retryable_error` →「暂时无法读取订阅配额」+ 重试，CLI 有同一账号的缓存时显示旧数并标「来源：缓存 · 实时读取失败」；`unsupported`（新版 Cursor 把登录加密成 `cursor-safe-storage:`，vibe-cafe/vibe-usage#144；或代理照不了）→ 无数据、没有重试，空态按「空态判定（不猜）」显示「暂未读取到订阅配额数据」。不提示重新登录：重新登录只会写回同样的密文。卡片要说出「已加密」，要等 CLI 的固定原因代码（#190 的 `failureReason`）。**CLI 在加密时不发请求，要等 vibe-cafe/vibe-usage#205 发到 npm；之前的 CLI 会把密文发一次，401 后卡片显示「请在 Cursor 中重新登录后重试」。**
-- **刷新。** 与 Kimi / ZCode / Grok / OpenCode Go 同一批、同样 60 秒间隔（macOS 每个产品 60 秒冷却）。首次启动且本机检测到 Cursor 时默认勾选（维护者 2026-11-08 定，见 CLI `AGENTS.md`）；已经初始化过选择的老用户不会被自动加上。
+- **状态。** CLI 额度结果带 `signIn` 时（只随 `unsupported` 出现）：`required`（本机登录已加密或没有）→「需要登录 Cursor」，`expired`（单独登录被 Cursor 结束）→「Cursor 登录已失效」；两种都没有重试按钮，点整张卡片打开设置并滚到 Cursor 这一行（`open_settings_window` 带 `cursorLogin`，设置窗口显示后取一次）；设置状态列显示「需登录 / 已失效」。只复述 CLI 报的 `signIn`，不猜。旧 CLI 不带这个字段，照旧：本机登录已加密（`credentialsEncrypted`）→「登录信息已加密，暂时读不了」，没找到登录（`missing_credentials`）或 cursor.com 拒绝（`unauthorized`）→「请先登录 Cursor」/「登录已失效，请重新登录」+ 重试。`retryable_error` →「暂时无法读取订阅配额」+ 重试，CLI 有同一账号的缓存时显示旧数并标「来源：缓存 · 实时读取失败」；续期没完成 →「登录续期失败」+ 重试（`loginRefreshFailed`）。CLI 的额度缓存按账号（用户编号的单向哈希）分，续期换凭据不会让缓存失效。
+- **刷新。** 与 Kimi / ZCode / Grok / OpenCode Go 同一批、同样 60 秒间隔（macOS 每个产品 60 秒冷却）。登录、退出或判定失效后，App 丢掉 Cursor 卡片的内存快照并通知面板重读；登录成功后马上同步一次，CLI 从上次成功同步的那周起往回补被跳过的用量（前提是 cursor.com 还留着记录）。首次启动且本机检测到 Cursor 时默认勾选（维护者 2026-11-08 定，见 CLI `AGENTS.md`）；已经初始化过选择的老用户不会被自动加上。
+- **撤回。** CLI 撤掉单独登录时，新版 CLI 必须继续接受 `--cursor-login-stdin`（忽略内容即可）：App 有单独登录时每次都带这个参数，旧版 CLI 不认识它会让整次 `quota fetch` 失败（其他产品的卡片一起报错）。App 撤回时隐藏登录行即可，凭据管理器里的条目留着无害。
 
 ## 出口检测（网络隐私最高原则第 3 条，2026-11-24）
 
@@ -80,6 +91,8 @@ Codex 付费套餐（Plus / Pro / Prolite / Business / Business ProLite）没有
 | `periodEnded` | Grok「账期已结束 · 用一次 Grok 后更新」，AGY「额度已重置 · 下次读取时更新」，其他产品「上个周期已结束」 | 待更新 |
 | `noLocalRecord` | Grok「暂无记录 · 用一次 Grok 后更新」，AGY「用过 Antigravity 后显示」，其他产品「本机暂无记录」 | 无记录 |
 | 应用本地的 `nonessentialTrafficDisabled` | 组织策略关闭了 Claude Code 非必要流量 · 无法读取 | 已禁止 |
+
+Cursor 另有 CLI 的 `signIn`（`required` / `expired`），卡片显示「需要登录 Cursor」/「Cursor 登录已失效」，设置显示「需登录 / 已失效」，见上文「Cursor 探测约束」。
 
 CLI 的六种空态代码见 `quota_cli.rs`。字段缺失、为 `null` 或代码未知时，桥接层保留 `None`。
 
@@ -104,7 +117,7 @@ CLI 是独立版本的依赖：应用不再内置 CLI 快照，每次都通过 `
 
 设置窗口订阅 `rate-limits-updated` 后，通过只读命令 `get_cached_rate_limits` 取得面板内存快照与刷新状态。再次打开时读回当前缓存。面板刷新开始时事件载荷为 `null`，刷新结束后为面板收到的同一份快照列表。事件只更新设置窗口的显示。
 
-产品已启用且刷新结束，才显示最近结果的短词，例如「未读取」「无数据」「需登录」「已失效」「需打开」「超时」。有额度条且未暂停，或产品关闭、正在刷新、没有快照时，显示「已检测 / 未检测到」。ZCode 平时按当前区域显示「待配置 / 已配置」，读取报告缺少或拒绝 Key 时显示「需 Key / Key 无效」。Cursor 保留待接入提示。完整短词与卡片文案见 `src/lib/quotaProducts.ts`。
+产品已启用且刷新结束，才显示最近结果的短词，例如「未读取」「无数据」「需登录」「已失效」「需打开」「超时」。有额度条且未暂停，或产品关闭、正在刷新、没有快照时，显示「已检测 / 未检测到」。ZCode 平时按当前区域显示「待配置 / 已配置」，读取报告缺少或拒绝 Key 时显示「需 Key / Key 无效」。Cursor 的 CLI 要求登录时显示「需登录 / 已失效」；单独登录本身的状态在开关下面那一行。完整短词与卡片文案见 `src/lib/quotaProducts.ts`。
 
 ## 缓存和失败处理
 
@@ -120,7 +133,7 @@ Credential Manager 读取失败只影响 ZCode，其他产品仍可请求。CLI 
 2. 在旧请求尚未结束时切换区域/Key，确认旧返回不覆盖新上下文；同时验证设置窗与托盘面板的显示一致性。
 3. 模拟 ZCode 凭据库读取失败，确认另一个已选产品仍能返回；验证失败后不会继续把过期配额显示为成功。
 4. 使用固定 CLI 验证 Kimi/ZCode/Grok/OpenCode Go 的正常、无数据和失败状态，以及旧设置迁移、首次推荐、空选择和「选择第三项后仍保留前两项」；OpenCode Go 另需用没有 Go 订阅的 Key 复测 403 对应的未订阅空态。Antigravity / AGY 另需复测：agy 只装在默认位置 `%LOCALAPPDATA%\agy\bin`、不在 App 的 PATH 上时仍能读到 5h / 7d；agy 和桌面端都没装时显示「请安装 agy 或 Antigravity」，登录被拒时显示「请在 Antigravity 中登录」。2026-11-24 起另需复测：只装桌面端、桌面端开着时能读（第二步）；桌面端关着时能读（第三步，确认 `resources\app\package.json` 或 `resources\app.asar` 存在，否则这一步不会启动）；agy 登录失效时不弹浏览器；不用 Antigravity 时窗口一直开着，5 分钟后 `~\.vibe-usage\antigravity-quota.json` 的 `attemptAt` 不变。
-5. Cursor：登录了 Cursor（明文凭据）时能读到 `Month`，悬停能看到 Cursor 模型 / 第三方模型；退出 Cursor 登录后卡片显示「请先登录 Cursor」、不显示旧额度；换账号后不显示前一个账号的数；凭据已加密（`cursor-safe-storage:`）时显示「登录信息已加密，暂时读不了」、没有重试按钮（要用带 vibe-cafe/vibe-usage#205、#207 的 CLI）；系统代理开着时请求走代理。
+5. Cursor：登录了 Cursor（明文凭据）时能读到 `Month`，悬停能看到 Cursor 模型 / 第三方模型；退出 Cursor 登录后卡片显示「请先登录 Cursor」、不显示旧额度；换账号后不显示前一个账号的数；凭据已加密（`cursor-safe-storage:`）时显示「登录信息已加密，暂时读不了」、没有重试按钮（要用带 vibe-cafe/vibe-usage#205、#207 的 CLI）；系统代理开着时请求走代理。2026-11-26 起另需复测单独登录（要 CLI 0.15.10，真实账号由维护者当次同意）：见 `docs/WINDOWS_ACCEPTANCE.md`「Cursor 单独登录」。
 6. 重跑生命周期准入测试：关闭准入前子进程可运行，关闭后确有 Job 限额拒绝；继续验证取消、退出、无关 Node 存活、忙时立即卸载和升级。
 
 本地 Rust 测试覆盖缓存失效、旧请求回写、请求/响应集合校验及凭据错误隔离；Mac 的通过不替代以上 Windows 实测。账户条件不满足记为 BLOCKED；ZCode Key 由用户在 GUI 输入。

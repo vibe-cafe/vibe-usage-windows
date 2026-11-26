@@ -1,6 +1,6 @@
 # macOS ↔ Windows 对齐说明 (Parity Notes)
 
-本项目以 `vibe-usage-app`（macOS, SwiftUI）为功能与视觉基准。本文档记录 1:1 对齐的映射关系与少数平台差异，最近一次按 macOS 0.8.0（`5d786c6`）核对是 2026-11-25；文中写明「Windows 尚未跟进」的，是两端还没对齐的部分。
+本项目以 `vibe-usage-app`（macOS, SwiftUI）为功能与视觉基准。本文档记录 1:1 对齐的映射关系与少数平台差异，最近一次按 macOS 0.8.0（`5d786c6`）核对是 2026-11-25（Cursor 单独登录按同期的 macOS 实现和《Cursor-加密凭据-方案》第 3 节文案，2026-11-26）；文中写明「Windows 尚未跟进」的，是两端还没对齐的部分。
 
 ## 视觉常量（源自 Swift 源码，落在 `tailwind.config.cjs`）
 
@@ -47,7 +47,7 @@
 | `SyncEngine`（内置 Node 跑 `cli-bootstrap.mjs`，120s） | `services/sync_engine.rs`（内置 Node 跑同一份 `cli-bootstrap.mjs`，120s，CREATE_NO_WINDOW） |
 | 设置中的隔离运行时目录（Codex / Grok / Antigravity） | 原生文件夹选择器 + 同一组 CLI `config roots/add-root/remove-root` 命令 |
 | `SyncScheduler`（30 分钟） | `services/scheduler.rs` |
-| 八产品订阅配额目录与任意数量选择 | Codex / Claude 原生适配；Kimi / ZCode / Grok / OpenCode Go / Antigravity / AGY 使用版本化 typed CLI bridge（OpenCode Go 的凭据读取由内置 CLI 负责：2.x 凭据表 → 1.x `auth.json` 回退；Antigravity 由 CLI 启动用户已登录的 `agy` 读取，Windows 额外查官方默认安装位置，见 `docs/SUBSCRIPTION_QUOTAS.md`「Antigravity / AGY 探测约束」）；Cursor 同样走 CLI（`quota fetch --product cursor`，与 macOS 0.7.4 起一致，见 `docs/SUBSCRIPTION_QUOTAS.md`「Cursor 探测约束」） |
+| 八产品订阅配额目录与任意数量选择 | Codex / Claude 原生适配；Kimi / ZCode / Grok / OpenCode Go / Antigravity / AGY 使用版本化 typed CLI bridge（OpenCode Go 的凭据读取由内置 CLI 负责：2.x 凭据表 → 1.x `auth.json` 回退；Antigravity 由 CLI 启动用户已登录的 `agy` 读取，Windows 额外查官方默认安装位置，见 `docs/SUBSCRIPTION_QUOTAS.md`「Antigravity / AGY 探测约束」）；Cursor 同样走 CLI（`quota fetch --product cursor`，与 macOS 0.7.4 起一致；有单独登录时凭据经标准输入递给 CLI，见 `docs/SUBSCRIPTION_QUOTAS.md`「Cursor 探测约束」） |
 | `RateLimitCardView`：`QuotaTabStripView`（整目录图标 Tab：已开启的单色图形在前、未开启的变灰在后、可拖动排序、最右齿轮进设置、已启用但非 ok 加琥珀点）+ 一行两张 240px 卡片横滑，Tab 与横滑双向联动（点 Tab 滑过去、滑动时高亮跟随前缘卡片）；卡片只属于已启用产品，全部关闭时只剩图标行 | `components/RateLimitCard.tsx` + `components/QuotaTabStrip.tsx`：同一模型（HTML5 拖放排序、前缘卡片经滚动位置判定、`quotaTabOrder` 顺序与 `quotaProductOrder` 持久化、齿轮调 `open_settings_window`） |
 | `RateLimitCardView.allRows` 的 Codex 5h 占位行（`fiveHourNotEnforced` 或 Pro / Prolite →「不限额」，否则「近 5 小时无活动」；维护者 2026-10-24 定）与 `expectsFiveHourWindow` | `lib/quotaProducts.ts:codexFiveHourPlaceholder` / `expectsCodexFiveHour`（同一规则；Windows 原先显示「官方当前未启用」，已对齐） |
 | `RateLimitCardView.emptyStateText` / `authorizationText` | `lib/quotaProducts.ts:quotaEmptyStateText` / `quotaAuthorizationText`。六种 CLI 空态、登录缺失与失效、首次占位和未知原因的卡片文案逐字对齐。 |
@@ -55,6 +55,7 @@
 | `RateLimitCardView.header`（名称旁琥珀色「重置券 ×N」小胶囊；卡片底部不写「数据截至 N 分钟前」，维护者 2026-10-24 删掉，嫌吵） | `RateLimitCard.tsx` 的 `ProviderCard` 同样；Windows 只在数字来自 Claude 桌面端记录（可能落后于账号）时，在底部多写一行「记录时间」，macOS 没有这一行 |
 | `ProviderGlyph` / `RateLimitCardView.ProviderIcon`（Lobe Icons 单色图形，八家都有，包括 Antigravity / AGY；绘制尺寸 `size × 18 / 22` 再乘各家的填充比例；设置表格里 22 的格子画 18，未开启再降到 72% 不透明度） | `components/ProviderIcon.tsx`（同一份 SVG 路径数据和比例，`fill-rule: evenodd`；Lobe Icons 的 MIT 声明在 `THIRD_PARTY_NOTICES.md`，和 macOS 一样随安装包分发） |
 | ZCode 两区域 Key | BigModel / Z.ai 分开存入 Windows Credential Manager；只向明确选择的区域请求注入 |
+| Cursor 单独登录（设置里 Cursor 一行：登录 / 等待（含邮箱确认提示）/ 邮箱 + 退出 / 已失效 + 重新登录，灰字「以 Cursor 命令行的身份登录，只用来读用量」；Vibe Usage 自己的钥匙串条目；每次启动 CLI 用 `--cursor-login-stdin` 递凭据；到期前 7 天 `login cursor --refresh`；卡片 `signIn` 两个空态点开设置。2026-11-25 维护者批准，macOS 由同期 PR 实现） | `services/cursor_login.rs`（登录、续期、被拒后续期一次、失效、退出、检查 CLI 支不支持）+ `services/credential_store.rs`（Credential Manager 读写，和 ZCode 共用；条目 `ai.vibecafe.vibe-usage.windows/cursor/login`，超过单条 2560 字节时分条）+ `lib/cursorLogin.ts`（文案与 macOS 逐字一致）+ `RateLimitCard.tsx`（`signIn` 空态，整张卡片打开设置的 Cursor 一行）。见 `docs/SUBSCRIPTION_QUOTAS.md`「Cursor 探测约束」 |
 | `RuntimeDetector` | `crates/core/runtime.rs`（Windows 路径 + 捆绑 node 兜底） |
 | `CodexRateLimitReader` | `crates/core/rate_limit/codex.rs` |
 | `ClaudeUsageProbe`（Claude Code stdio `get_usage` 探测）+ `ClaudeUsageCache` | `src-tauri/src/services/claude_usage.rs`（探测参数与请求体与 macOS 逐项一致，见 `docs/SUBSCRIPTION_QUOTAS.md`「Claude 探测约束」）+ `crates/core/claude_code.rs`（候选程序：与 `discoverBinaries` 一样查 PATH，npm 的 `claude.cmd` 解析到它调用的 `claude.exe` / `cli.js`，不经 cmd.exe；macOS 最后还会试 Claude Desktop 自带的 Claude Code，Windows 尚无此项）+ `crates/core/rate_limit/claude_desktop.rs`（Desktop 记录；macOS 也读桌面端的 `plan-usage-history.json`，Windows 另要处理多处安装位置：`%APPDATA%\Claude`、MSIX 包的 `Packages\Claude_<后缀>\LocalCache\Roaming\Claude` 和 2026-11 起的 `%LOCALAPPDATA%\Claude-Data\claude_<后缀>`，同一包后缀的新旧目录算一份安装，见 `docs/SUBSCRIPTION_QUOTAS.md`） |
@@ -64,7 +65,7 @@
 | Sparkle | `services/updater.rs`（latest.json + SHA-256 + NSIS 被动模式覆盖升级，见 `docs/WINDOWS_UPDATE.md`） |
 | `SMAppService`（登录项） | `auto-launch` crate（HKCU Run 注册表键，值带 `--autostart`；带它启动时窗口照常出现；设了代理（含 PAC 暂时取不到）、有同步或配额要读时，读配额和每一次同步（手动的也算）都等到代理就绪——应用自己的代理变量，或同步服务器、各厂商主机的系统路由（含 PAC）指向的端口能连上——最多等 2 分钟，等待期间配额卡显示「正在读取」；一个代理都没设就不等，四家厂商的读取改由出口检测把关，与 macOS `LoginLaunch` 对齐；旧注册值在启动时补上参数，不碰任务管理器的启用开关） |
 | `EgressCheck`（没检测到代理时，先匿名检测出口国家再读 Codex、Claude；设置「隐私保护 → 没检测到代理时」三选一（自动判断（推荐）/ 暂停读取 / 照常读取），转给 CLI 检测 Antigravity） | `src-tauri/src/egress_check.rs`（同样的检测主机、地区、缓存时长和文案；网卡地址用 `GetAdaptersAddresses` 求摘要；设置在「隐私保护」分区，同样的弹出菜单（`MenuSelect`，自绘、对齐 macOS 原生弹出菜单），存为 `settings.json` 的 `egressMode`（开发时的两个旧字段读入时映射）；环境变量 `VIBE_USAGE_EGRESS_CHECK=1|0` / `VIBE_USAGE_REQUIRE_PROXY=1|0`） |
-| `SystemProxy`（按网址解析系统代理，PAC 由系统求值，交给 CLI、Claude Code 和厂商请求） | `src-tauri/src/system_proxy.rs`（注册表手动代理含按协议分开的写法和例外列表、PAC 由 WinHTTP 求值；reqwest 每次请求现解析；CLI 和 Claude 探测按同一份系统代理拿变量，Claude Code 只拿 HTTP 代理；系统把 Claude 的主机交给 SOCKS、Claude Code 又拿不到 HTTP 代理时，Windows 不启动 Claude Code、卡片暂停，Mac 用本机中转 `ClaudeSOCKSRelay` 照常读取，Windows 待做） |
+| `SystemProxy`（按网址解析系统代理，PAC 由系统求值，交给 CLI、Claude Code 和厂商请求） | `src-tauri/src/system_proxy.rs`（注册表手动代理含按协议分开的写法和例外列表、PAC 由 WinHTTP 求值；CLI 的主机清单含 Cursor 登录用的 `api2.cursor.sh`；reqwest 每次请求现解析；CLI 和 Claude 探测按同一份系统代理拿变量，Claude Code 只拿 HTTP 代理；系统把 Claude 的主机交给 SOCKS、Claude Code 又拿不到 HTTP 代理时，Windows 不启动 Claude Code、卡片暂停，Mac 用本机中转 `ClaudeSOCKSRelay` 照常读取，Windows 待做） |
 
 ## 平台差异（有意为之）
 

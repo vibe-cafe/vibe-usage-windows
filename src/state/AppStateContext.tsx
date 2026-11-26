@@ -14,6 +14,7 @@ import {
 import {
   api,
   onPanelShown,
+  onCursorLogin,
   onSettingsUpdated,
   onSyncState,
   onUpdateAvailable,
@@ -471,6 +472,11 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         setSettings(nextSettings);
         setRateLimits([]);
         void api.getZCodeCredentialStatus().then(setZCodeCredentialStatus).catch(() => {});
+        void refreshRateLimits(false);
+      }),
+      // Signed in or out of Cursor, or Cursor ended the sign-in: the backend
+      // dropped the Cursor card, so this reads it again.
+      onCursorLogin(() => {
         void refreshRateLimits(false);
       }),
       onPanelShown(() => {

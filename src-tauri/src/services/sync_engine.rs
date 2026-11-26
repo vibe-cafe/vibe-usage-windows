@@ -148,6 +148,13 @@ pub(super) fn quota_command(
     cli_command(app, &borrowed)
 }
 
+/// The Cursor sign-in commands (`services::cursor_login`): same runtime,
+/// directories, surface and proxy as a sync. What they print is the sign-in
+/// itself, so callers never log it.
+pub(super) fn cursor_login_command(app: &AppHandle, args: &[&str]) -> Result<tokio::process::Command, String> {
+    cli_command(app, args)
+}
+
 /// `doctor --json` for 「复制诊断信息」, with the same runtime, directories,
 /// surface and proxy as a sync (`services::cli_doctor`).
 pub(super) fn doctor_command(app: &AppHandle) -> Result<tokio::process::Command, String> {
@@ -343,8 +350,16 @@ impl CliRun {
     }
 }
 
+/// The CLI's notice when the Cursor sign-in it was handed has ended
+/// (`LOGIN_EXPIRED_NOTICE`, CLI `src/parsers/cursor.js`; its warning code
+/// `cursor_login_expired` matches the same words).
+const CURSOR_LOGIN_ENDED: &str = "Cursor 登录已失效";
+
 async fn run_cli_sync(app: &AppHandle) -> CliRun {
-    let mut cmd = match cli_command(app, &["sync"]) {
+    // The app's own Cursor sign-in, renewed first when due, goes on stdin.
+    let cursor = crate::services::cursor_login::for_cli(app).await;
+    let args: &[&str] = if cursor.is_some() { &["sync", "--cursor-login-stdin"] } else { &["sync"] };
+    let mut cmd = match cli_command(app, args) {
         Ok(cmd) => cmd,
         Err(e) => {
             return CliRun::failed(
@@ -355,6 +370,9 @@ async fn run_cli_sync(app: &AppHandle) -> CliRun {
         }
     };
 
+    if cursor.is_some() {
+        cmd.stdin(Stdio::piped());
+    }
     let (mut child, _process_guard) = match crate::process_lifecycle::spawn(&mut cmd) {
         Ok(spawned) => spawned,
         Err(e) => {
@@ -368,6 +386,7 @@ async fn run_cli_sync(app: &AppHandle) -> CliRun {
     };
     let stdout_pipe = child.stdout.take();
     let stderr_pipe = child.stderr.take();
+    let stdin_write = write_stdin(child.stdin.take(), cursor.as_ref().map(|handover| handover.input.clone()));
 
     // Read both pipes concurrently with waiting so the child never blocks on
     // a full pipe buffer.
@@ -375,7 +394,7 @@ async fn run_cli_sync(app: &AppHandle) -> CliRun {
 
     let combined = tokio::select! {
         res = async {
-            let (io, status) = tokio::join!(io_task, child.wait());
+            let (_, io, status) = tokio::join!(stdin_write, io_task, child.wait());
             (io, status)
         } => res,
         _ = tokio::time::sleep(SYNC_TIMEOUT) => {
@@ -400,6 +419,17 @@ async fn run_cli_sync(app: &AppHandle) -> CliRun {
     let stdout = stdout.trim().to_string();
     let stderr = stderr.trim().to_string();
     write_sync_log(app, &status, &stdout, &stderr);
+    // Cursor rejected the sign-in (or it lapsed): renew it once in the
+    // background; Cursor refusing that ends it. The next sync reads again and
+    // the CLI fills the skipped weeks.
+    if let Some(handover) = cursor.filter(|handover| handover.is_live()) {
+        if stdout.contains(CURSOR_LOGIN_ENDED) || stderr.contains(CURSOR_LOGIN_ENDED) {
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                crate::services::cursor_login::after_rejection(&app, &handover).await;
+            });
+        }
+    }
     // The launcher's notice that it ran a cached CLI is not the CLI's output:
     // only its stage is kept, and nothing below may read it as the run's error.
     let cli_fallback = sync_history::launcher_fallback(&stderr);
@@ -518,6 +548,17 @@ fn cli_exit_detail(exit_code: i32, final_line: &str, output: &str) -> String {
         "连不上同步服务器".into()
     } else {
         format!("退出码 {exit_code}")
+    }
+}
+
+/// Hand `input` to the child's stdin and close it (`--cursor-login-stdin`
+/// reads to the end). Nothing to write: stdin was never opened.
+async fn write_stdin(stdin: Option<tokio::process::ChildStdin>, input: Option<Vec<u8>>) {
+    use tokio::io::AsyncWriteExt;
+    if let (Some(mut stdin), Some(input)) = (stdin, input) {
+        // A CLI that exits without reading says so in its own output.
+        let _ = stdin.write_all(&input).await;
+        let _ = stdin.shutdown().await;
     }
 }
 

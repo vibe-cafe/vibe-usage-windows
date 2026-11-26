@@ -417,8 +417,25 @@ export interface ProviderRateLimit {
   fetchedAt?: number | null;
   fiveHourNotEnforced?: boolean;
   resetCreditsCount?: number | null;
+  /** Cursor only: the CLI asks to offer the app's own sign-in. */
+  signIn?: RateLimitSignIn | null;
   status: RateLimitStatus;
 }
+
+/** `required`: Cursor's local login is encrypted or absent; `expired`: the
+ *  sign-in this app keeps was ended by Cursor (CLI vibe-cafe/vibe-usage#210). */
+export type RateLimitSignIn = "required" | "expired";
+
+/** The settings row for the Cursor sign-in (`services::cursor_login`). */
+export interface CursorLoginStatus {
+  state: "signedOut" | "waiting" | "signedIn" | "expired";
+  email?: string;
+  /** Whether the CLI offers `login cursor`; null until known. */
+  supported: boolean | null;
+  error?: CursorLoginError;
+}
+
+export type CursorLoginError = "timeout" | "network" | "proxy" | "failed" | "badUrl" | "saveFailed";
 
 export type QuotaProductAvailability = "ready" | "pendingProtocol";
 

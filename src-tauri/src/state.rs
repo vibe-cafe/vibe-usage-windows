@@ -159,6 +159,11 @@ pub struct AppCtx {
     /// (`system_proxy::wait_for_launch_proxy`): quota reads and syncs wait for
     /// it (`wait_launch_network`). True otherwise.
     pub launch_network: tokio::sync::watch::Sender<bool>,
+    /// The Cursor sign-in this app keeps (`services::cursor_login`).
+    pub cursor_login: crate::services::cursor_login::CursorLogin,
+    /// Where the settings window should scroll when it next shows (the
+    /// Cursor card's sign-in prompt asks for its row), taken once.
+    pub settings_focus: Mutex<Option<String>>,
 }
 
 impl AppCtx {
@@ -231,6 +236,8 @@ impl AppCtx {
             update_info: Mutex::new(None),
             tray_stats: Mutex::new(None),
             launch_network: tokio::sync::watch::channel(true).0,
+            cursor_login: Default::default(),
+            settings_focus: Mutex::new(None),
         }
     }
 

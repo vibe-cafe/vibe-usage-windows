@@ -6,6 +6,7 @@ import type { DiagnosticsReport } from "./diagnostics";
 import {
   AppSettings,
   AppStatus,
+  CursorLoginStatus,
   ExtraRoots,
   ProviderRateLimit,
   QuotaProduct,
@@ -49,6 +50,14 @@ export const api = {
   setZCodeApiKey: (region: ZCodeQuotaRegion, apiKey: string | null) =>
     invoke<ProviderRateLimit[]>("set_zcode_api_key", { region, apiKey }),
 
+  // Cursor sign-in --------------------------------------------------------------
+  /** Also asks the CLI whether it offers the sign-in; the answer arrives
+   *  with `cursor-login-updated`. */
+  getCursorLogin: () => invoke<CursorLoginStatus>("get_cursor_login"),
+  startCursorLogin: () => invoke<CursorLoginStatus>("start_cursor_login"),
+  cancelCursorLogin: () => invoke<CursorLoginStatus>("cancel_cursor_login"),
+  logoutCursor: () => invoke<CursorLoginStatus>("logout_cursor"),
+
   // Settings ------------------------------------------------------------------
   getSettings: () => invoke<AppSettings>("get_settings"),
   setSettings: (settings: AppSettings) => invoke<void>("set_settings", { settings }),
@@ -63,7 +72,10 @@ export const api = {
 
   // Windows / shell -------------------------------------------------------------
   openExternal: (url: string) => invoke<void>("open_external", { url }),
-  openSettingsWindow: () => invoke<void>("open_settings_window"),
+  /** `focus`: scroll the settings to that part once shown. */
+  openSettingsWindow: (focus?: SettingsFocus) =>
+    invoke<void>("open_settings_window", focus ? { focus } : {}),
+  takeSettingsFocus: () => invoke<SettingsFocus | null>("take_settings_focus"),
   hidePanel: () => invoke<void>("hide_panel"),
   quitApp: () => invoke<void>("quit_app"),
   exportTestDiagnostics: (destination: string) =>
@@ -79,7 +91,15 @@ export const api = {
   installUpdate: () => invoke<void>("install_update"),
 };
 
+export type SettingsFocus = "cursorLogin";
+
 // Events --------------------------------------------------------------------
+
+/** The Cursor sign-in changed: signed in or out, waiting, ended, or the CLI's
+ *  support became known. */
+export function onCursorLogin(handler: (status: CursorLoginStatus) => void): Promise<UnlistenFn> {
+  return listen<CursorLoginStatus>("cursor-login-updated", (e) => handler(e.payload));
+}
 
 export type DeviceLinkEvent =
   | { status: "success" }

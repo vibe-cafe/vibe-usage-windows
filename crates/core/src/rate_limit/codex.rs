@@ -51,6 +51,7 @@ pub fn read_from(sessions_dir: &Path, now: f64) -> ProviderRateLimit {
             five_hour_not_enforced: false,
             reset_credits_count: None,
             empty_reason: None,
+            sign_in: None,
             status: RateLimitStatus::Ok,
         };
     }

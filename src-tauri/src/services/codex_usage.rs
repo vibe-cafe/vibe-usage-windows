@@ -311,6 +311,7 @@ fn parse_usage_response(root: &Value, now: f64) -> Option<ProviderRateLimit> {
         fetched_at: Some(now),
         reset_credits_count,
         empty_reason,
+        sign_in: None,
         status,
     })
 }
