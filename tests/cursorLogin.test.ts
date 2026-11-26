@@ -22,7 +22,7 @@ const status = (extra: Partial<CursorLoginStatus>): CursorLoginStatus => ({
 describe("Cursor sign-in row (plan §3, same words as macOS)", () => {
   it("shows the four states with their one button", () => {
     expect(cursorLoginRow(status({}))).toEqual({
-      text: null,
+      text: "未登录",
       action: { label: "登录", kind: "start" },
       secondary: null,
       error: null,

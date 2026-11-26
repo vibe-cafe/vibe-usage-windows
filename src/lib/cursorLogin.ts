@@ -82,8 +82,10 @@ export function cursorLoginRow(status: CursorLoginStatus): CursorLoginRow {
         : { text: "登录已失效", action: { label: "退出", kind: "logout" }, secondary: null, error };
     case "signedOut":
     default:
+      // A state, like the email or 「登录已失效」 in the same place (maintainer,
+      // 2026-11-26); hidden with the button when the CLI cannot sign in.
       return {
-        text: null,
+        text: offered ? "未登录" : null,
         action: offered ? { label: "登录", kind: "start" } : null,
         secondary: null,
         error: offered ? error : null,
