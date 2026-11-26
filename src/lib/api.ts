@@ -95,10 +95,16 @@ export type SettingsFocus = "cursorLogin";
 
 // Events --------------------------------------------------------------------
 
-/** The Cursor sign-in changed: signed in or out, waiting, ended, or the CLI's
- *  support became known. */
+/** The Cursor sign-in row changed: signed in or out, waiting, an error,
+ *  ended, or the CLI's support became known. */
 export function onCursorLogin(handler: (status: CursorLoginStatus) => void): Promise<UnlistenFn> {
   return listen<CursorLoginStatus>("cursor-login-updated", (e) => handler(e.payload));
+}
+
+/** The kept sign-in itself changed (signed in, signed out, ended by Cursor);
+ *  the backend dropped the Cursor card. */
+export function onCursorLoginChanged(handler: () => void): Promise<UnlistenFn> {
+  return listen("cursor-login-changed", () => handler());
 }
 
 export type DeviceLinkEvent =

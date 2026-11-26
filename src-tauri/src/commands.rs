@@ -310,11 +310,19 @@ pub async fn set_zcode_api_key(
 
 // -- Cursor sign-in (`services::cursor_login`) ------------------------------------
 
-/// The settings row's state. Also asks the CLI, in the background, whether it
-/// offers the sign-in; the answer arrives with `cursor-login-updated`.
+/// The settings row's state. While the settings window is on screen, also
+/// asks the CLI in the background whether it offers the sign-in (the answer
+/// arrives with `cursor-login-updated`); the hidden window preloaded at
+/// startup does not, so nothing runs before the user opens Settings.
 #[tauri::command]
 pub fn get_cursor_login(app: AppHandle) -> cursor_login::LoginStatus {
-    cursor_login::check_support(&app);
+    let shown = app
+        .get_webview_window("settings")
+        .and_then(|window| window.is_visible().ok())
+        .unwrap_or(false);
+    if shown {
+        cursor_login::check_support(&app);
+    }
     cursor_login::status(&app)
 }
 

@@ -249,7 +249,7 @@ impl EgressRegion {
 }
 
 /// The CLI asks the app to offer its own Cursor sign-in (`signIn`, CLI
-/// vibe-cafe/vibe-usage#210): Cursor's local login is encrypted or absent
+/// vibe-cafe/vibe-usage#210): Cursor's local login is encrypted
 /// (`required`), or the sign-in this app keeps was ended by Cursor
 /// (`expired`). Only ever repeats what the CLI reported.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

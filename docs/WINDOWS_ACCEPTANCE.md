@@ -183,7 +183,7 @@ Do not mark full acceptance passed: report each remaining gap and prerequisite.
 2. 点「登录」：默认浏览器打开 `https://cursor.com/loginDeepControl?…`（页面标题「Sign in to Cursor CLI」）；这一行变成「请在浏览器里确认；如果 Cursor 让你去邮箱确认，点完邮件里的链接再回来」+「取消」。确认（需要时去邮箱点链接）后 5 分钟内变成邮箱 +「退出」，随后自动同步一次。
 3. 再点一次「登录」后点「取消」：这一行回到「登录」，任务管理器里没有残留的、属于 Vibe Usage 的 `node.exe`。
 4. 控制面板 → 凭据管理器 → Windows 凭据 → 普通凭据：只多出 `ai.vibecafe.vibe-usage.windows/cursor/login`（凭据长时还有 `/2`），没有动别的条目。Windows 安全中心（Defender）全程没有提示。
-5. 本机 Cursor 已加密或没登录的情况下，Cursor 额度卡片能读到 `Month`；本机 Cursor 已加密且没有单独登录时，卡片显示「需要登录 Cursor」，点整张卡片打开设置并滚到 Cursor 这一行（短暂高亮）。
+5. 本机 Cursor 已加密或没登录的情况下，单独登录后 Cursor 额度卡片能读到 `Month`；本机 Cursor 已加密且没有单独登录时，卡片显示「需要登录 Cursor」，点整张卡片打开设置并滚到 Cursor 这一行（短暂高亮）。
 6. 日志：登录、同步、刷新额度之后，在 `%LOCALAPPDATA%\ai.vibecafe.vibe-usage.windows\logs\sync.log` 里搜 `accessToken`、`refreshToken`、`eyJ`（令牌开头），都搜不到。「复制诊断信息」的内容里也没有。
 7. 代理：开着 Clash 的系统代理（再测一次 PAC 模式），Clash 的连接列表里能看到 `cursor.com`、`api2.cursor.sh` 走代理；把系统代理指到一个没人监听的端口再点「登录」，显示「连不上 Cursor，请检查网络和代理后重试」或「无法按你的代理设置连接 Cursor，未发送任何请求」，没有直连（关掉代理软件后防火墙或路由器日志里没有这两个主机的直连）。
 8. 撤销：在 cursor.com 撤销这条「Desktop App」后最多 10 分钟，下一次读取时卡片显示「Cursor 登录已失效」，设置这一行显示「登录已失效」+「重新登录」；之后 Clash 里不再出现发往 `cursor.com`、`api2.cursor.sh` 的新连接。

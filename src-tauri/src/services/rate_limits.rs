@@ -2,7 +2,7 @@
 //! place; Kimi/ZCode/Grok use the versioned vendored-CLI contract.
 
 use crate::services::{claude_usage, codex_usage, quota_cli, test_diagnostics};
-use crate::state::AppCtx;
+use crate::state::{AppCtx, CacheGeneration};
 use serde::Serialize;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
@@ -84,7 +84,7 @@ fn recheck_egress(snapshot: &ProviderRateLimit) -> bool {
     )
 }
 
-fn store_snapshot(app: &AppHandle, snapshot: ProviderRateLimit, generation: u64) {
+fn store_snapshot(app: &AppHandle, snapshot: ProviderRateLimit, generation: CacheGeneration) {
     app.state::<AppCtx>()
         .rate_limits
         .lock()
@@ -111,7 +111,7 @@ pub async fn get_rate_limits(app: &AppHandle, force: bool) -> Vec<ProviderRateLi
     let (region, generation) = {
         let settings = ctx.settings.lock().unwrap();
         let cache = ctx.rate_limits.lock().unwrap();
-        (settings.z_code_quota_region, cache.zcode_generation())
+        (settings.z_code_quota_region, cache.generation())
     };
     // The egress-check settings as they are right before each product's read.
     let egress = || app.state::<AppCtx>().settings.lock().unwrap().egress();

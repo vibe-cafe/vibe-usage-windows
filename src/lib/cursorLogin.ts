@@ -15,7 +15,7 @@ export const CURSOR_LOGIN_WAITING = "请在浏览器里确认；如果 Cursor �
  *  lists this sign-in as 「Desktop App」, one more per renewal, and a
  *  revocation takes up to 10 minutes. */
 export const CURSOR_LOGOUT_CONFIRM =
-  "退出后不再读取 Cursor 用量。Cursor 官网上的这条登录可在 cursor.com 设置的 Sessions 里撤销：它显示为「Desktop App」（每续期一次多一条，按时间认，别撤正在用的 Cursor 编辑器那条），最多 10 分钟生效。";
+  "退出只删除 Vibe Usage 保存的这份登录；Cursor 本机的登录还能读时，仍会照旧读取用量。Cursor 官网上的这条登录可在 cursor.com 设置的 Sessions 里撤销：它显示为「Desktop App」（每续期一次多一条，按时间认，别撤正在用的 Cursor 编辑器那条），最多 10 分钟生效。";
 
 export interface CursorLoginRow {
   /** Left of the button; null leaves only the button. */

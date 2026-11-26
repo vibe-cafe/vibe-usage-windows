@@ -14,7 +14,7 @@ import {
 import {
   api,
   onPanelShown,
-  onCursorLogin,
+  onCursorLoginChanged,
   onSettingsUpdated,
   onSyncState,
   onUpdateAvailable,
@@ -476,7 +476,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       }),
       // Signed in or out of Cursor, or Cursor ended the sign-in: the backend
       // dropped the Cursor card, so this reads it again.
-      onCursorLogin(() => {
+      onCursorLoginChanged(() => {
         void refreshRateLimits(false);
       }),
       onPanelShown(() => {

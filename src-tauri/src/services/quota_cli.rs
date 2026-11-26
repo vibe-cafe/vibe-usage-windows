@@ -194,10 +194,13 @@ pub async fn fetch(
     };
     let mut answers = run(app, &providers, zcode_key.as_deref(), region, cursor.as_ref()).await?;
     if let Some(handover) = cursor.filter(Handover::is_live) {
-        if let Some(index) = answers.iter().position(|snapshot| {
+        match answers.iter().position(|snapshot| {
             snapshot.provider == RateLimitProvider::Cursor && snapshot.sign_in == Some(RateLimitSignIn::Expired)
         }) {
-            answers[index] = after_cursor_rejection(app, region, handover, answers[index].clone()).await;
+            Some(index) => {
+                answers[index] = after_cursor_rejection(app, region, handover, answers[index].clone()).await;
+            }
+            None => cursor_login::read_ok(app, &handover),
         }
     }
     snapshots.extend(answers);
@@ -223,6 +226,8 @@ async fn after_cursor_rejection(
                     if snapshot.sign_in == Some(RateLimitSignIn::Expired) {
                         // Rejected right after renewal: ended.
                         cursor_login::after_rejection(app, &next).await;
+                    } else {
+                        cursor_login::read_ok(app, &next);
                     }
                     snapshot
                 }

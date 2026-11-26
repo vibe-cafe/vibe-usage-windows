@@ -1091,7 +1091,7 @@ mod tests {
             .unwrap()
         };
         let mut cache = crate::state::RateLimitCache::default();
-        let generation = cache.zcode_generation();
+        let generation = cache.generation();
         let shown = |cache: &crate::state::RateLimitCache| {
             cache.snapshots[&RateLimitProvider::ClaudeCode].0.clone()
         };

@@ -428,6 +428,8 @@ async fn run_cli_sync(app: &AppHandle) -> CliRun {
             tauri::async_runtime::spawn(async move {
                 crate::services::cursor_login::after_rejection(&app, &handover).await;
             });
+        } else {
+            crate::services::cursor_login::read_ok(app, &handover);
         }
     }
     // The launcher's notice that it ran a cached CLI is not the CLI's output:

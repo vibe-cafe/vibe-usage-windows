@@ -67,7 +67,9 @@ describe("Cursor sign-in row (plan §3, same words as macOS)", () => {
     expect(cursorLoginRow(status({ state: "waiting", error: "timeout" })).error).toBeNull();
   });
 
-  it("explains where to revoke before signing out", () => {
+  it("explains what signing out does and where to revoke", () => {
+    // Only this sign-in goes: Cursor's own local login, when readable, is still read.
+    expect(CURSOR_LOGOUT_CONFIRM).toMatch(/^退出只删除 Vibe Usage 保存的这份登录；Cursor 本机的登录还能读时，仍会照旧读取用量。/);
     expect(CURSOR_LOGOUT_CONFIRM).toContain("cursor.com 设置的 Sessions 里撤销");
     expect(CURSOR_LOGOUT_CONFIRM).toContain("「Desktop App」");
     expect(CURSOR_LOGOUT_CONFIRM).toContain("每续期一次多一条");

@@ -422,7 +422,7 @@ export interface ProviderRateLimit {
   status: RateLimitStatus;
 }
 
-/** `required`: Cursor's local login is encrypted or absent; `expired`: the
+/** `required`: Cursor's local login is encrypted; `expired`: the
  *  sign-in this app keeps was ended by Cursor (CLI vibe-cafe/vibe-usage#210). */
 export type RateLimitSignIn = "required" | "expired";
 

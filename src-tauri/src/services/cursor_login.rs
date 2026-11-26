@@ -26,7 +26,6 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
-use vibe_core::RateLimitProvider;
 
 const TARGET: &str = "ai.vibecafe.vibe-usage.windows/cursor/login";
 /// One entry holds 2560 bytes. A sign-in is two JWTs plus a few fields,
@@ -48,7 +47,13 @@ const UNSUPPORTED_RECHECK: Duration = Duration::from_secs(60 * 60);
 /// The page the CLI asks to open, checked before the browser opens
 /// (`is_login_url`).
 const LOGIN_PATH: &str = "/loginDeepControl";
+/// Anything the settings row shows changed (waiting, an error, the CLI's
+/// support became known).
 pub const EVENT: &str = "cursor-login-updated";
+/// The kept sign-in itself changed (signed in, signed out, ended): the panel
+/// reads the Cursor card again. Not sent for the rest, so opening Settings
+/// never makes a hidden panel read quotas.
+pub const CHANGED_EVENT: &str = "cursor-login-changed";
 
 // --- Storage ------------------------------------------------------------------
 
@@ -288,9 +293,10 @@ pub struct CursorLogin {
     flow_ids: AtomicU64,
     error: Mutex<Option<LoginError>>,
     held_until: Mutex<Option<Instant>>,
-    /// The token a renewal produced right after Cursor rejected the one
-    /// before (a digest). Rejected again, the sign-in has ended.
-    renewed_after_rejection: Mutex<Option<String>>,
+    /// The token the last renewal produced (a digest), until a read with it
+    /// went through. Rejected before that, the sign-in has ended: renewing
+    /// again would only add another session on cursor.com.
+    fresh_from_renewal: Mutex<Option<String>>,
     supported: Mutex<Option<(bool, Instant)>>,
     checking_support: AtomicBool,
 }
@@ -337,7 +343,11 @@ impl CursorLogin {
     fn reset_after_sign_in_or_out(&self) {
         *self.error.lock().unwrap() = None;
         *self.held_until.lock().unwrap() = None;
-        *self.renewed_after_rejection.lock().unwrap() = None;
+        *self.fresh_from_renewal.lock().unwrap() = None;
+    }
+
+    fn mark_fresh(&self, map: &Map<String, Value>) {
+        *self.fresh_from_renewal.lock().unwrap() = Some(token_digest(map));
     }
 }
 
@@ -355,13 +365,9 @@ fn emit_status(app: &AppHandle) {
 /// The sign-in changed: the Cursor card is read again (with the new state),
 /// and both windows hear of it.
 fn after_change(app: &AppHandle) {
-    app.state::<AppCtx>()
-        .rate_limits
-        .lock()
-        .unwrap()
-        .snapshots
-        .remove(&RateLimitProvider::Cursor);
+    app.state::<AppCtx>().rate_limits.lock().unwrap().invalidate_cursor();
     emit_status(app);
+    let _ = app.emit(CHANGED_EVENT, ());
 }
 
 // --- What a CLI run gets ----------------------------------------------------------
@@ -419,17 +425,33 @@ pub async fn for_cli(app: &AppHandle) -> Option<Handover> {
     match refresh(app, &map).await {
         Refresh::Renewed(next) => match login.write(&SystemVault, Some(generation), Some(&next)) {
             // Not saved: this run still uses it; the old one keeps working.
-            Write::Done | Write::Failed => Some(Handover::live(next)),
+            Write::Done | Write::Failed => {
+                login.mark_fresh(&next);
+                Some(Handover::live(next))
+            }
             Write::Stale => Handover::of(load_stored(&SystemVault)),
         },
         Refresh::Ended => {
             end(app, generation, &map);
             Handover::of(load_stored(&SystemVault))
         }
+        // Signed in or out meanwhile: the current state decides, and the
+        // hold is not put on a sign-in it was not about.
+        Refresh::Retry if login.generation() != generation => Handover::of(load_stored(&SystemVault)),
         Refresh::Retry => {
             login.hold();
             Some(Handover::live(map))
         }
+    }
+}
+
+/// A read with `handover` went through (the CLI did not report it ended).
+pub fn read_ok(app: &AppHandle, handover: &Handover) {
+    let Some(map) = handover.credential.as_ref() else { return };
+    let login = &app.state::<AppCtx>().cursor_login;
+    let mut fresh = login.fresh_from_renewal.lock().unwrap();
+    if fresh.as_deref() == Some(token_digest(map).as_str()) {
+        *fresh = None;
     }
 }
 
@@ -465,7 +487,7 @@ pub async fn after_rejection(app: &AppHandle, passed: &Handover) -> AfterRejecti
         return AfterRejection::Renewed(Handover::live(map));
     }
     let digest = token_digest(&map);
-    if login.renewed_after_rejection.lock().unwrap().as_deref() == Some(digest.as_str()) {
+    if login.fresh_from_renewal.lock().unwrap().as_deref() == Some(digest.as_str()) {
         end(app, generation, &map);
         return AfterRejection::Ended;
     }
@@ -473,25 +495,31 @@ pub async fn after_rejection(app: &AppHandle, passed: &Handover) -> AfterRejecti
         return AfterRejection::Retry;
     }
     match refresh(app, &map).await {
-        Refresh::Renewed(next) => {
-            *login.renewed_after_rejection.lock().unwrap() = Some(token_digest(&next));
-            match login.write(&SystemVault, Some(generation), Some(&next)) {
-                Write::Done | Write::Failed => AfterRejection::Renewed(Handover::live(next)),
-                Write::Stale => match Handover::of(load_stored(&SystemVault)) {
-                    Some(handover) if handover.is_live() => AfterRejection::Renewed(handover),
-                    Some(_) => AfterRejection::Ended,
-                    None => AfterRejection::Gone,
-                },
+        Refresh::Renewed(next) => match login.write(&SystemVault, Some(generation), Some(&next)) {
+            Write::Done | Write::Failed => {
+                login.mark_fresh(&next);
+                AfterRejection::Renewed(Handover::live(next))
             }
-        }
+            Write::Stale => current_after_change(),
+        },
         Refresh::Ended => {
             end(app, generation, &map);
             AfterRejection::Ended
         }
+        Refresh::Retry if login.generation() != generation => current_after_change(),
         Refresh::Retry => {
             login.hold();
             AfterRejection::Retry
         }
+    }
+}
+
+/// Signed in, out or ended while a renewal ran: answer from what is kept now.
+fn current_after_change() -> AfterRejection {
+    match Handover::of(load_stored(&SystemVault)) {
+        Some(handover) if handover.is_live() => AfterRejection::Renewed(handover),
+        Some(_) => AfterRejection::Ended,
+        None => AfterRejection::Gone,
     }
 }
 
