@@ -337,7 +337,9 @@ export function SettingsApp() {
   const runCursorLoginAction = async (kind: "start" | "cancel" | "logout") => {
     setCursorLogoutError(null);
     if (kind === "logout") {
-      setCursorLogoutConfirm(true);
+      // An ended sign-in has nothing left on cursor.com to revoke: remove it.
+      if (cursorLogin?.state === "expired") void logoutCursor();
+      else setCursorLogoutConfirm(true);
       return;
     }
     try {
@@ -1033,6 +1035,15 @@ function CursorLoginBlock({
             >
               {row.text}
             </span>
+          )}
+          {row.secondary && (
+            <button
+              className="shrink-0 text-xs underline-offset-2 hover:underline"
+              style={{ color: "#9E9E9E" }}
+              onClick={() => onAction(row.secondary!.kind)}
+            >
+              {row.secondary.label}
+            </button>
           )}
           {row.action && (
             <SmallButton onClick={() => onAction(row.action!.kind)}>{row.action.label}</SmallButton>

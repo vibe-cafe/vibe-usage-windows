@@ -477,6 +477,9 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       // Signed in or out of Cursor, or Cursor ended the sign-in: the backend
       // dropped the Cursor card, so this reads it again.
       onCursorLoginChanged(() => {
+        // The card drawn for the previous sign-in goes at once, not when the
+        // new read returns; the other cards stay.
+        setRateLimits((current) => current.filter((snapshot) => snapshot.provider !== "cursor"));
         void refreshRateLimits(false);
       }),
       onPanelShown(() => {

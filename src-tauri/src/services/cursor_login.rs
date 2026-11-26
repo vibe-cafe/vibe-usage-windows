@@ -685,7 +685,11 @@ async fn run_login(app: AppHandle, id: u64) {
         }
         *flow = None;
     }
-    after_change(&app);
+    if signed_in {
+        after_change(&app);
+    } else {
+        emit_status(&app);
+    }
     if signed_in {
         // Read Cursor now; the CLI fills the weeks it skipped.
         crate::services::sync_engine::run_sync(app.clone(), crate::services::sync_history::SyncTrigger::Manual).await;

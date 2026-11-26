@@ -187,20 +187,15 @@ pub async fn fetch(
     }
 
     // The app's own Cursor sign-in, renewed first when due, goes on stdin.
-    let cursor = if providers.contains(&RateLimitProvider::Cursor) {
-        cursor_login::for_cli(app).await
-    } else {
-        None
-    };
-    let mut answers = run(app, &providers, zcode_key.as_deref(), region, cursor.as_ref()).await?;
+    let cursor = if providers.contains(&RateLimitProvider::Cursor) { CursorInput::Pick } else { CursorInput::None };
+    let (mut answers, cursor) = run(app, &providers, zcode_key.as_deref(), region, cursor).await?;
     if let Some(handover) = cursor.filter(Handover::is_live) {
-        match answers.iter().position(|snapshot| {
-            snapshot.provider == RateLimitProvider::Cursor && snapshot.sign_in == Some(RateLimitSignIn::Expired)
-        }) {
-            Some(index) => {
+        if let Some(index) = answers.iter().position(|snapshot| snapshot.provider == RateLimitProvider::Cursor) {
+            if answers[index].sign_in == Some(RateLimitSignIn::Expired) {
                 answers[index] = after_cursor_rejection(app, region, handover, answers[index].clone()).await;
+            } else if cursor_accepted(&answers[index]) {
+                cursor_login::read_ok(app, &handover);
             }
-            None => cursor_login::read_ok(app, &handover),
         }
     }
     snapshots.extend(answers);
@@ -220,13 +215,13 @@ async fn after_cursor_rejection(
 ) -> ProviderRateLimit {
     match cursor_login::after_rejection(app, &handover).await {
         AfterRejection::Renewed(next) => {
-            match run(app, &[RateLimitProvider::Cursor], None, region, Some(&next)).await {
-                Ok(mut again) => {
+            match run(app, &[RateLimitProvider::Cursor], None, region, CursorInput::Given(&next)).await {
+                Ok((mut again, _)) => {
                     let snapshot = again.remove(0);
                     if snapshot.sign_in == Some(RateLimitSignIn::Expired) {
                         // Rejected right after renewal: ended.
                         cursor_login::after_rejection(app, &next).await;
-                    } else {
+                    } else if cursor_accepted(&snapshot) {
                         cursor_login::read_ok(app, &next);
                     }
                     snapshot
@@ -244,15 +239,36 @@ async fn after_cursor_rejection(
     }
 }
 
-/// One `quota fetch` for `providers`. The ZCode key goes in its region's
-/// variable, the Cursor sign-in on stdin; neither in an argument.
+/// Cursor answered with this sign-in: a live read, with or without a window.
+/// A cached answer, a pause or a failed request says nothing about it.
+fn cursor_accepted(snapshot: &ProviderRateLimit) -> bool {
+    snapshot.sign_in.is_none()
+        && snapshot.live_failure.is_none()
+        && match snapshot.status {
+            RateLimitStatus::Ok => snapshot.source == Some(RateLimitSource::Live),
+            RateLimitStatus::NoData => true,
+            _ => false,
+        }
+}
+
+/// Which Cursor sign-in a `quota fetch` hands over.
+enum CursorInput<'a> {
+    None,
+    /// The kept one, picked right before the start (`cursor_login::for_cli`).
+    Pick,
+    Given(&'a Handover),
+}
+
+/// One `quota fetch` for `providers`, and the Cursor sign-in it was handed.
+/// The ZCode key goes in its region's variable, the Cursor sign-in on stdin;
+/// neither in an argument.
 async fn run(
     app: &AppHandle,
     providers: &[RateLimitProvider],
     zcode_key: Option<&str>,
     region: ZCodeQuotaRegion,
-    cursor: Option<&Handover>,
-) -> Result<Vec<ProviderRateLimit>, FetchError> {
+    cursor: CursorInput<'_>,
+) -> Result<(Vec<ProviderRateLimit>, Option<Handover>), FetchError> {
     let mut args = vec!["quota".to_string(), "fetch".to_string()];
     for provider in providers {
         args.push("--product".into());
@@ -263,9 +279,6 @@ async fn run(
         );
     }
     args.push("--json".into());
-    if cursor.is_some() {
-        args.push("--cursor-login-stdin".into());
-    }
 
     let mut command =
         sync_engine::quota_command(app, &args).map_err(|_| FetchError::RuntimeUnavailable)?;
@@ -276,7 +289,17 @@ async fn run(
     if let Some(key) = zcode_key {
         command.env(region.environment_key(), key);
     }
-    let output = match cursor {
+    // Picked once the command is ready (reading the proxy, PAC included, can
+    // take seconds) and right before the start, so a sign-out meanwhile holds.
+    let cursor = match cursor {
+        CursorInput::None => None,
+        CursorInput::Pick => cursor_login::for_cli(app).await,
+        CursorInput::Given(handover) => Some(handover.clone()),
+    };
+    if cursor.is_some() {
+        command.arg("--cursor-login-stdin");
+    }
+    let output = match &cursor {
         Some(handover) => {
             tokio::time::timeout(TIMEOUT, crate::process_lifecycle::output_with_input(&mut command, &handover.input)).await
         }
@@ -287,7 +310,7 @@ async fn run(
     if !output.status.success() {
         return Err(FetchError::ProcessFailure);
     }
-    decode(&output.stdout, providers)
+    Ok((decode(&output.stdout, providers)?, cursor))
 }
 
 fn isolate_credential_failure(
@@ -670,6 +693,26 @@ mod tests {
         let json = serde_json::to_value(&expired).unwrap();
         assert_eq!(json["signIn"], "expired");
         assert!(serde_json::to_value(product("cursor", "")).unwrap().get("signIn").is_none());
+    }
+
+    #[test]
+    fn only_a_live_answer_shows_cursor_took_the_sign_in() {
+        let cursor = |extra: &str| {
+            let payload = format!(
+                r#"{{"schemaVersion":1,"products":[{{"id":"cursor","fetchedAt":"2026-11-26T00:00:00.000Z"{extra}}}]}}"#
+            );
+            decode(payload.as_bytes(), &[RateLimitProvider::Cursor]).unwrap().remove(0)
+        };
+        let month = r#","meters":[{"id":"plan","label":"Month","utilization":48}]"#;
+        assert!(cursor_accepted(&cursor(&format!(r#","status":"ok","source":"live"{month}"#))));
+        // Answered, without a window.
+        assert!(cursor_accepted(&cursor(r#","status":"no_data","source":"live""#)));
+        // A cached answer after a failed request, a failed request, a pause or a
+        // sign-in request say nothing about whether Cursor took it.
+        assert!(!cursor_accepted(&cursor(&format!(r#","status":"ok","source":"cache"{month}"#))));
+        assert!(!cursor_accepted(&cursor(r#","status":"retryable_error","source":"live","failureReason":"unreachable""#)));
+        assert!(!cursor_accepted(&cursor(r#","status":"unsupported","source":"live","pauseReason":"proxyUnsupported""#)));
+        assert!(!cursor_accepted(&cursor(r#","status":"unsupported","failureReason":"credentialsRejected","signIn":"expired""#)));
     }
 
     #[test]

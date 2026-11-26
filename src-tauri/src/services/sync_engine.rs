@@ -354,12 +354,12 @@ impl CliRun {
 /// (`LOGIN_EXPIRED_NOTICE`, CLI `src/parsers/cursor.js`; its warning code
 /// `cursor_login_expired` matches the same words).
 const CURSOR_LOGIN_ENDED: &str = "Cursor 登录已失效";
+/// Every Cursor warning or error the CLI prints during a sync starts so
+/// (`  cursor: …`, `src/sync.js`).
+const CURSOR_NOTICE: &str = "cursor: ";
 
 async fn run_cli_sync(app: &AppHandle) -> CliRun {
-    // The app's own Cursor sign-in, renewed first when due, goes on stdin.
-    let cursor = crate::services::cursor_login::for_cli(app).await;
-    let args: &[&str] = if cursor.is_some() { &["sync", "--cursor-login-stdin"] } else { &["sync"] };
-    let mut cmd = match cli_command(app, args) {
+    let mut cmd = match cli_command(app, &["sync"]) {
         Ok(cmd) => cmd,
         Err(e) => {
             return CliRun::failed(
@@ -370,8 +370,12 @@ async fn run_cli_sync(app: &AppHandle) -> CliRun {
         }
     };
 
+    // The app's own Cursor sign-in, renewed first when due, goes on stdin.
+    // Picked once the command is ready (reading the proxy, PAC included, can
+    // take seconds) and right before the start, so a sign-out meanwhile holds.
+    let cursor = crate::services::cursor_login::for_cli(app).await;
     if cursor.is_some() {
-        cmd.stdin(Stdio::piped());
+        cmd.arg("--cursor-login-stdin").stdin(Stdio::piped());
     }
     let (mut child, _process_guard) = match crate::process_lifecycle::spawn(&mut cmd) {
         Ok(spawned) => spawned,
@@ -428,7 +432,8 @@ async fn run_cli_sync(app: &AppHandle) -> CliRun {
             tauri::async_runtime::spawn(async move {
                 crate::services::cursor_login::after_rejection(&app, &handover).await;
             });
-        } else {
+        } else if status.success() && !stderr.contains(CURSOR_NOTICE) {
+            // Cursor answered without a word of trouble: the sign-in works.
             crate::services::cursor_login::read_ok(app, &handover);
         }
     }

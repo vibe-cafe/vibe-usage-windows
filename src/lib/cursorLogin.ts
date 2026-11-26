@@ -17,11 +17,16 @@ export const CURSOR_LOGIN_WAITING = "请在浏览器里确认；如果 Cursor �
 export const CURSOR_LOGOUT_CONFIRM =
   "退出只删除 Vibe Usage 保存的这份登录；Cursor 本机的登录还能读时，仍会照旧读取用量。Cursor 官网上的这条登录可在 cursor.com 设置的 Sessions 里撤销：它显示为「Desktop App」（每续期一次多一条，按时间认，别撤正在用的 Cursor 编辑器那条），最多 10 分钟生效。";
 
+export type CursorLoginAction = { label: string; kind: "start" | "cancel" | "logout" };
+
 export interface CursorLoginRow {
   /** Left of the button; null leaves only the button. */
   text: string | null;
   /** null: no button (the CLI does not offer the sign-in). */
-  action: { label: string; kind: "start" | "cancel" | "logout" } | null;
+  action: CursorLoginAction | null;
+  /** A quieter second button: an ended sign-in can also just be removed, so
+   *  the CLI goes back to Cursor's own local login. */
+  secondary: CursorLoginAction | null;
   error: string | null;
   /** The grey line is shown with the sign-in button. */
   showNote: boolean;
@@ -54,26 +59,37 @@ export function cursorLoginRow(status: CursorLoginStatus): CursorLoginRow {
   const error = status.error ? cursorLoginErrorText(status.error) : null;
   switch (status.state) {
     case "waiting":
-      return { text: CURSOR_LOGIN_WAITING, action: { label: "取消", kind: "cancel" }, error: null, showNote: true };
+      return {
+        text: CURSOR_LOGIN_WAITING,
+        action: { label: "取消", kind: "cancel" },
+        secondary: null,
+        error: null,
+        showNote: true,
+      };
     case "signedIn":
       return {
         text: status.email ?? "Cursor 账号",
         action: { label: "退出", kind: "logout" },
+        secondary: null,
         error,
         showNote: offered,
       };
     case "expired":
-      return {
-        text: "登录已失效",
-        action: offered ? { label: "重新登录", kind: "start" } : { label: "退出", kind: "logout" },
-        error,
-        showNote: offered,
-      };
+      return offered
+        ? {
+            text: "登录已失效",
+            action: { label: "重新登录", kind: "start" },
+            secondary: { label: "退出", kind: "logout" },
+            error,
+            showNote: true,
+          }
+        : { text: "登录已失效", action: { label: "退出", kind: "logout" }, secondary: null, error, showNote: false };
     case "signedOut":
     default:
       return {
         text: null,
         action: offered ? { label: "登录", kind: "start" } : null,
+        secondary: null,
         error: offered ? error : null,
         showNote: offered,
       };

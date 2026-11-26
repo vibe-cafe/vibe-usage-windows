@@ -24,6 +24,7 @@ describe("Cursor sign-in row (plan §3, same words as macOS)", () => {
     expect(cursorLoginRow(status({}))).toEqual({
       text: null,
       action: { label: "登录", kind: "start" },
+      secondary: null,
       error: null,
       showNote: true,
     });
@@ -39,6 +40,8 @@ describe("Cursor sign-in row (plan §3, same words as macOS)", () => {
     expect(cursorLoginRow(status({ state: "expired", email: "someone@example.com" }))).toMatchObject({
       text: "登录已失效",
       action: { label: "重新登录", kind: "start" },
+      // An ended sign-in can also just be removed (back to Cursor's local login).
+      secondary: { label: "退出", kind: "logout" },
     });
   });
 
