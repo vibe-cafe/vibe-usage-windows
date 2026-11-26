@@ -435,7 +435,15 @@ export interface CursorLoginStatus {
   error?: CursorLoginError;
 }
 
-export type CursorLoginError = "timeout" | "network" | "proxy" | "failed" | "badUrl" | "saveFailed";
+export type CursorLoginError =
+  | "timeout"
+  | "network"
+  | "proxy"
+  | "failed"
+  | "badUrl"
+  | "saveFailed"
+  | "proxyChanged"
+  | "runtime";
 
 export type QuotaProductAvailability = "ready" | "pendingProtocol";
 

@@ -45,6 +45,12 @@ const FRESH_WINDOW: Duration = Duration::from_secs(60 * 60);
 const LOGIN_DEADLINE: Duration = Duration::from_secs(6 * 60);
 const REFRESH_TIMEOUT: Duration = Duration::from_secs(60);
 const SUPPORT_TIMEOUT: Duration = Duration::from_secs(30);
+/// While waiting for the browser, how often the sign-in's routes are read
+/// again (`route_changed`).
+const ROUTE_CHECK: Duration = Duration::from_secs(3);
+/// The hosts the sign-in's own requests reach: `api2.cursor.sh` waits for the
+/// confirmation, `cursor.com` reads the account email.
+const SIGN_IN_HOSTS: [&str; 2] = ["api2.cursor.sh", "cursor.com"];
 /// A CLI without `login cursor` is asked again after this long.
 const UNSUPPORTED_RECHECK: Duration = Duration::from_secs(60 * 60);
 /// The page the CLI asks to open, checked before the browser opens
@@ -254,6 +260,10 @@ pub enum LoginError {
     Failed,
     BadUrl,
     SaveFailed,
+    /// The system proxy changed while waiting for the browser.
+    ProxyChanged,
+    /// No Node.js (or Bun) to run the CLI with.
+    Runtime,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -724,11 +734,40 @@ async fn run_login(app: AppHandle, id: u64) {
     }
 }
 
+/// The routes the system gives the sign-in's hosts now (manual proxy or PAC),
+/// or None when the app's own proxy variables decide (they do not change).
+fn sign_in_routes() -> Option<Vec<(String, crate::system_proxy::Route)>> {
+    let lookup = |name: &str| std::env::var(name).ok();
+    if crate::system_proxy::has_own_proxy(&lookup) {
+        return None;
+    }
+    Some(crate::system_proxy::live_routes(&crate::system_proxy::host_urls(&SIGN_IN_HOSTS)))
+}
+
+/// The system now sends one of the sign-in's hosts another way (a proxy
+/// switched on or off, or another one). A PAC that cannot answer right now is
+/// no change: the CLI keeps what it was given, which never goes direct.
+fn route_changed(
+    before: &[(String, crate::system_proxy::Route)],
+    now: &[(String, crate::system_proxy::Route)],
+) -> bool {
+    before.len() != now.len()
+        || before
+            .iter()
+            .zip(now)
+            .any(|((_, was), (_, is))| *is != crate::system_proxy::Route::Unresolved && was != is)
+}
+
 async fn sign_in(app: &AppHandle) -> Outcome {
     use tokio::io::AsyncBufReadExt;
     let Ok(mut command) = sync_engine::cursor_login_command(app, &["login", "cursor", "--json"]) else {
-        return Outcome::Error(LoginError::Failed);
+        // The launcher is part of the app; what can be missing is Node.js.
+        return Outcome::Error(if sync_engine::cli_entry(app).is_some() { LoginError::Runtime } else { LoginError::Failed });
     };
+    // The CLI follows the proxy it was started with for up to 5 minutes. The
+    // user may switch theirs on while the browser asks (Cursor's page did not
+    // load, say); then this attempt stops instead of going on the old way.
+    let routes = tauri::async_runtime::spawn_blocking(sign_in_routes).await.ok().flatten();
     // Never kept: the sign-in comes back on stdout.
     command.stdin(Stdio::null()).stderr(Stdio::null());
     let Ok((mut child, _guard)) = crate::process_lifecycle::spawn(&mut command) else {
@@ -739,20 +778,36 @@ async fn sign_in(app: &AppHandle) -> Outcome {
     };
     let mut lines = tokio::io::BufReader::new(stdout).lines();
     let mut opened = false;
-    while let Ok(Some(line)) = lines.next_line().await {
-        match parse_login_event(&line) {
-            Some(LoginEvent::Open(url)) if !opened => {
-                if !is_login_url(&url) {
-                    return Outcome::Error(LoginError::BadUrl);
+    let mut check = tokio::time::interval(ROUTE_CHECK);
+    check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    check.tick().await;
+    loop {
+        tokio::select! {
+            line = lines.next_line() => {
+                let Ok(Some(line)) = line else { break };
+                match parse_login_event(&line) {
+                    Some(LoginEvent::Open(url)) if !opened => {
+                        if !is_login_url(&url) {
+                            return Outcome::Error(LoginError::BadUrl);
+                        }
+                        if crate::process_utils::shell_open(&url).is_err() {
+                            return Outcome::Error(LoginError::Failed);
+                        }
+                        opened = true;
+                    }
+                    Some(LoginEvent::Credential(map)) if opened => return Outcome::Credential(map),
+                    Some(LoginEvent::Error(error)) => return Outcome::Error(error),
+                    _ => {}
                 }
-                if crate::process_utils::shell_open(&url).is_err() {
-                    return Outcome::Error(LoginError::Failed);
-                }
-                opened = true;
             }
-            Some(LoginEvent::Credential(map)) if opened => return Outcome::Credential(map),
-            Some(LoginEvent::Error(error)) => return Outcome::Error(error),
-            _ => {}
+            _ = check.tick(), if routes.is_some() => {
+                let now = tauri::async_runtime::spawn_blocking(sign_in_routes).await.ok().flatten();
+                if let (Some(before), Some(now)) = (routes.as_deref(), now.as_deref()) {
+                    if route_changed(before, now) {
+                        return Outcome::Error(LoginError::ProxyChanged);
+                    }
+                }
+            }
         }
     }
     // Returning drops the child and its job: nothing it started keeps running.
@@ -1012,6 +1067,22 @@ mod tests {
         assert_eq!(view(&Stored::Unreadable, false, None, None).state, LoginState::Expired);
         let json = serde_json::to_value(view(&Stored::None, false, None, None)).unwrap();
         assert_eq!(json, serde_json::json!({"state": "signedOut", "supported": null}));
+    }
+
+    #[test]
+    fn a_new_route_for_a_sign_in_host_stops_the_attempt() {
+        use crate::system_proxy::Route;
+        let routes = |api: Route, web: Route| vec![("api2.cursor.sh".to_string(), api), ("cursor.com".to_string(), web)];
+        let direct = routes(Route::Direct, Route::Direct);
+        let proxied = routes(Route::Http("http://127.0.0.1:7890".into()), Route::Http("http://127.0.0.1:7890".into()));
+        assert!(!route_changed(&direct, &direct));
+        // Switched on, off, or to another proxy, for either host.
+        assert!(route_changed(&direct, &proxied));
+        assert!(route_changed(&proxied, &direct));
+        assert!(route_changed(&direct, &routes(Route::Direct, Route::Socks("127.0.0.1:7891".into()))));
+        assert!(route_changed(&proxied, &routes(Route::Http("http://127.0.0.1:7890".into()), Route::Http("http://10.0.0.2:3128".into()))));
+        // A PAC that cannot answer this moment is not a change.
+        assert!(!route_changed(&proxied, &routes(Route::Unresolved, Route::Unresolved)));
     }
 
     #[test]

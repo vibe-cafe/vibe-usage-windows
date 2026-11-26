@@ -66,6 +66,9 @@ describe("Cursor sign-in row (plan §3, same words as macOS)", () => {
     expect(cursorLoginErrorText("failed")).toBe("Cursor 没有完成登录，请重试");
     expect(cursorLoginErrorText("badUrl")).toBe("登录地址不对，已取消");
     expect(cursorLoginErrorText("saveFailed")).toBe("登录成功，但没能保存，请重试");
+    // Same words as macOS (its extra cases, 2026-11-26).
+    expect(cursorLoginErrorText("proxyChanged")).toBe("代理设置变了，请重新登录");
+    expect(cursorLoginErrorText("runtime")).toBe("没有可用的 Node.js 或 Bun");
     // Waiting again hides it (the backend drops it too).
     expect(cursorLoginRow(status({ state: "waiting", error: "timeout" })).error).toBeNull();
   });

@@ -44,6 +44,10 @@ export function cursorLoginErrorText(error: CursorLoginError): string {
       return "登录地址不对，已取消";
     case "saveFailed":
       return "登录成功，但没能保存，请重试";
+    case "proxyChanged":
+      return "代理设置变了，请重新登录";
+    case "runtime":
+      return "没有可用的 Node.js 或 Bun";
     case "failed":
     default:
       return "Cursor 没有完成登录，请重试";
