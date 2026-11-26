@@ -165,6 +165,11 @@ fn initial_quota_selection(
     let eligible = products
         .iter()
         .filter(|product| product.provider != RateLimitProvider::ZCode || zcode_configured)
+        // Antigravity is never turned on for the user (maintainer 2026-11-26):
+        // Google does not support third-party quota reads on personal plans, so
+        // reading it is left to the user's own switch. This runs only before the
+        // selection is initialized; an existing selection is kept as it is.
+        .filter(|product| product.provider != RateLimitProvider::Antigravity)
         .cloned()
         .collect::<Vec<_>>();
     quota_product::initial_selection(&eligible)
@@ -579,6 +584,25 @@ mod tests {
         assert_eq!(
             initial_quota_selection(&products, false),
             vec![RateLimitProvider::KimiCode, RateLimitProvider::Grok]
+        );
+    }
+
+    #[test]
+    fn detected_antigravity_is_not_turned_on_at_first_launch() {
+        let ready = |provider| QuotaProduct {
+            provider,
+            display_name: "fixture",
+            availability: QuotaProductAvailability::Ready,
+            is_detected: true,
+        };
+        let products = vec![
+            ready(RateLimitProvider::Codex),
+            ready(RateLimitProvider::Antigravity),
+            ready(RateLimitProvider::Cursor),
+        ];
+        assert_eq!(
+            initial_quota_selection(&products, true),
+            vec![RateLimitProvider::Codex, RateLimitProvider::Cursor]
         );
     }
 }

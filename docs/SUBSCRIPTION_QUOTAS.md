@@ -6,7 +6,7 @@
 
 Codex 付费套餐（Plus / Pro / Prolite / Business / Business ProLite）没有拿到 5h 窗口时，卡片仍保留 5h 这一行并说明原因，规则与 macOS 相同（维护者 2026-10-24 定，见 macOS `AGENTS.md`「"Not enforced" vs "no data" for the Codex 5h window」）：实时用量接口会列出所有生效的窗口，它没给 5h 就说明官方关掉了这个限额（`fiveHourNotEnforced`），显示「不限额」；OpenAI 对 Pro / Prolite 一直关着 5h，这两种套餐不论数据来自接口还是本地日志都显示「不限额」；其余情况数据来自本地会话日志，少了 5h 窗口可能只是近 5 小时没用，显示「近 5 小时无活动」。Business ProLite 不算 Pro 套餐，只在接口确认没有 5h 时显示「不限额」。实现在 `src/lib/quotaProducts.ts:codexFiveHourPlaceholder`。
 
-用户可以选择任意数量的订阅产品，选择顺序即卡片顺序；面板为每个已选产品始终渲染一张卡片，多于两张时横向滚动，不折叠成一句通用提示。自动检测只影响首次推荐（首次启动会勾选全部已检测且已就绪的产品）；手动选择不受安装路径限制。
+用户可以选择任意数量的订阅产品，选择顺序即卡片顺序；面板为每个已选产品始终渲染一张卡片，多于两张时横向滚动，不折叠成一句通用提示。自动检测只影响首次推荐（首次启动会勾选全部已检测且已就绪的产品，Antigravity / AGY 除外：Google 表示不支持第三方读取额度，要用户自己打开；已保存的选择不变）；手动选择不受安装路径限制。
 
 ## 数据流和职责
 
