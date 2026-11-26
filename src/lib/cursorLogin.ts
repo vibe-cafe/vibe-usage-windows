@@ -10,12 +10,11 @@ export const CURSOR_LOGIN_NOTE = "以 Cursor 命令行的身份登录，只用�
 /** Some accounts are asked to confirm by email after the browser step. */
 export const CURSOR_LOGIN_WAITING = "请在浏览器里确认；如果 Cursor 让你去邮箱确认，点完邮件里的链接再回来";
 
-/** Shown before signing out. The revocation sentence is the CLI's own
- *  `logout cursor` notice (vibe-cafe/vibe-usage#210 `fc45047`): cursor.com
- *  lists this sign-in as 「Desktop App」, one more per renewal, and a
- *  revocation takes up to 10 minutes. */
-export const CURSOR_LOGOUT_CONFIRM =
-  "退出只删除 Vibe Usage 保存的这份登录；Cursor 本机的登录还能读时，仍会照旧读取用量。Cursor 官网上的这条登录可在 cursor.com 设置的 Sessions 里撤销：它显示为「Desktop App」（每续期一次多一条，按时间认，别撤正在用的 Cursor 编辑器那条），最多 10 分钟生效。";
+/** Asked before signing out: one sentence (maintainer, 2026-11-26: the
+ *  earlier paragraph was too long). How to revoke the session on cursor.com,
+ *  and that Cursor's own local login is still read, are in PRIVACY.md. */
+export const CURSOR_LOGOUT_TITLE = "退出 Cursor 登录？";
+export const CURSOR_LOGOUT_CONFIRM = "只删除 Vibe Usage 里的这份登录，Cursor 编辑器不受影响。";
 
 export type CursorLoginAction = { label: string; kind: "start" | "cancel" | "logout" };
 

@@ -35,7 +35,7 @@ import {
 import { formatRelativeTime } from "./lib/formatters";
 import { isZCodeConfigured, quotaProductNote, quotaProductStatusText } from "./lib/quotaProducts";
 import { buildDiagnosticsText, copyText } from "./lib/diagnostics";
-import { CURSOR_LOGIN_NOTE, CURSOR_LOGOUT_CONFIRM, cursorLoginRow } from "./lib/cursorLogin";
+import { CURSOR_LOGIN_NOTE, CURSOR_LOGOUT_CONFIRM, CURSOR_LOGOUT_TITLE, cursorLoginRow } from "./lib/cursorLogin";
 import { EGRESS_MODES, egressModeOption } from "./lib/egressMode";
 import { followUpdateOffer } from "./lib/updateOffer";
 import {
@@ -1008,8 +1008,13 @@ function CursorLoginBlock({
     <div className="flex flex-col gap-1.5 px-3 pb-2.5 pl-[42px]">
       {confirmingLogout ? (
         <div className="flex flex-col gap-2">
-          <span className="text-xs leading-relaxed" style={{ color: "#B0B0B0" }}>
-            {CURSOR_LOGOUT_CONFIRM}
+          <span className="flex flex-col gap-0.5">
+            <span className="text-xs font-medium" style={{ color: "#E8E8E8" }}>
+              {CURSOR_LOGOUT_TITLE}
+            </span>
+            <span className="text-xs leading-relaxed" style={{ color: "#B0B0B0" }}>
+              {CURSOR_LOGOUT_CONFIRM}
+            </span>
           </span>
           <div className="flex justify-end gap-2">
             <SmallButton onClick={onCancelLogout}>取消</SmallButton>

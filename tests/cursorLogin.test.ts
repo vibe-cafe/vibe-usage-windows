@@ -3,6 +3,7 @@ import {
   CURSOR_LOGIN_NOTE,
   CURSOR_LOGIN_WAITING,
   CURSOR_LOGOUT_CONFIRM,
+  CURSOR_LOGOUT_TITLE,
   cursorLoginErrorText,
   cursorLoginRow,
 } from "../src/lib/cursorLogin";
@@ -73,14 +74,9 @@ describe("Cursor sign-in row (plan §3, same words as macOS)", () => {
     expect(cursorLoginRow(status({ state: "waiting", error: "timeout" })).error).toBeNull();
   });
 
-  it("explains what signing out does and where to revoke", () => {
-    // Only this sign-in goes: Cursor's own local login, when readable, is still read.
-    expect(CURSOR_LOGOUT_CONFIRM).toMatch(/^退出只删除 Vibe Usage 保存的这份登录；Cursor 本机的登录还能读时，仍会照旧读取用量。/);
-    expect(CURSOR_LOGOUT_CONFIRM).toContain("cursor.com 设置的 Sessions 里撤销");
-    expect(CURSOR_LOGOUT_CONFIRM).toContain("「Desktop App」");
-    expect(CURSOR_LOGOUT_CONFIRM).toContain("每续期一次多一条");
-    expect(CURSOR_LOGOUT_CONFIRM).toContain("别撤正在用的 Cursor 编辑器那条");
-    expect(CURSOR_LOGOUT_CONFIRM).toContain("最多 10 分钟生效");
+  it("asks before signing out in one sentence (the rest is in PRIVACY.md)", () => {
+    expect(CURSOR_LOGOUT_TITLE).toBe("退出 Cursor 登录？");
+    expect(CURSOR_LOGOUT_CONFIRM).toBe("只删除 Vibe Usage 里的这份登录，Cursor 编辑器不受影响。");
   });
 });
 

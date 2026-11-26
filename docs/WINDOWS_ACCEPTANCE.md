@@ -187,7 +187,7 @@ Do not mark full acceptance passed: report each remaining gap and prerequisite.
 6. 日志：登录、同步、刷新额度之后，在 `%LOCALAPPDATA%\ai.vibecafe.vibe-usage.windows\logs\sync.log` 里搜 `accessToken`、`refreshToken`、`eyJ`（令牌开头），都搜不到。「复制诊断信息」的内容里也没有。
 7. 代理：开着 Clash 的系统代理（再测一次 PAC 模式），Clash 的连接列表里能看到 `cursor.com`、`api2.cursor.sh` 走代理；把系统代理指到一个没人监听的端口再点「登录」，显示「连不上 Cursor，请检查网络和代理后重试」或「无法按你的代理设置连接 Cursor，未发送任何请求」，没有直连（关掉代理软件后防火墙或路由器日志里没有这两个主机的直连）。
 8. 撤销：在 cursor.com 撤销这条「Desktop App」后最多 10 分钟，下一次读取时卡片显示「Cursor 登录已失效」，设置这一行显示「登录已失效」+「重新登录」；之后 Clash 里不再出现发往 `cursor.com`、`api2.cursor.sh` 的新连接。
-9. 「退出」：先在同一行展开撤销说明（「Desktop App」、每续期一次多一条、别撤正在用的 Cursor 编辑器那条、最多 10 分钟生效），点「退出」后凭据管理器里的条目消失，这一行回到「登录」。
+9. 「退出」：先在同一行展开「退出 Cursor 登录？」「只删除 Vibe Usage 里的这份登录，Cursor 编辑器不受影响。」，点「退出」后凭据管理器里的条目消失，这一行回到「登录」，Cursor 编辑器仍是登录状态。
 10. 重启 App、开机自启（系统设了代理时）后，已登录状态还在，额度和同步照常；开机自启、代理还没就绪时，续期和其他读取一样先等代理。
 11. 续期要到期前 7 天才会触发，真机上只能等，不改系统时间（会影响别的程序）；由 CLI 实测（11-25 维护者账号强制续期两次）和单元测试覆盖。
 12. 卸载后凭据管理器里的条目还在（和 ZCode Key 一样，`PRIVACY.md` 写明了），手动删除即可。
