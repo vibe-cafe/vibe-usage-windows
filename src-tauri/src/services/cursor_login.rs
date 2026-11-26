@@ -46,8 +46,10 @@ const LOGIN_DEADLINE: Duration = Duration::from_secs(6 * 60);
 const REFRESH_TIMEOUT: Duration = Duration::from_secs(60);
 const SUPPORT_TIMEOUT: Duration = Duration::from_secs(30);
 /// While waiting for the browser, how often the sign-in's routes are read
-/// again (`route_changed`).
-const ROUTE_CHECK: Duration = Duration::from_secs(3);
+/// again (`route_changed`). The CLI polls every 2 seconds on its own, so a
+/// switch is caught within about a second of the next poll -- well before a
+/// user who just turned a proxy on has reloaded Cursor's page and confirmed.
+const ROUTE_CHECK: Duration = Duration::from_secs(1);
 /// The hosts the sign-in's own requests reach: `api2.cursor.sh` waits for the
 /// confirmation, `cursor.com` reads the account email.
 const SIGN_IN_HOSTS: [&str; 2] = ["api2.cursor.sh", "cursor.com"];
@@ -746,28 +748,32 @@ fn sign_in_routes() -> Option<Vec<(String, crate::system_proxy::Route)>> {
 
 /// The system now sends one of the sign-in's hosts another way (a proxy
 /// switched on or off, or another one). A PAC that cannot answer right now is
-/// no change: the CLI keeps what it was given, which never goes direct.
+/// no change for a host the CLI reaches through a proxy (it keeps that one,
+/// never direct); for a host it reaches directly it is: a PAC was just
+/// switched on, and the direct route is no longer what the user chose.
 fn route_changed(
     before: &[(String, crate::system_proxy::Route)],
     now: &[(String, crate::system_proxy::Route)],
 ) -> bool {
+    use crate::system_proxy::Route;
     before.len() != now.len()
-        || before
-            .iter()
-            .zip(now)
-            .any(|((_, was), (_, is))| *is != crate::system_proxy::Route::Unresolved && was != is)
+        || before.iter().zip(now).any(|((_, was), (_, is))| {
+            was != is && !(*is == Route::Unresolved && matches!(was, Route::Http(_) | Route::Socks(_)))
+        })
 }
 
 async fn sign_in(app: &AppHandle) -> Outcome {
     use tokio::io::AsyncBufReadExt;
+    // The CLI follows the proxy it was started with for up to 5 minutes. The
+    // user may switch theirs on while the browser asks (Cursor's page did not
+    // load, say); then this attempt stops instead of going on the old way.
+    // Read before the command reads its own: a switch in between then shows
+    // up as a change (the user signs in again) instead of going unnoticed.
+    let routes = tauri::async_runtime::spawn_blocking(sign_in_routes).await.ok().flatten();
     let Ok(mut command) = sync_engine::cursor_login_command(app, &["login", "cursor", "--json"]) else {
         // The launcher is part of the app; what can be missing is Node.js.
         return Outcome::Error(if sync_engine::cli_entry(app).is_some() { LoginError::Runtime } else { LoginError::Failed });
     };
-    // The CLI follows the proxy it was started with for up to 5 minutes. The
-    // user may switch theirs on while the browser asks (Cursor's page did not
-    // load, say); then this attempt stops instead of going on the old way.
-    let routes = tauri::async_runtime::spawn_blocking(sign_in_routes).await.ok().flatten();
     // Never kept: the sign-in comes back on stdout.
     command.stdin(Stdio::null()).stderr(Stdio::null());
     let Ok((mut child, _guard)) = crate::process_lifecycle::spawn(&mut command) else {
@@ -1081,8 +1087,11 @@ mod tests {
         assert!(route_changed(&proxied, &direct));
         assert!(route_changed(&direct, &routes(Route::Direct, Route::Socks("127.0.0.1:7891".into()))));
         assert!(route_changed(&proxied, &routes(Route::Http("http://127.0.0.1:7890".into()), Route::Http("http://10.0.0.2:3128".into()))));
-        // A PAC that cannot answer this moment is not a change.
+        // A PAC that cannot answer this moment is not a change where a proxy
+        // was in use; where the CLI went direct it is (a PAC was switched on).
         assert!(!route_changed(&proxied, &routes(Route::Unresolved, Route::Unresolved)));
+        assert!(route_changed(&direct, &routes(Route::Unresolved, Route::Direct)));
+        assert!(route_changed(&direct, &routes(Route::Direct, Route::Unresolved)));
     }
 
     #[test]
