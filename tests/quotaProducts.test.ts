@@ -9,7 +9,6 @@ import {
   moveQuotaProduct,
   quotaEmptyStateText,
   quotaFailureText,
-  quotaProductNote,
   quotaProductStatusText,
   quotaProvenanceText,
   quotaRetryableText,
@@ -564,12 +563,11 @@ describe("Codex 5h slot wording (macOS rule, 2026-10-24)", () => {
   });
 });
 
-describe("settings product notes", () => {
-  it("adds Google's own statement under Antigravity only, as on macOS", () => {
-    expect(quotaProductNote("antigravity")).toBe("Google 表示不支持第三方读取额度");
-    for (const provider of ["codex", "claudeCode", "kimi-code", "zcode", "grok", "opencode-go", "cursor"] as RateLimitProvider[]) {
-      expect(quotaProductNote(provider)).toBeNull();
-    }
+describe("settings product rows", () => {
+  it("carry no grey vendor statement under a product (maintainer, 2026-11-26)", () => {
+    const settings = readFileSync("src/SettingsApp.tsx", "utf-8");
+    expect(settings).not.toContain("Google 表示不支持第三方读取额度");
+    expect(readFileSync("src/lib/quotaProducts.ts", "utf-8")).not.toContain("Google 表示不支持第三方读取额度");
   });
 });
 

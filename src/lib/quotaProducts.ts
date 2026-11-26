@@ -148,13 +148,6 @@ export function providerLabel(provider: RateLimitProvider, products: QuotaProduc
   return products.find((product) => product.provider === provider)?.displayName ?? provider;
 }
 
-/** One grey line under a product's name in Settings, only where the vendor
- *  itself said something the user should know before turning it on. Mirrors
- *  macOS `QuotaProductRow.note(for:)` (maintainer, 2026-11-24). */
-export function quotaProductNote(provider: RateLimitProvider): string | null {
-  return provider === "antigravity" ? "Google 表示不支持第三方读取额度" : null;
-}
-
 export function isZCodeConfigured(
   status: ZCodeCredentialStatus,
   region: ZCodeQuotaRegion,

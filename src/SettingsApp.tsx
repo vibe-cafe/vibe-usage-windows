@@ -33,7 +33,7 @@ import {
   ZCodeQuotaRegion,
 } from "./lib/types";
 import { formatRelativeTime } from "./lib/formatters";
-import { isZCodeConfigured, quotaProductNote, quotaProductStatusText } from "./lib/quotaProducts";
+import { isZCodeConfigured, quotaProductStatusText } from "./lib/quotaProducts";
 import { buildDiagnosticsText, copyText } from "./lib/diagnostics";
 import { CURSOR_LOGIN_NOTE, CURSOR_LOGOUT_CONFIRM, CURSOR_LOGOUT_TITLE, cursorLoginRow } from "./lib/cursorLogin";
 import { EGRESS_MODES, egressModeOption } from "./lib/egressMode";
@@ -956,7 +956,6 @@ function ProductRow({
   disabled: boolean;
   onToggle: (selected: boolean) => void;
 }) {
-  const note = quotaProductNote(product.provider);
   return (
     <div className="flex min-h-[38px] items-center justify-between gap-3 px-3 py-1.5">
       <div className="flex min-w-0 items-center gap-2">
@@ -970,11 +969,6 @@ function ProductRow({
         <span className="flex min-w-0 flex-col">
           <span className="text-[13px]">{product.displayName}</span>
           <QuotaStatusLabel text={statusText} />
-          {note && (
-            <span className="truncate text-[10.5px]" style={{ color: "#6A6A6A" }}>
-              {note}
-            </span>
-          )}
         </span>
       </div>
       <Toggle checked={selected} disabled={disabled} onChange={onToggle} />
