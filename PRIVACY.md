@@ -7,7 +7,7 @@
 ## 简要说明
 
 - **没有登录过，就不会上传任何用量数据。** 登录指在 App 里点「登录并链接数据」，或者以前在这台电脑上用 CLI 登录过。App 和 CLI 共用同一份登录配置，所以以前用 CLI 登录过的，App 会沿用这个登录，启动后自动同步。
-- **上传的是统计数字，不是内容。** 上传的是按半小时汇总的 token 数、模型名、项目名、计算机名和会话时长等统计，不上传对话、提示词、代码、文件内容，也不上传任何 AI 工具的登录凭证。项目名默认不上传；你在网页上打开「上传项目名称」后，多数工具只传文件夹名，但 Kiro 命令行版目前传的是完整的工作目录路径，见第 2 节。
+- **上传的是统计数字，不是内容。** 上传的是按半小时汇总的 token 数、模型名、项目名、计算机名和会话时长等统计，以及每 5 分钟里模型在输出的秒数，不上传对话、提示词、代码、文件内容，也不上传任何 AI 工具的登录凭证。项目名默认不上传；你在网页上打开「上传项目名称」后，多数工具只传文件夹名，但 Kiro 命令行版目前传的是完整的工作目录路径，见第 2 节。
 - **上传的用量默认会在 VibeCafé 网站上公开展示**：排行榜上显示你的昵称、token 数和费用，个人主页显示每天的 token 数热力图。两项都可以在网页设置里关闭，见第 2 节。
 - **订阅配额卡用的是你自己的登录信息，只发给那个工具自己的服务。** 例如，Codex 的额度只向 OpenAI 查询，查到的结果只在本机显示，不上传。
 - 用量数据默认上传到 VibeCafé 运营的 `https://vibefriends.com`（下称「VibeCafé 服务器」）。旧生产地址也会连接到该站。如果你在配置文件里指定了自定义服务器，数据会发到你指定的地址。
@@ -55,6 +55,7 @@
 
 - **用量统计**，每 30 分钟一条：工具名、模型名、项目名、计算机名、这半小时的开始时间，以及各类 token 数（输入、输出、缓存读取、缓存写入、推理和合计）。
 - **会话统计**，每个会话一条：工具名、项目名、会话编号的哈希值（不能反推出原编号）、第一条和最后一条消息的时间、持续时长、活跃时长、消息数、你发出的消息数，以及你一天 24 个小时里各个小时发出了几条消息。
+- **模型时间**，每 5 分钟一格：工具名、项目名、计算机名，以及这 5 分钟里模型在输出的秒数，用来算活跃时长和「同一时刻有几个 AI 在干活」。只有秒数，不含对话、命令和文件内容；关闭「上传项目名称」时，项目一律记为 unknown。
 - **客户端信息**：CLI 版本、由哪个程序发起（Windows App）及其版本、Node.js 版本、操作系统类型（Windows）、计算机名，以及一个每次同步随机生成的编号。
 
 **项目名默认不上传。** VibeCafé 账号的「上传项目名称」默认是关闭的，关闭时所有工具的项目名都上传为 `unknown`。你在 VibeCafé 网页的 Vibe Usage 设置页打开它之后，项目名是这样取的：
@@ -137,7 +138,7 @@ This summary is a translation of the Chinese text above, which is the authoritat
 The production app uses `https://vibefriends.com` for device linking and usage data. If you configure a custom server, the app uses that address.
 
 - **No usage data is uploaded unless this computer has been signed in.** Signing in means clicking 「登录并链接数据」 (sign in and link) in the app, or having signed in with the CLI on this computer before. The app and the CLI share one configuration file, so an existing CLI sign-in is reused and the app starts syncing automatically.
-- **After sign-in**, each sync uploads, to the Vibe Usage server operated by VibeCafé: per-30-minute token counts by tool, model, project name and computer name; per-session statistics (tool, project name, a one-way hash of the session id, first/last message time, duration, active time, message counts, an hourly histogram of your prompts); and client metadata (CLI and app versions, Node.js version, OS, computer name, a random per-sync id).
+- **After sign-in**, each sync uploads, to the Vibe Usage server operated by VibeCafé: per-30-minute token counts by tool, model, project name and computer name; per-5-minute model output seconds by tool, project name and computer name (used to compute active time and how many agents ran at once; numbers only, no content); per-session statistics (tool, project name, a one-way hash of the session id, first/last message time, duration, active time, message counts, an hourly histogram of your prompts); and client metadata (CLI and app versions, Node.js version, OS, computer name, a random per-sync id).
 - **Project names are not uploaded by default.** The account setting 「上传项目名称」 (upload project names) on the website's Vibe Usage settings page is off by default, and while it is off every tool uploads `unknown`. When you turn it on, project names are: for most tools, the last folder name of the working directory; for Codex sessions in a Git repository, `owner/repo` of the remote; **the Kiro CLI currently uploads the full working-directory path** (a known issue, tracked in [vibe-cafe/vibe-usage#155](https://github.com/vibe-cafe/vibe-usage/issues/155)); `unknown` where a tool has no project information.
 - **Public display (on by default):** uploaded usage is shown publicly on the VibeCafé website without sign-in. Leaderboards cover the last 24 hours, 7 days and 30 days: overall boards by cost and by tokens (the web page shows the top 20; the public API returns up to the top 100) and boards per tool and per model family (top 10 each), each entry showing your handle, token count and cost. Turning off 「在排行榜中展示」 (show in leaderboard) on the Vibe Usage settings page keeps you on the boards but masks your handle and shows only rough magnitudes (for example "1M+", "$100+") to others; you still see your full data. The change takes effect at the next leaderboard refresh: within about an hour for the 24-hour boards and up to about four hours for the 7-day and 30-day boards, and others may still see your handle and numbers until then. Your public profile shows a heatmap of daily token counts for the past 365 days; turn off 「在个人主页展示 Vibe Usage 热力图」 (show the Vibe Usage heatmap on my profile) in account settings to hide it; this takes effect within a few minutes.
 - **Cursor:** the CLI first uses the separate Cursor sign-in you made in Settings (below); without one, if Cursor is installed and signed in, it reads Cursor's locally stored token. It fetches your usage events from `cursor.com`; the sign-in is sent only to Cursor. When Cursor stores its login encrypted and you have not signed in separately, Cursor sync pauses, and the weeks it skipped are filled in after you sign in (as long as cursor.com still has them).
