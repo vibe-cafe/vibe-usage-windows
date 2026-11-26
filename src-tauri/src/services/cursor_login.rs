@@ -37,6 +37,9 @@ const MAX_PARTS: usize = 4;
 const REFRESH_LEAD_SECS: i64 = 7 * 24 * 60 * 60;
 /// After a renewal that failed for a temporary reason, wait this long.
 const REFRESH_HOLD: Duration = Duration::from_secs(6 * 60 * 60);
+/// A renewed sign-in rejected within this long, before Cursor accepted it
+/// once, has ended. Later rejections get a renewal of their own.
+const FRESH_WINDOW: Duration = Duration::from_secs(60 * 60);
 /// The CLI waits up to 5 minutes for the browser; the launcher may first need
 /// the npm registry.
 const LOGIN_DEADLINE: Duration = Duration::from_secs(6 * 60);
@@ -293,10 +296,11 @@ pub struct CursorLogin {
     flow_ids: AtomicU64,
     error: Mutex<Option<LoginError>>,
     held_until: Mutex<Option<Instant>>,
-    /// The token the last renewal produced (a digest), until a read with it
-    /// went through. Rejected before that, the sign-in has ended: renewing
-    /// again would only add another session on cursor.com.
-    fresh_from_renewal: Mutex<Option<String>>,
+    /// The token the last renewal produced (a digest) and when, until a read
+    /// with it went through. Rejected before that (within `FRESH_WINDOW`),
+    /// the sign-in has ended: renewing again would only add another session
+    /// on cursor.com.
+    fresh_from_renewal: Mutex<Option<(String, Instant)>>,
     supported: Mutex<Option<(bool, Instant)>>,
     checking_support: AtomicBool,
 }
@@ -347,7 +351,15 @@ impl CursorLogin {
     }
 
     fn mark_fresh(&self, map: &Map<String, Value>) {
-        *self.fresh_from_renewal.lock().unwrap() = Some(token_digest(map));
+        *self.fresh_from_renewal.lock().unwrap() = Some((token_digest(map), Instant::now()));
+    }
+
+    fn is_fresh(&self, map: &Map<String, Value>) -> bool {
+        self.fresh_from_renewal
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|(digest, at)| *digest == token_digest(map) && at.elapsed() < FRESH_WINDOW)
     }
 }
 
@@ -422,7 +434,7 @@ pub async fn for_cli(app: &AppHandle) -> Option<Handover> {
     if !due(&map, now_secs()) || login.held() {
         return Some(Handover::live(map));
     }
-    match refresh(app, &map).await {
+    match refresh(app, &map, generation).await {
         Refresh::Renewed(next) => match login.write(&SystemVault, Some(generation), Some(&next)) {
             // Not saved: this run still uses it; the old one keeps working.
             Write::Done | Write::Failed => {
@@ -445,12 +457,23 @@ pub async fn for_cli(app: &AppHandle) -> Option<Handover> {
     }
 }
 
-/// A read with `handover` went through (the CLI did not report it ended).
+/// Right before a CLI starts, once its command is ready (the proxy is read
+/// after any renewal `for_cli` waited for): the sign-in as kept now. A
+/// sign-out, a new sign-in or an ending meanwhile wins over `handover`.
+pub fn recheck(handover: Option<Handover>) -> Option<Handover> {
+    let current = Handover::of(load_stored(&SystemVault));
+    match (&handover, &current) {
+        (Some(given), Some(now)) if given.credential.is_some() && given.credential == now.credential => handover,
+        _ => current,
+    }
+}
+
+/// Cursor accepted the sign-in in `handover` (a live read went through).
 pub fn read_ok(app: &AppHandle, handover: &Handover) {
     let Some(map) = handover.credential.as_ref() else { return };
     let login = &app.state::<AppCtx>().cursor_login;
     let mut fresh = login.fresh_from_renewal.lock().unwrap();
-    if fresh.as_deref() == Some(token_digest(map).as_str()) {
+    if fresh.as_ref().is_some_and(|(digest, _)| *digest == token_digest(map)) {
         *fresh = None;
     }
 }
@@ -486,15 +509,14 @@ pub async fn after_rejection(app: &AppHandle, passed: &Handover) -> AfterRejecti
     if access_token(&map) != access_token(rejected) {
         return AfterRejection::Renewed(Handover::live(map));
     }
-    let digest = token_digest(&map);
-    if login.fresh_from_renewal.lock().unwrap().as_deref() == Some(digest.as_str()) {
+    if login.is_fresh(&map) {
         end(app, generation, &map);
         return AfterRejection::Ended;
     }
     if login.held() {
         return AfterRejection::Retry;
     }
-    match refresh(app, &map).await {
+    match refresh(app, &map, generation).await {
         Refresh::Renewed(next) => match login.write(&SystemVault, Some(generation), Some(&next)) {
             Write::Done | Write::Failed => {
                 login.mark_fresh(&next);
@@ -540,7 +562,10 @@ enum Refresh {
     Retry,
 }
 
-async fn refresh(app: &AppHandle, credential: &Map<String, Value>) -> Refresh {
+/// Renews `credential`, kept as of `generation`. Nothing starts when the user
+/// signed in or out while the command was prepared (reading the proxy, PAC
+/// included, can take seconds); the caller then answers from what is kept.
+async fn refresh(app: &AppHandle, credential: &Map<String, Value>, generation: u64) -> Refresh {
     let Ok(input) = serde_json::to_vec(credential) else { return Refresh::Retry };
     let Ok(mut command) = sync_engine::cursor_login_command(
         app,
@@ -548,6 +573,9 @@ async fn refresh(app: &AppHandle, credential: &Map<String, Value>) -> Refresh {
     ) else {
         return Refresh::Retry;
     };
+    if app.state::<AppCtx>().cursor_login.generation() != generation {
+        return Refresh::Retry;
+    }
     // Never kept: the renewed sign-in comes back on stdout.
     command.stderr(Stdio::null());
     match tokio::time::timeout(REFRESH_TIMEOUT, crate::process_lifecycle::output_with_input(&mut command, &input)).await {

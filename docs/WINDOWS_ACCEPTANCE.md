@@ -177,7 +177,7 @@ Do not mark full acceptance passed: report each remaining gap and prerequisite.
 
 ## Cursor 单独登录（2026-11-26 起，PR「Cursor 单独登录」）
 
-前提：npm 上的 CLI 已是 0.15.10 或更新（带 vibe-cafe/vibe-usage#210）；要用真实 Cursor 账号，用谁的账号、什么时候测由维护者当次决定。测完在设置里「退出」，并在 cursor.com 设置的 Sessions 里撤销测试时多出的「Desktop App」条目。截图里不能出现邮箱以外的账号信息，凭据管理器的内容不截图。
+前提：npm 上的 CLI 已是 0.15.10 或更新（带 vibe-cafe/vibe-usage#210）；要用真实 Cursor 账号，用谁的账号、什么时候测由维护者当次决定。外测版和正式版用同一条凭据（和 ZCode Key 一样），同一个 Windows 用户下在外测版里「退出」也会删掉正式版的单独登录；要保留正式版的登录，就换一个 Windows 用户测。测完在设置里「退出」，并在 cursor.com 设置的 Sessions 里撤销测试时多出的「Desktop App」条目。截图里不能出现邮箱以外的账号信息，凭据管理器的内容不截图。
 
 1. 设置 →「订阅配额」→ Cursor 开关下面：未登录时只有「登录」按钮和灰字「以 Cursor 命令行的身份登录，只用来读用量」。把 npm 的 CLI 换成旧版不可行，所以「CLI 不支持就不显示按钮」只由前端单元测试覆盖。
 2. 点「登录」：默认浏览器打开 `https://cursor.com/loginDeepControl?…`（页面标题「Sign in to Cursor CLI」）；这一行变成「请在浏览器里确认；如果 Cursor 让你去邮箱确认，点完邮件里的链接再回来」+「取消」。确认（需要时去邮箱点链接）后 5 分钟内变成邮箱 +「退出」，随后自动同步一次。

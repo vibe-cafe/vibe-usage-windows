@@ -254,7 +254,7 @@ fn cursor_accepted(snapshot: &ProviderRateLimit) -> bool {
 /// Which Cursor sign-in a `quota fetch` hands over.
 enum CursorInput<'a> {
     None,
-    /// The kept one, picked right before the start (`cursor_login::for_cli`).
+    /// The kept one, renewed first when due (`cursor_login::for_cli`).
     Pick,
     Given(&'a Handover),
 }
@@ -269,6 +269,13 @@ async fn run(
     region: ZCodeQuotaRegion,
     cursor: CursorInput<'_>,
 ) -> Result<(Vec<ProviderRateLimit>, Option<Handover>), FetchError> {
+    // Renewed first when due, before the command reads the proxy: a renewal
+    // may take a minute.
+    let cursor = match cursor {
+        CursorInput::None => None,
+        CursorInput::Pick => cursor_login::for_cli(app).await,
+        CursorInput::Given(handover) => Some(handover.clone()),
+    };
     let mut args = vec!["quota".to_string(), "fetch".to_string()];
     for provider in providers {
         args.push("--product".into());
@@ -289,13 +296,10 @@ async fn run(
     if let Some(key) = zcode_key {
         command.env(region.environment_key(), key);
     }
-    // Picked once the command is ready (reading the proxy, PAC included, can
-    // take seconds) and right before the start, so a sign-out meanwhile holds.
-    let cursor = match cursor {
-        CursorInput::None => None,
-        CursorInput::Pick => cursor_login::for_cli(app).await,
-        CursorInput::Given(handover) => Some(handover.clone()),
-    };
+    // Checked again right before the start: reading the proxy, PAC included,
+    // can take seconds, and a sign-out meanwhile must hold. Only a product
+    // list with Cursor carries it.
+    let cursor = if providers.contains(&RateLimitProvider::Cursor) { cursor_login::recheck(cursor) } else { None };
     if cursor.is_some() {
         command.arg("--cursor-login-stdin");
     }

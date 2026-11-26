@@ -359,6 +359,9 @@ const CURSOR_LOGIN_ENDED: &str = "Cursor 登录已失效";
 const CURSOR_NOTICE: &str = "cursor: ";
 
 async fn run_cli_sync(app: &AppHandle) -> CliRun {
+    // The app's own Cursor sign-in goes on stdin, renewed first when due --
+    // before the command reads the proxy, as a renewal may take a minute.
+    let cursor = crate::services::cursor_login::for_cli(app).await;
     let mut cmd = match cli_command(app, &["sync"]) {
         Ok(cmd) => cmd,
         Err(e) => {
@@ -370,10 +373,9 @@ async fn run_cli_sync(app: &AppHandle) -> CliRun {
         }
     };
 
-    // The app's own Cursor sign-in, renewed first when due, goes on stdin.
-    // Picked once the command is ready (reading the proxy, PAC included, can
-    // take seconds) and right before the start, so a sign-out meanwhile holds.
-    let cursor = crate::services::cursor_login::for_cli(app).await;
+    // Checked again right before the start: reading the proxy, PAC included,
+    // can take seconds, and a sign-out meanwhile must hold.
+    let cursor = crate::services::cursor_login::recheck(cursor);
     if cursor.is_some() {
         cmd.arg("--cursor-login-stdin").stdin(Stdio::piped());
     }
