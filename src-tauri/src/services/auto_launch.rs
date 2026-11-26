@@ -3,8 +3,10 @@
 //!
 //! The Run value carries `--autostart`, so a login launch can wait for the
 //! user's proxy before any quota read or sync (the proxy client may not be up
-//! yet; network-privacy principle, workspace AGENTS.md). The window shows as
-//! on any launch. A manual launch has no argument and does not wait.
+//! yet; network-privacy principle, workspace AGENTS.md). A login launch stays
+//! in the tray without showing the window (maintainer 2026-11-26, G02); a late
+//! one that reaches a running app is ignored too. A manual launch has no
+//! argument, shows the window and does not wait.
 
 use auto_launch::AutoLaunchBuilder;
 

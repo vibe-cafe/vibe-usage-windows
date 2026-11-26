@@ -36,9 +36,13 @@ pub fn run() {
     tauri::Builder::default()
         .manage(ctx)
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            // Second launch → surface the main window.
-            panel::show(app);
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            // Second launch → surface the main window. A late login launch
+            // (Windows may run the Run key after the user already opened the
+            // app) stays quiet, as a login launch does (G02).
+            if !services::auto_launch::launched_at_login(args) {
+                panel::show(app);
+            }
         }))
         .setup(move |app| {
             tray::create_tray(app.handle())?;
