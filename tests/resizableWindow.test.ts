@@ -27,7 +27,8 @@ describe("window configuration", () => {
   });
 
   it("creates the main window hidden so the remembered size applies before it shows", () => {
-    // panel::show_on_launch shows it from the setup hook.
+    // panel::show_on_launch shows it from the setup hook (a launch without
+    // --autostart); a login launch leaves it hidden until the tray opens it.
     expect(windows.popover.visible).toBe(false);
   });
 
