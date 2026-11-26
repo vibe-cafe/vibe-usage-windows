@@ -43,9 +43,13 @@ pub fn run() {
         .setup(move |app| {
             tray::create_tray(app.handle())?;
             // Created hidden in tauri.conf.json so the remembered size is in
-            // place before the first paint. A login launch shows it too; only
-            // its network reads wait for the proxy (below).
-            panel::show_on_launch(app.handle());
+            // place before the first paint. A login launch stays in the tray
+            // (maintainer 2026-11-26, G02): the panel opens from the tray icon,
+            // whose `panel::show` restores the remembered size the same way.
+            // Its network reads still wait for the proxy (below).
+            if !launched_at_login {
+                panel::show_on_launch(app.handle());
+            }
             if launched_at_login {
                 let handle = app.handle().clone();
                 let ctx = handle.state::<AppCtx>();
