@@ -232,7 +232,7 @@ describe("empty state reasons", () => {
     expect(
       quotaEmptyStateText({ provider: "claudeCode", status: { kind: "noData" }, emptyReason: "sessionWithoutPlanLimits" },
         true),
-    ).toBe("当前登录方式不含订阅额度");
+    ).toBe("Claude Code 未使用订阅登录");
   });
 
   it("names the organization's Claude Code policy instead of reading like a failure", () => {
@@ -334,7 +334,7 @@ describe("read failure reasons and sources", () => {
         claude({ emptyReason: "sessionWithoutPlanLimits", liveFailure: { code: "claudeNoWindows" } }),
         true,
       ),
-    ).toBe("当前登录方式不含订阅额度");
+    ).toBe("Claude Code 未使用订阅登录");
   });
 
   it("keeps endpoint and credential reasons short", () => {
@@ -433,7 +433,8 @@ describe("quota status copy shared with macOS", () => {
     ["codex", "noLocalRecord", "本机暂无记录", "无记录"],
     ["codex", "noWindow", "没有生效的额度窗口", "无窗口"],
     ["codex", "limitReached", "额度已用满 · 等待重置", "已用满"],
-    ["claudeCode", "sessionWithoutPlanLimits", "当前登录方式不含订阅额度", "不适用"],
+    ["claudeCode", "sessionWithoutPlanLimits", "Claude Code 未使用订阅登录", "未用订阅登录"],
+    ["grok", "sessionWithoutPlanLimits", "当前登录方式不含订阅额度", "不适用"],
     ["claudeCode", "nonessentialTrafficDisabled", "组织策略关闭了 Claude Code 非必要流量 · 无法读取", "已禁止"],
     ["opencode-go", "notEntitled", "未订阅 OpenCode Go", "未订阅"],
   ] as const)("maps %s empty result %s ahead of a live failure", (provider, emptyReason, card, short) => {

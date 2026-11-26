@@ -179,7 +179,7 @@ export function quotaProductStatusText(
         if (snapshot.emptyReason) {
           return {
             notEntitled: "未订阅",
-            sessionWithoutPlanLimits: "不适用",
+            sessionWithoutPlanLimits: provider === "claudeCode" ? "未用订阅登录" : "不适用",
             nonessentialTrafficDisabled: "已禁止",
             limitReached: "已用满",
             noWindow: "无窗口",
@@ -333,7 +333,11 @@ export function quotaEmptyStateText(
       // so the line is actionable instead of looking like a broken read.
       return `未订阅 ${name}`;
     case "sessionWithoutPlanLimits":
-      return "当前登录方式不含订阅额度";
+      // Claude Code answers `rate_limits_available: false` for a token (a
+      // gateway or relay), an API key, a cloud provider, and for no sign-in at
+      // all; what they share is that it is not using a subscription sign-in.
+      // The subscription itself may be fine.
+      return snapshot.provider === "claudeCode" ? "Claude Code 未使用订阅登录" : "当前登录方式不含订阅额度";
     case "periodEnded":
       if (snapshot.provider === "grok") return "账期已结束 · 用一次 Grok 后更新";
       if (snapshot.provider === "antigravity") return "额度已重置 · 下次读取时更新";
