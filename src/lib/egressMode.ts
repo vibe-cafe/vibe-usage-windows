@@ -5,6 +5,9 @@
  */
 export type EgressMode = "auto" | "pause" | "allow";
 
+/** `caption` is no longer shown under the menu (maintainer, 2026-11-26: no
+ *  explanatory lines in Settings); it stays as the record of what each
+ *  option means, which PRIVACY.md spells out. */
 export const EGRESS_MODES: { value: EgressMode; label: string; caption: string }[] = [
   {
     value: "auto",

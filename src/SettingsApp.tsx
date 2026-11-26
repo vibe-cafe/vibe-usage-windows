@@ -35,7 +35,7 @@ import {
 import { formatRelativeTime } from "./lib/formatters";
 import { isZCodeConfigured, quotaProductStatusText } from "./lib/quotaProducts";
 import { buildDiagnosticsText, copyText } from "./lib/diagnostics";
-import { CURSOR_LOGIN_NOTE, CURSOR_LOGOUT_CONFIRM, CURSOR_LOGOUT_TITLE, cursorLoginRow } from "./lib/cursorLogin";
+import { CURSOR_LOGOUT_CONFIRM, CURSOR_LOGOUT_TITLE, cursorLoginRow } from "./lib/cursorLogin";
 import { EGRESS_MODES, egressModeOption } from "./lib/egressMode";
 import { followUpdateOffer } from "./lib/updateOffer";
 import {
@@ -100,7 +100,6 @@ export function SettingsApp() {
   const [extraRootsBusy, setExtraRootsBusy] = useState(false);
   const [extraRootsError, setExtraRootsError] = useState<string | null>(null);
   const [isZCodeExpanded, setZCodeExpanded] = useState(false);
-  const [isQuotaSourcesExpanded, setQuotaSourcesExpanded] = useState(false);
   const [isIsolatedRootsExpanded, setIsIsolatedRootsExpanded] = useState(false);
   const [cursorLogin, setCursorLogin] = useState<CursorLoginStatus | null>(null);
   const [cursorLogoutConfirm, setCursorLogoutConfirm] = useState(false);
@@ -537,10 +536,7 @@ export function SettingsApp() {
         {/* 订阅配额 — every product is a plain switch, so the section stays
             flat; only ZCode (the one product that needs a key) owns a row that
             opens, and it sits last. */}
-        <Section
-          title={`订阅配额（${settings?.selectedQuotaProductIds.length ?? 0}）`}
-          footer="选中的产品会在面板中各显示一张卡片。"
-        >
+        <Section title={`订阅配额（${settings?.selectedQuotaProductIds.length ?? 0}）`}>
           {quotaProducts
             .filter((product) => product.provider !== "zcode")
             .map((product) => {
@@ -654,40 +650,22 @@ export function SettingsApp() {
                       </button>
                     )}
                   </div>
-                  <span className="text-[10.5px]" style={{ color: "#8C8C8C" }}>
-                    只使用这里填写的区域 Key，不读取 ZCode 登录凭据。
-                  </span>
                   {zCodeMessage && <span className="text-[11px] text-emerald-400">{zCodeMessage}</span>}
                 </div>
               )}
             </div>
           )}
 
-          <Disclosure
-            label="数据来源与检测"
-            expanded={isQuotaSourcesExpanded}
-            onToggle={() => setQuotaSourcesExpanded((value) => !value)}
-          >
-            <p className="text-[10.5px] leading-relaxed" style={{ color: "#8C8C8C" }}>
-              检测状态仅用于推荐，所有产品都可手动选择；未选择的产品不会联网读取配额。
-            </p>
-            <p className="text-[10.5px] leading-relaxed" style={{ color: "#8C8C8C" }}>
-              Grok 仅从官方 CLI 普通日志读取结构化订阅配额。
-            </p>
-            <p className="text-[10.5px] leading-relaxed" style={{ color: "#8C8C8C" }}>
-              Cursor 优先用你在这里登录的账号；没登录时读 Cursor 自己保存的登录，读不了就提示登录。不读取浏览器 Cookie。
-            </p>
-            <p className="text-[10.5px] leading-relaxed" style={{ color: "#8C8C8C" }}>
-              Kimi Code 使用其官方 CLI 登录；Antigravity / AGY 使用官方 agy 登录。
-            </p>
-            <div className="flex justify-end">
-              <SmallButton disabled={quotaBusy} onClick={() => void rediscoverQuotaProducts()}>
-                <span className="flex items-center gap-1.5">
-                  <RefreshCw size={11} /> 重新检测
-                </span>
-              </SmallButton>
-            </div>
-          </Disclosure>
+          {/* The explanations that used to sit here (how each product is read)
+              live in PRIVACY.md; the settings keep only what the user acts on
+              (maintainer, 2026-11-26). */}
+          <Row label="数据来源与检测">
+            <SmallButton disabled={quotaBusy} onClick={() => void rediscoverQuotaProducts()}>
+              <span className="flex items-center gap-1.5">
+                <RefreshCw size={11} /> 重新检测
+              </span>
+            </SmallButton>
+          </Row>
 
           {quotaError && (
             <div
@@ -701,8 +679,9 @@ export function SettingsApp() {
 
         {/* 隐私保护 — the egress check (`egress_check.rs`): one three-way
             menu, like the macOS pop-up menu (System Settings' 「显示滚动条」).
-            The grey line follows the option chosen. */}
-        <Section title="隐私保护" footer={egressModeOption(settings?.egressMode).caption}>
+            No explanatory line under it (maintainer, 2026-11-26); what each
+            option does is in PRIVACY.md. */}
+        <Section title="隐私保护">
           <Row label="没检测到代理时">
             <MenuSelect
               label="没检测到代理时"
@@ -775,15 +754,12 @@ export function SettingsApp() {
                 ))}
               </div>
             ))}
-            <p className="text-[10.5px] leading-relaxed" style={{ color: "#8C8C8C" }}>
-              可为每种工具添加多个 Multica 或其他隔离目录；默认目录仍会照常统计。
-            </p>
             {extraRootsError && <span className="text-xs text-red-400">{extraRootsError}</span>}
           </Disclosure>
         </Section>
 
         {status?.testDiagnosticsAvailable && (
-          <Section title="测试诊断" footer="仅测试构建可用；只含脱敏错误码、Provider、版本与系统信息，不含路径、账号、Key。">
+          <Section title="测试诊断">
             <Row label="外测日志">
               <div className="flex items-center gap-2">
                 {diagnosticMessage && (
@@ -976,8 +952,8 @@ function ProductRow({
   );
 }
 
-/** The Cursor sign-in under its switch: state on the left, one button on the
- *  right, the grey line below (copy in `lib/cursorLogin`, same as macOS). */
+/** The Cursor sign-in under its switch: state on the left, the button on the
+ *  right (copy in `lib/cursorLogin`, same as macOS). */
 function CursorLoginBlock({
   status,
   confirmingLogout,
@@ -996,8 +972,6 @@ function CursorLoginBlock({
   const row = cursorLoginRow(status);
   if (!row.text && !row.action) return null;
   const errorText = error ?? row.error;
-  // Signed out: the grey line sits beside 「登录」 instead of under an empty row.
-  const inlineNote = !row.text && row.showNote;
   return (
     <div className="flex flex-col gap-1.5 px-3 pb-2.5 pl-[42px]">
       {confirmingLogout ? (
@@ -1022,19 +996,13 @@ function CursorLoginBlock({
         </div>
       ) : (
         <div className="flex items-center gap-2">
-          {inlineNote ? (
-            <span className="min-w-0 grow text-[10.5px]" style={{ color: "#8C8C8C" }}>
-              {CURSOR_LOGIN_NOTE}
-            </span>
-          ) : (
-            <span
-              className={`min-w-0 grow text-xs ${status.state === "waiting" ? "leading-relaxed" : "truncate"}`}
-              style={{ color: "#B0B0B0" }}
-              title={row.text ?? undefined}
-            >
-              {row.text}
-            </span>
-          )}
+          <span
+            className={`min-w-0 grow text-xs ${status.state === "waiting" ? "leading-relaxed" : "truncate"}`}
+            style={{ color: "#B0B0B0" }}
+            title={row.text ?? undefined}
+          >
+            {row.text}
+          </span>
           {row.secondary && (
             <button
               className="shrink-0 text-xs underline-offset-2 hover:underline"
@@ -1050,11 +1018,6 @@ function CursorLoginBlock({
         </div>
       )}
       {errorText && <span className="text-[11px] text-red-400">{errorText}</span>}
-      {row.showNote && !inlineNote && (
-        <span className="text-[10.5px]" style={{ color: "#8C8C8C" }}>
-          {CURSOR_LOGIN_NOTE}
-        </span>
-      )}
     </div>
   );
 }

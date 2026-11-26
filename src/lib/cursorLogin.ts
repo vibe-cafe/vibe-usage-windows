@@ -4,9 +4,6 @@
 
 import type { CursorLoginError, CursorLoginStatus } from "./types";
 
-/** The grey line under the row, in every state. */
-export const CURSOR_LOGIN_NOTE = "以 Cursor 命令行的身份登录，只用来读用量";
-
 /** Some accounts are asked to confirm by email after the browser step. */
 export const CURSOR_LOGIN_WAITING = "请在浏览器里确认；如果 Cursor 让你去邮箱确认，点完邮件里的链接再回来";
 
@@ -27,8 +24,6 @@ export interface CursorLoginRow {
    *  the CLI goes back to Cursor's own local login. */
   secondary: CursorLoginAction | null;
   error: string | null;
-  /** The grey line is shown with the sign-in button. */
-  showNote: boolean;
 }
 
 export function cursorLoginErrorText(error: CursorLoginError): string {
@@ -54,8 +49,9 @@ export function cursorLoginErrorText(error: CursorLoginError): string {
 }
 
 /**
- * What the row shows. Signing in (and the grey line) needs a CLI that offers
- * `login cursor`; a sign-in already kept can always be signed out of.
+ * What the row shows. Signing in needs a CLI that offers `login cursor`; a
+ * sign-in already kept can always be signed out of. No explanatory line: how
+ * the sign-in works is in PRIVACY.md (maintainer, 2026-11-26).
  */
 export function cursorLoginRow(status: CursorLoginStatus): CursorLoginRow {
   const offered = status.supported === true;
@@ -67,7 +63,6 @@ export function cursorLoginRow(status: CursorLoginStatus): CursorLoginRow {
         action: { label: "取消", kind: "cancel" },
         secondary: null,
         error: null,
-        showNote: true,
       };
     case "signedIn":
       return {
@@ -75,7 +70,6 @@ export function cursorLoginRow(status: CursorLoginStatus): CursorLoginRow {
         action: { label: "退出", kind: "logout" },
         secondary: null,
         error,
-        showNote: offered,
       };
     case "expired":
       return offered
@@ -84,9 +78,8 @@ export function cursorLoginRow(status: CursorLoginStatus): CursorLoginRow {
             action: { label: "重新登录", kind: "start" },
             secondary: { label: "退出", kind: "logout" },
             error,
-            showNote: true,
           }
-        : { text: "登录已失效", action: { label: "退出", kind: "logout" }, secondary: null, error, showNote: false };
+        : { text: "登录已失效", action: { label: "退出", kind: "logout" }, secondary: null, error };
     case "signedOut":
     default:
       return {
@@ -94,7 +87,6 @@ export function cursorLoginRow(status: CursorLoginStatus): CursorLoginRow {
         action: offered ? { label: "登录", kind: "start" } : null,
         secondary: null,
         error: offered ? error : null,
-        showNote: offered,
       };
   }
 }

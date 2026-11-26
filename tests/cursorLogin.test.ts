@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  CURSOR_LOGIN_NOTE,
   CURSOR_LOGIN_WAITING,
   CURSOR_LOGOUT_CONFIRM,
   CURSOR_LOGOUT_TITLE,
@@ -27,7 +26,6 @@ describe("Cursor sign-in row (plan §3, same words as macOS)", () => {
       action: { label: "登录", kind: "start" },
       secondary: null,
       error: null,
-      showNote: true,
     });
     expect(cursorLoginRow(status({ state: "waiting" }))).toMatchObject({
       text: CURSOR_LOGIN_WAITING,
@@ -49,12 +47,11 @@ describe("Cursor sign-in row (plan §3, same words as macOS)", () => {
   it("asks for email confirmation while waiting", () => {
     expect(CURSOR_LOGIN_WAITING).toContain("请在浏览器里确认");
     expect(CURSOR_LOGIN_WAITING).toContain("如果 Cursor 让你去邮箱确认，点完邮件里的链接再回来");
-    expect(CURSOR_LOGIN_NOTE).toBe("以 Cursor 命令行的身份登录，只用来读用量");
   });
 
   it("offers no sign-in without a CLI that has it, but always lets a kept one go", () => {
     for (const supported of [false, null]) {
-      expect(cursorLoginRow(status({ supported }))).toMatchObject({ text: null, action: null, showNote: false });
+      expect(cursorLoginRow(status({ supported }))).toMatchObject({ text: null, action: null });
       expect(cursorLoginRow(status({ supported, state: "signedIn", email: "a@b.c" })).action?.kind).toBe("logout");
       expect(cursorLoginRow(status({ supported, state: "expired" })).action?.kind).toBe("logout");
     }
