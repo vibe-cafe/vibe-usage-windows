@@ -123,6 +123,33 @@ public static class DismissPolicy
 }
 
 /// <summary>
+/// Tells a right-click menu from a keyboard one (menu key or Shift+F10 on the
+/// icon): only a right click is preceded by the icon's WM_RBUTTONDOWN/UP.
+/// Each menu request consumes the record, and the menu's close clears it
+/// again (a button-up can arrive while the menu is up), so a right click
+/// never makes a later keyboard menu look like a mouse one.
+/// </summary>
+public sealed class MenuSourceTracker
+{
+    public const long RightClickMenuMs = 1000;
+    private const long None = long.MinValue / 2;
+    private long lastRightButton = None;
+
+    public void OnRightButton(long now) => lastRightButton = now;
+
+    /// <summary>Whether the menu requested now came from the keyboard; consumes the right-button record.</summary>
+    public bool TakeIsKeyboard(long now)
+    {
+        bool keyboard = now - lastRightButton > RightClickMenuMs;
+        lastRightButton = None;
+        return keyboard;
+    }
+
+    /// <summary>The menu closed: forget any right-button message that arrived while it was up.</summary>
+    public void Clear() => lastRightButton = None;
+}
+
+/// <summary>
 /// When to try adding the tray icon again. At sign-in Explorer may not take
 /// the icon yet; TaskbarCreated also triggers an add, the timer covers a
 /// taskbar that was already up but busy.

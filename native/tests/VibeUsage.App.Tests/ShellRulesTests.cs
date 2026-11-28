@@ -100,6 +100,39 @@ public class DismissPolicyTests
     }
 }
 
+public class MenuSourceTrackerTests
+{
+    [Fact]
+    public void RightClickThenKeyboardMenuRightAwayIsStillKeyboard()
+    {
+        var t = new MenuSourceTracker();
+        t.OnRightButton(10_000);
+        t.OnRightButton(10_080);
+        Assert.False(t.TakeIsKeyboard(10_090)); // the right-click menu
+        Assert.True(t.TakeIsKeyboard(10_400));  // Esc, then the menu key within a second
+    }
+
+    [Fact]
+    public void AButtonUpDuringTheMenuIsForgottenWhenItCloses()
+    {
+        var t = new MenuSourceTracker();
+        t.OnRightButton(10_000);
+        Assert.False(t.TakeIsKeyboard(10_050));
+        t.OnRightButton(10_100); // delivered while the menu was up
+        t.Clear();               // menu closed
+        Assert.True(t.TakeIsKeyboard(10_300));
+    }
+
+    [Fact]
+    public void KeyboardMenuWithoutAnyRightClick()
+    {
+        Assert.True(new MenuSourceTracker().TakeIsKeyboard(10_000));
+        var t = new MenuSourceTracker();
+        t.OnRightButton(10_000);
+        Assert.True(t.TakeIsKeyboard(10_000 + MenuSourceTracker.RightClickMenuMs + 1)); // stale press
+    }
+}
+
 public class TrayRetryTests
 {
     [Fact]

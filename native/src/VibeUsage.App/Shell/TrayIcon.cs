@@ -42,8 +42,7 @@ internal sealed partial class TrayIcon : IDisposable
     private int simulatedFailures;
     private string tip = "Vibe Usage";
     private IntPtr menuPreviousForeground;
-    private long lastRightButton = long.MinValue / 2;
-    private const long RightClickMenuMs = 1000;
+    private readonly MenuSourceTracker menuSource = new();
 
     public IntPtr Hwnd { get; }
 
@@ -301,7 +300,7 @@ internal sealed partial class TrayIcon : IDisposable
                         break;
                     case Win32.WM_RBUTTONDOWN:
                     case Win32.WM_RBUTTONUP:
-                        lastRightButton = Environment.TickCount64;
+                        menuSource.OnRightButton(Environment.TickCount64);
                         break;
                     case Win32.NIN_SELECT:
                         Selected?.Invoke(anchor, false);
@@ -310,9 +309,16 @@ internal sealed partial class TrayIcon : IDisposable
                         Selected?.Invoke(anchor, true);
                         break;
                     case Win32.WM_CONTEXTMENU:
-                        bool keyboard = Environment.TickCount64 - lastRightButton > RightClickMenuMs;
+                        bool keyboard = menuSource.TakeIsKeyboard(Environment.TickCount64);
                         ShellLog.Write($"tray menu requested keyboard={keyboard}");
-                        ContextMenuRequested?.Invoke(anchor, keyboard);
+                        try
+                        {
+                            ContextMenuRequested?.Invoke(anchor, keyboard);
+                        }
+                        finally
+                        {
+                            menuSource.Clear();
+                        }
                         break;
                 }
                 return IntPtr.Zero;

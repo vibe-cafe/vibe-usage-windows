@@ -465,12 +465,15 @@ $ic = Wait-IconCenter 10000
 if ($ic) {
     Click $ic[0] $ic[1]
     Pump 1500
+    $l = New-LogLines
+    Add-Result "EX' Explorer 重启后点图标：面板打开并保持开着" ((Any $l 'show source=TrayMouse') -and -not (Any $l 'hide reason=')) $l
     Click $ic[0] $ic[1]
     Pump 1500
     $l = New-LogLines
-    Add-Result "EX' Explorer 重启后再点图标：能打开、能收起" ((Any $l 'show source=TrayMouse') -and (Any $l 'hide reason=')) $l
+    Add-Result "EX'' Explorer 重启后再点图标：面板收起并保持关着" ((Any $l 'hide reason=') -and -not (Any $l 'show source=')) $l
 } else {
-    Add-Result "EX' Explorer 重启后再点图标（图标位置拿不到）" $false
+    Add-Result "EX' Explorer 重启后点图标（图标位置拿不到）" $false
+    Add-Result "EX'' Explorer 重启后再点图标（图标位置拿不到）" $false
 }
 
 Stop-App
