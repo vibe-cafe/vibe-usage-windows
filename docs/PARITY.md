@@ -23,8 +23,9 @@
 
 聚合口径（`src/lib/aggregate.ts` ↔ Swift 各 View 的 filtered/chartData）：
 
-- 总 Token = input + output + reasoning + cachedInput（`computedTotal`）
-- 趋势图 Token 三段堆叠：output+reasoning（白 0.9）/ input（白 0.5）/ cached（白 0.24）
+- 总 Token = input + output + reasoning + cachedInput + cacheCreation5mTokens + cacheCreation1hTokens（`computedTotal`，旧数据缺少的缓存写入项按 0 算）
+- 趋势图 Token 三段堆叠为 output + reasoning（白 0.9）、input + 缓存写入（白 0.5）、缓存读取（白 0.24）
+- 自定义日期按本地日历选整日。Windows 的用量和活跃时长来自同一份 `/api/usage` 响应，请求携带选择日期时的 IANA 时区，以及起始日零点至末日次日零点前 1 毫秒的 UTC ISO 时刻（macOS #119）。
 - 模型筛选**不作用于 sessions**（活跃时长）— macOS 既有行为，保持一致
 - 「今天」与「24H」同拉 `days=1`，仅客户端 midnight cutoff 不同（菜单栏/托盘统计同样应用 cutoff）
 - Donut Top6 + 其他；空维度值显示「未知」
@@ -58,6 +59,7 @@
 | Cursor 单独登录（设置里 Cursor 一行：未登录 + 登录 / 等待（含邮箱确认提示）/ 邮箱 + 退出 / 已失效 + 重新登录（旁边次要的退出），不带说明文字；Vibe Usage 自己的钥匙串条目；每次启动 CLI 用 `--cursor-login-stdin` 递凭据；到期前 7 天 `login cursor --refresh`；卡片 `signIn` 两个空态点开设置。2026-11-25 维护者批准，macOS 由同期 PR 实现） | `services/cursor_login.rs`（登录、续期、被拒后续期一次、失效、退出、检查 CLI 支不支持）+ `services/credential_store.rs`（Credential Manager 读写，和 ZCode 共用；条目 `ai.vibecafe.vibe-usage.windows/cursor/login`，超过单条 2560 字节时分条）+ `lib/cursorLogin.ts`（文案与 macOS 逐字一致）+ `RateLimitCard.tsx`（`signIn` 空态，整张卡片打开设置的 Cursor 一行）。见 `docs/SUBSCRIPTION_QUOTAS.md`「Cursor 探测约束」 |
 | `RuntimeDetector` | `crates/core/runtime.rs`（Windows 路径 + 捆绑 node 兜底） |
 | `CodexRateLimitReader` | `crates/core/rate_limit/codex.rs` |
+| Claude 模型周额度（macOS #118 的 `modelScopedMeters`） | Windows 的 Rust 层从 Claude Code 实时回复和缓存解析 Fable 等模型周额度。Windows 现有卡片与 macOS 经典卡片一致，只显示账号提供的通用窗口（`5h`、`7d`），只有 `7d` 时就显示一行。macOS 仅在新版面板显示 Fable，Windows 原生版的展示另行设计。 |
 | `ClaudeUsageProbe`（Claude Code stdio `get_usage` 探测）+ `ClaudeUsageCache` | `src-tauri/src/services/claude_usage.rs`（探测参数与请求体与 macOS 逐项一致，见 `docs/SUBSCRIPTION_QUOTAS.md`「Claude 探测约束」）+ `crates/core/claude_code.rs`（候选程序：与 `discoverBinaries` 一样查 PATH，npm 的 `claude.cmd` 解析到它调用的 `claude.exe` / `cli.js`，不经 cmd.exe；macOS 最后还会试 Claude Desktop 自带的 Claude Code，Windows 尚无此项）+ `crates/core/rate_limit/claude_desktop.rs`（Desktop 记录；macOS 也读桌面端的 `plan-usage-history.json`，Windows 另要处理多处安装位置：`%APPDATA%\Claude`、MSIX 包的 `Packages\Claude_<后缀>\LocalCache\Roaming\Claude` 和 2026-11 起的 `%LOCALAPPDATA%\Claude-Data\claude_<后缀>`，同一包后缀的新旧目录算一份安装，见 `docs/SUBSCRIPTION_QUOTAS.md`） |
 | 旧 `StatuslineHook` | `crates/core/statusline_hook.rs` 仅用于安全退休本应用可证明归属的旧 hook |
 | 设置「关于」→「诊断信息」：「复制诊断信息」最小本机摘要 + App 本机保留最近 10 次同步摘要（一键诊断 1b；维护者 2026-11-09 在架构审批门批准方案修订二：「可以开工，你派活吧。 1、2、3我都同意。」） | `services/diagnostics.rs`（白名单结构化字段）+ `services/cli_doctor.rs`（并入 CLI 的 `doctor --json`，方案 2′）+ `services/sync_history.rs`（`sync-history.json`）+ `lib/diagnostics.ts`（排版与兜底过滤）；字段、脱敏和存放位置见 `docs/DIAGNOSTICS.md`。macOS 同一功能由 vibe-usage-app 按同一方案实现（并入 `doctor --json` 那一步 macOS 尚未做） |

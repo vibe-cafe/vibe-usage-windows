@@ -132,6 +132,21 @@ export function dateFromDayKey(key: string): Date | null {
   return new Date(parseInt(m[1], 10), parseInt(m[2], 10) - 1, parseInt(m[3], 10));
 }
 
+/** Both buckets and sessions include the final millisecond of the selected local day. */
+export function customUsageQuery(from: Date, to: Date) {
+  const lo = from <= to ? from : to;
+  const hi = from <= to ? to : from;
+  const start = new Date(lo);
+  start.setHours(0, 0, 0, 0);
+  const nextDay = new Date(hi.getFullYear(), hi.getMonth(), hi.getDate() + 1);
+  return {
+    kind: "custom" as const,
+    fromIso: start.toISOString(),
+    toIso: new Date(nextDay.getTime() - 1).toISOString(),
+    tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
+  };
+}
+
 /** Local "yyyy-MM-dd" for a Date (used for daily chart slot keys) */
 export function localDayKey(date: Date): string {
   const y = date.getFullYear();
