@@ -12,3 +12,9 @@ tsconfig.tsbuildinfo
 
 # Resolved @vibe-cafe/vibe-usage package used by the CLI-behaviour tests
 .cli-under-test/
+
+# Native display library: local SDK home, NuGet cache and build output
+/.display-cli/
+/.display-packages/
+/native/**/bin/
+/native/**/obj/

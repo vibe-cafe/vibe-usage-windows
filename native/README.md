@@ -7,11 +7,11 @@
 在仓库根目录运行以下命令。本机首次还原 xUnit 测试依赖需要访问 NuGet。
 
 ```sh
-DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 DOTNET_CLI_HOME="$(pwd)/.display-cli" NUGET_PACKAGES="$(pwd)/.display-packages" /Users/hutong/.dotnet/dotnet build native/src/VibeUsage.Display -c Release
-DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 DOTNET_CLI_HOME="$(pwd)/.display-cli" NUGET_PACKAGES="$(pwd)/.display-packages" /Users/hutong/.dotnet/dotnet test native/tests/VibeUsage.Display.Tests -c Release
+DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 DOTNET_CLI_HOME="$(pwd)/.display-cli" NUGET_PACKAGES="$(pwd)/.display-packages" "$HOME/.dotnet/dotnet" build native/src/VibeUsage.Display -c Release
+DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 DOTNET_CLI_HOME="$(pwd)/.display-cli" NUGET_PACKAGES="$(pwd)/.display-packages" "$HOME/.dotnet/dotnet" test native/tests/VibeUsage.Display.Tests -c Release
 ```
 
-其他机器安装 .NET 10 SDK 后使用 PATH 上的 `dotnet`。Windows CI 的独立作业 `native-display` 执行 `dotnet test native/tests/VibeUsage.Display.Tests -c Release`。本机临时产物是仓库根目录的 `.display-cli/`、`.display-packages/` 和两个项目各自的 `bin/`、`obj/`。
+上面是 SDK 装在 `~/.dotnet`、不在 PATH 时的写法；SDK 在 PATH 上时直接用 `dotnet`。Windows CI 的独立作业 `native-display` 执行 `dotnet test native/tests/VibeUsage.Display.Tests -c Release`。本机临时产物是仓库根目录的 `.display-cli/`、`.display-packages/` 和两个项目各自的 `bin/`、`obj/`。
 
 ## 与 Mac 对齐
 
