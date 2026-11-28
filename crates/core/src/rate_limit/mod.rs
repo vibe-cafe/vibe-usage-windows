@@ -303,11 +303,12 @@ pub struct ProviderRateLimit {
 }
 
 impl ProviderRateLimit {
+    /// Windows the card shows (diagnostics count these). Model-scoped weekly
+    /// meters are parsed but not drawn on the classic card, so not counted.
     pub fn meter_count(&self) -> usize {
         self.meters.len()
             + usize::from(self.five_hour.is_some())
             + usize::from(self.seven_day.is_some())
-            + self.model_scoped_meters.as_ref().map_or(0, Vec::len)
     }
 
     pub fn empty(provider: RateLimitProvider, status: RateLimitStatus) -> Self {

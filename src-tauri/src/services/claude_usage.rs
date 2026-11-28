@@ -1026,7 +1026,7 @@ mod tests {
         std::fs::write(&file, config.to_string()).unwrap();
         let cached = cached_snapshot_from(&file, now).unwrap();
         let paused = after_live_failure(RateLimitLiveFailure::ProxyNotDetected, Some(cached));
-        assert_eq!(paused.meter_count(), 2);
+        assert_eq!(paused.meter_count(), 1);
         assert_eq!(paused.source, Some(RateLimitSource::Cache));
         assert_eq!(paused.model_scoped_meters, live.model_scoped_meters);
         let models = paused.model_scoped_meters.unwrap();
