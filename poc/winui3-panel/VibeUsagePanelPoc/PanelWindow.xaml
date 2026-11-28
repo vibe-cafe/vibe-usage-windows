@@ -5,186 +5,34 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     Title="Vibe Usage">
 
-    <!-- Language makes CJK text pick the Simplified Chinese UI font (Microsoft YaHei UI)
-         through the system fallback; Latin text uses Segoe UI Variable, WinUI's default. -->
-    <Grid x:Name="RootGrid" Language="zh-CN" KeyDown="OnRootKeyDown">
-        <Grid.Resources>
-            <!-- Lightweight styling: buttons in the panel are chrome-less ("subtle")
-                 and only show a fill on hover/press, as in Windows 11 flyouts. -->
-            <ResourceDictionary>
-                <ResourceDictionary.ThemeDictionaries>
-                    <ResourceDictionary x:Key="Default">
-                        <SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="#0FFFFFFF" />
-                        <SolidColorBrush x:Key="ButtonBackgroundPressed" Color="#0AFFFFFF" />
-                        <SolidColorBrush x:Key="ButtonBorderBrushPointerOver" Color="Transparent" />
-                        <SolidColorBrush x:Key="ButtonBorderBrushPressed" Color="Transparent" />
-                    </ResourceDictionary>
-                    <ResourceDictionary x:Key="Light">
-                        <SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="#09000000" />
-                        <SolidColorBrush x:Key="ButtonBackgroundPressed" Color="#06000000" />
-                        <SolidColorBrush x:Key="ButtonBorderBrushPointerOver" Color="Transparent" />
-                        <SolidColorBrush x:Key="ButtonBorderBrushPressed" Color="Transparent" />
-                    </ResourceDictionary>
-                    <ResourceDictionary x:Key="HighContrast" />
-                </ResourceDictionary.ThemeDictionaries>
-            </ResourceDictionary>
-        </Grid.Resources>
-
+    <!--
+        The macOS new panel's layout and look (Views/Modern in vibe-usage-app),
+        built in code from its constants (PanelWindow.xaml.cs, Views/*). Header
+        and 概览 row on top and the footer stay put; the cards scroll when the
+        screen is too short, as on the Mac. Dark only, like the Mac panel.
+    -->
+    <Grid x:Name="RootGrid" Language="zh-CN" RequestedTheme="Dark" KeyDown="OnRootKeyDown">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <!-- Header, as in the OneDrive tray flyout: name and status on the left, actions on the right -->
-        <Grid Grid.Row="0" Padding="16,8,8,0" ColumnSpacing="2">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="Auto" />
-            </Grid.ColumnDefinitions>
-            <!-- Takes focus when the panel opens by mouse, so Esc works without a focus ring. -->
-            <ContentControl x:Name="FocusSink" Width="1" Height="1" Opacity="0" IsTabStop="True"
-                            UseSystemFocusVisuals="False" AutomationProperties.Name="Vibe Usage 面板" />
-            <BitmapIcon x:Name="TitleGlyph" Width="18" Height="18" ShowAsMonochrome="True"
-                        UriSource="ms-appx:///Assets/Glyph.png" VerticalAlignment="Center" />
-            <StackPanel Grid.Column="1" Margin="10,0,0,0" VerticalAlignment="Center">
-                <TextBlock Text="Vibe Usage" Style="{StaticResource BodyStrongTextBlockStyle}" />
-                <TextBlock x:Name="SyncText" Style="{StaticResource PanelCaptionSecondaryStyle}" />
-            </StackPanel>
-            <Button x:Name="SyncButton" Grid.Column="2" Style="{StaticResource PanelIconButtonStyle}"
-                    Click="OnSyncClick" ToolTipService.ToolTip="立即同步" AutomationProperties.Name="立即同步">
-                <Grid>
-                    <FontIcon x:Name="SyncGlyph" Glyph="&#xE895;" FontSize="16" />
-                    <ProgressRing x:Name="SyncRing" Width="16" Height="16" IsActive="False" Visibility="Collapsed" />
-                </Grid>
-            </Button>
-            <Button Grid.Column="3" Style="{StaticResource PanelIconButtonStyle}" Click="OnWebClick"
-                    ToolTipService.ToolTip="网页版" AutomationProperties.Name="网页版">
-                <FontIcon Glyph="&#xE774;" FontSize="16" />
-            </Button>
-            <Button Grid.Column="4" Style="{StaticResource PanelIconButtonStyle}" Click="OnWebClick"
-                    ToolTipService.ToolTip="排行榜" AutomationProperties.Name="排行榜">
-                <FontIcon Glyph="&#xE7C1;" FontSize="16" />
-            </Button>
-            <Button Grid.Column="5" Style="{StaticResource PanelIconButtonStyle}" Click="OnSettingsClick"
-                    ToolTipService.ToolTip="设置" AutomationProperties.Name="设置">
-                <FontIcon Glyph="&#xE713;" FontSize="16" />
-            </Button>
-        </Grid>
+        <!-- Takes focus when the panel opens by mouse, so Esc works without a focus ring. -->
+        <ContentControl x:Name="FocusSink" Width="1" Height="1" Opacity="0" IsTabStop="True"
+                        HorizontalAlignment="Left" VerticalAlignment="Top"
+                        UseSystemFocusVisuals="False" AutomationProperties.Name="Vibe Usage 面板" />
 
-        <!-- 概览 and one tab per subscription -->
-        <SelectorBar x:Name="TabBar" Grid.Row="1" Margin="6,0,6,0" SelectionChanged="OnTabChanged" />
+        <Grid x:Name="HeaderHost" Grid.Row="0" />
+        <Grid x:Name="SubscriptionRowHost" Grid.Row="1" />
 
         <ScrollViewer x:Name="Scroller" Grid.Row="2"
                       HorizontalScrollMode="Disabled" HorizontalScrollBarVisibility="Disabled"
                       VerticalScrollMode="Auto" VerticalScrollBarVisibility="Auto">
-            <StackPanel x:Name="ContentStack" Padding="12,0,12,12">
-
-                <!-- 订阅配额 -->
-                <Grid Margin="4,8,0,4" ColumnSpacing="8">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <TextBlock Text="订阅配额" Style="{StaticResource PanelSectionTitleStyle}" VerticalAlignment="Center" />
-                    <TextBlock x:Name="QuotaSummary" Grid.Column="1" Style="{StaticResource PanelCaptionSecondaryStyle}"
-                               VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
-                    <Button x:Name="RefreshQuotaButton" Grid.Column="2" Style="{StaticResource PanelIconButtonStyle}" Height="28"
-                            Click="OnRefreshQuotasClick" ToolTipService.ToolTip="刷新额度"
-                            AutomationProperties.Name="刷新额度">
-                        <Grid>
-                            <FontIcon x:Name="RefreshGlyph" Glyph="&#xE72C;" FontSize="14" />
-                            <ProgressRing x:Name="RefreshRing" Width="14" Height="14" IsActive="False" Visibility="Collapsed" />
-                        </Grid>
-                    </Button>
-                </Grid>
-                <Border Style="{StaticResource PanelCardStyle}" Padding="4">
-                    <StackPanel x:Name="QuotaHost" />
-                </Border>
-
-                <!-- 近期消耗 -->
-                <Grid Margin="4,12,0,4" ColumnSpacing="4">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <TextBlock Text="近期消耗" Style="{StaticResource PanelSectionTitleStyle}" VerticalAlignment="Center" />
-                    <ComboBox x:Name="RangeBox" Grid.Column="1" MinWidth="0" VerticalAlignment="Center"
-                              SelectionChanged="OnRangeChanged" AutomationProperties.Name="时间范围" />
-                    <DropDownButton x:Name="FilterButton" Grid.Column="2" VerticalAlignment="Center"
-                                    Background="Transparent" BorderThickness="0" Padding="8,6,6,6"
-                                    ToolTipService.ToolTip="筛选" AutomationProperties.Name="筛选">
-                        <FontIcon Glyph="&#xE71C;" FontSize="14" />
-                        <DropDownButton.Flyout>
-                            <MenuFlyout Placement="BottomEdgeAlignedRight">
-                                <MenuFlyoutItem Text="工具" IsEnabled="False" />
-                                <ToggleMenuFlyoutItem Text="Codex" IsChecked="True" />
-                                <ToggleMenuFlyoutItem Text="Claude Code" IsChecked="True" />
-                                <ToggleMenuFlyoutItem Text="Cursor" IsChecked="True" />
-                                <MenuFlyoutSeparator />
-                                <MenuFlyoutItem Text="终端" IsEnabled="False" />
-                                <ToggleMenuFlyoutItem Text="DESKTOP-7Q2K" IsChecked="True" />
-                                <ToggleMenuFlyoutItem Text="mac-mini" IsChecked="True" />
-                            </MenuFlyout>
-                        </DropDownButton.Flyout>
-                    </DropDownButton>
-                </Grid>
-                <Border Style="{StaticResource PanelCardStyle}" Padding="16,12,16,12">
-                    <StackPanel>
-                        <Grid ColumnSpacing="12">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <StackPanel VerticalAlignment="Center">
-                                <TextBlock x:Name="CostText" Style="{StaticResource TitleTextBlockStyle}" />
-                                <TextBlock Text="预估费用" Style="{StaticResource PanelCaptionSecondaryStyle}" />
-                            </StackPanel>
-                            <Grid Grid.Column="1" ColumnSpacing="12" RowSpacing="1" VerticalAlignment="Center">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto" />
-                                    <ColumnDefinition Width="Auto" />
-                                </Grid.ColumnDefinitions>
-                                <Grid.RowDefinitions>
-                                    <RowDefinition Height="Auto" />
-                                    <RowDefinition Height="Auto" />
-                                    <RowDefinition Height="Auto" />
-                                </Grid.RowDefinitions>
-                                <TextBlock Text="Token" Style="{StaticResource PanelCaptionSecondaryStyle}" VerticalAlignment="Center" />
-                                <TextBlock x:Name="TokensText" Grid.Column="1" Style="{StaticResource PanelBodyStyle}" />
-                                <TextBlock Grid.Row="1" Text="活跃" Style="{StaticResource PanelCaptionSecondaryStyle}" VerticalAlignment="Center" />
-                                <TextBlock x:Name="ActiveText" Grid.Row="1" Grid.Column="1" Style="{StaticResource PanelBodyStyle}" />
-                                <TextBlock Grid.Row="2" Text="AI 工时" Style="{StaticResource PanelCaptionSecondaryStyle}" VerticalAlignment="Center" />
-                                <TextBlock x:Name="AiText" Grid.Row="2" Grid.Column="1" Style="{StaticResource PanelBodyStyle}" />
-                            </Grid>
-                        </Grid>
-                        <Grid x:Name="ChartArea" Height="76" Margin="0,8,0,0" />
-                        <Grid x:Name="AxisArea" Height="18" Margin="0,4,0,0" />
-                    </StackPanel>
-                </Border>
-
-                <!-- 展开详情 -->
-                <Expander x:Name="DetailsExpander" Margin="0,6,0,0"
-                          HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch"
-                          Header="使用分布">
-                    <StackPanel Spacing="10">
-                        <SelectorBar x:Name="DimensionBar" Margin="-12,-10,-12,0" SelectionChanged="OnDimensionChanged" />
-                        <Grid>
-                            <TextBlock x:Name="DimensionTotal" Style="{StaticResource PanelCaptionSecondaryStyle}" VerticalAlignment="Center" />
-                            <ComboBox x:Name="MetricBox" HorizontalAlignment="Right" MinWidth="0"
-                                      SelectionChanged="OnMetricChanged" AutomationProperties.Name="按 Token 或费用" />
-                        </Grid>
-                        <StackPanel x:Name="DimensionList" Spacing="12" />
-                    </StackPanel>
-                </Expander>
-            </StackPanel>
+            <StackPanel x:Name="ContentStack" Padding="12,0,12,0" Spacing="8" />
         </ScrollViewer>
 
+        <Grid x:Name="FooterHost" Grid.Row="3" />
     </Grid>
 </Window>

@@ -26,11 +26,16 @@ public static class PocNative {
 "@
 [PocNative]::SetProcessDPIAware() | Out-Null
 
-try {
-    Set-DisplayResolution -Width 1920 -Height 1080 -Force -ErrorAction Stop
-    Start-Sleep -Seconds 3
-} catch {
-    Write-Host "display resolution unchanged: $($_.Exception.Message)"
+# Tall enough for the expanded panel (1068 DIP) when the runner allows it.
+foreach ($mode in @(@(2560, 1600), @(2560, 1440), @(1920, 1200), @(1920, 1080))) {
+    try {
+        Set-DisplayResolution -Width $mode[0] -Height $mode[1] -Force -ErrorAction Stop
+        Start-Sleep -Seconds 3
+        Write-Host "display resolution $($mode[0])x$($mode[1])"
+        break
+    } catch {
+        Write-Host "display resolution $($mode[0])x$($mode[1]) refused: $($_.Exception.Message)"
+    }
 }
 $screen = [System.Windows.Forms.SystemInformation]::VirtualScreen
 Write-Host "screen: $($screen.Width)x$($screen.Height) at $($screen.Left),$($screen.Top)"
@@ -96,11 +101,11 @@ function Invoke-Case([string]$name, [bool]$light, [string[]]$extra, [scriptblock
     Start-Sleep -Seconds 2
 }
 
-# Dark, then switch the system to light while the panel is open (follows live?).
-Invoke-Case '1-dark' $false @() { Set-Theme $true; Start-Sleep -Seconds 4 }
-Invoke-Case '2-light' $true @()
-Invoke-Case '3-dark-details' $false @('--expand')
-Invoke-Case '4-light-claude' $true @('--tab=claude')
+# The Mac new panel's states, for side-by-side comparison (the panel is dark only).
+Invoke-Case '1-collapsed' $false @()
+Invoke-Case '2-expanded' $false @('--expand')
+Invoke-Case '3-single' $false @('--only=claude')
+Invoke-Case '4-detail' $false @('--tab=claude')
 
 $log = Join-Path $logDir 'panel-poc.log'
 if (Test-Path $log) {

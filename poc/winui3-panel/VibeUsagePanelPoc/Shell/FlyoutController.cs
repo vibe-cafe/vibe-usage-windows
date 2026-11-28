@@ -187,7 +187,7 @@ internal sealed class FlyoutController : IDisposable
         _panel.FocusForOpen(source == ShowSource.Keyboard);
 
         Win32.GetWindowRect(_panel.Hwnd, out var actual);
-        PocLog.Write($"show source={source} anchor={(anchor?.ToString() ?? "none")} icon={(_tray.TryGetIconRect()?.ToString() ?? "none")} edge={target.Edge} dpi={target.Dpi} " +
+        PocLog.Write($"show source={source} anchor={(anchor?.ToString() ?? "none")} icon={(_tray.TryGetIconRect()?.ToString() ?? "none")} edge={target.Edge} dpi={target.Dpi} frame={_panel.FrameExtra()} contentDip={_panel.MeasureDesiredHeightDip()} " +
                      $"rect={actual} SetForegroundWindow={granted} isForeground={fg == _panel.Hwnd} fg={Win32.ClassName(fg)}");
         WriteRectFile(actual);
 
@@ -334,10 +334,12 @@ internal sealed class FlyoutController : IDisposable
         double scale = dpi / 96.0;
         var work = ToBox(mi.rcWork);
         double margin = Math.Round(MarginDip * scale);
-        double w = Math.Round(PanelWindow.PanelWidthDip * scale);
+        // The client area gets the panel's DIP size; the thin system border comes on top.
+        var (frameW, frameH) = _panel.FrameExtra();
+        double w = Math.Round(PanelWindow.PanelWidthDip * scale) + frameW;
         double desired = _panel.MeasureDesiredHeightDip();
         if (desired < 100) desired = 600; // not laid out yet (warm-up)
-        double h = Math.Min(Math.Ceiling(desired * scale), work.H - 2 * margin);
+        double h = Math.Min(Math.Ceiling(desired * scale) + frameH, work.H - 2 * margin);
         var p = PanelPlacement.Place(ToBox(mi.rcMonitor), work, icon, w, h, margin);
         return (new RectInt32((int)Math.Round(p.X), (int)Math.Round(p.Y), (int)w, (int)h), p.Edge, dpi);
     }

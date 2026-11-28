@@ -68,7 +68,7 @@ public partial class App : Application
         }
 
         PocLog.Write($"startup os={Environment.OSVersion.Version} arch={RuntimeInformation.ProcessArchitecture} " +
-                     $"args=[{string.Join(' ', argv)}] acrylic={FlyoutBackdrop.IsSupported}");
+                     $"args=[{string.Join(' ', argv)}]");
 
         try
         {
@@ -89,6 +89,7 @@ public partial class App : Application
 
         _tray.ContextMenuRequested += OnTrayContextMenu;
         _tray.OpenRequested += () => _flyout.Show(null, ShowSource.External);
+        _panel.QuitRequested += Quit;
         _panel.SettingsRequested += () =>
         {
             _flyout.Hide("open-settings", auto: false);

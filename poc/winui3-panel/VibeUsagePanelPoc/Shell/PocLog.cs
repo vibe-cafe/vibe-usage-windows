@@ -51,6 +51,9 @@ internal sealed class PocOptions
     /// <summary>Start with 使用分布 expanded.</summary>
     public bool Expand { get; private set; }
 
+    /// <summary>Only this subscription is enabled (the Mac's single-subscription panel, no 概览 row).</summary>
+    public string? Only { get; private set; }
+
     /// <summary>Start on a subscription tab: codex, claude, cursor, grok.</summary>
     public string? Tab { get; private set; }
 
@@ -72,6 +75,7 @@ internal sealed class PocOptions
             else if (a == "--pin") o.Pin = true;
             else if (a == "--expand") o.Expand = true;
             else if (a.StartsWith("--tab=", StringComparison.Ordinal)) o.Tab = a[6..];
+            else if (a.StartsWith("--only=", StringComparison.Ordinal)) o.Only = a[7..];
             else if (a.StartsWith("--rect-file=", StringComparison.Ordinal)) o.RectFile = a[12..];
             else if (a.StartsWith("--log-dir=", StringComparison.Ordinal)) o.LogDir = a[10..];
             else if (a.StartsWith("--icon-file=", StringComparison.Ordinal)) o.IconFile = a[12..];

@@ -28,7 +28,7 @@ internal static class XamlDiagnostics
         "PanelCaptionCautionStyle", "PanelBarStyle", "PanelBarCriticalStyle", "PanelBarCautionStyle",
         "PanelRingStyle", "PanelRingCriticalStyle", "PanelRingCautionStyle", "PanelChartBarStyle",
         "PanelDividerStyle", "PanelGlyphPathStyle", "PanelGlyphPathTertiaryStyle", "PanelIconButtonStyle",
-        "PanelTextButtonStyle", "PanelRowButtonStyle", "SettingsCardStyle",
+        "PanelTextButtonStyle", "PanelRowButtonStyle", "SettingsCardStyle", "BareButtonStyle",
     };
 
     private static readonly (string Name, string Xaml)[] Snippets =
