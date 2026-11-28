@@ -1,0 +1,17 @@
+pub mod api_client;
+pub mod auto_launch;
+pub mod claude_usage;
+pub mod cli_doctor;
+pub mod codex_usage;
+pub mod credential_store;
+pub mod cursor_login;
+pub mod device_link;
+pub mod diagnostics;
+pub mod quota_cli;
+pub mod rate_limits;
+pub mod scheduler;
+pub mod sync_engine;
+pub mod sync_history;
+pub mod test_diagnostics;
+pub mod updater;
+pub mod zcode_credentials;

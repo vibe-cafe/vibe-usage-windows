@@ -110,6 +110,14 @@ Windows 和 macOS 共用 `cli-bootstrap.mjs`。每次先查 npm `latest`，命�
 | `%APPDATA%\ai.vibecafe.vibe-usage.windows\window-size.json` | 主窗口上次的大小（逻辑像素，`{"width","height"}`），只由 App 读写；从未调整过就不建这个文件，内容损坏或尺寸不合理时忽略、用默认大小。「重置配置」不删除（只是界面状态） |
 | `%APPDATA%\ai.vibecafe.vibe-usage.windows\sync-history.json` | App 自己的最近 10 次同步摘要（只有类型化字段，见 `docs/DIAGNOSTICS.md`）；「重置配置」时删除 |
 
+## 原生后端（开发中，#87）
+
+`crates/backend` 供原生宿主调用。启动时传入漫游配置目录、本地数据目录、资源目录、版本、自启标志和回调。设置及最近十次同步记录使用漫游配置目录，同步日志使用本地数据目录下的 `logs`。CLI 继续使用与本机 CLI 共用的账号和状态目录。
+
+自启时，启动用量、已选额度、手动和定时同步共用代理等待。更新检查沿用启动和每 24 小时的独立节奏，外测构建禁用。手动启动直接读一次。打开面板时，用量复用最近 60 秒同账号、服务器、周期的结果，额度遵循产品自己的缓存间隔。面板保持打开期间没有每分钟轮询；同步间隔为 30 分钟。同步成功后重读当前周期的用量。真正显示设置窗口时才检查 Cursor CLI 登录支持。
+
+原生设置支持按项修改，记录 `quotaProductOrder`、`quotaSelectedTabId` 和上次成功同步的毫秒时间戳 `lastSuccessfulSyncAt`。旧设置缺少这些字段时使用默认值，重置账号会清除同步时间。冻结版继续使用上表所列的服务。
+
 ## 验收清单
 
 真机验收清单见 `docs/WINDOWS_ACCEPTANCE.md`。

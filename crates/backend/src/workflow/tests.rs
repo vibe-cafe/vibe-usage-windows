@@ -1,0 +1,458 @@
+use super::*;
+use crate::commands::{self, Setting};
+use crate::services::{
+    cursor_login::{LoginState, LoginStatus},
+    sync_history::SyncOutcome,
+};
+use crate::{Host, Options};
+use std::sync::{
+    atomic::{AtomicBool, AtomicU64, Ordering},
+    Arc,
+};
+use tempfile::TempDir;
+use tokio::sync::Notify;
+use vibe_core::{
+    config::{ConfigManager, VibeUsageConfig},
+    RateLimitStatus,
+};
+use RateLimitProvider::{Cursor, Grok};
+
+#[derive(Clone, Debug, PartialEq)]
+enum Call {
+    Proxy,
+    Usage(UsageQuery),
+    Quotas(Vec<RateLimitProvider>),
+    Sync,
+    Update,
+    Support,
+    Diagnostics,
+}
+
+#[derive(Default)]
+struct Fake {
+    calls: Mutex<Vec<Call>>,
+    wall_ms: AtomicU64,
+    hold_quotas: AtomicBool,
+    finish_quotas: Notify,
+    proxy: Notify,
+    success: AtomicBool,
+    hold_sync: AtomicBool,
+    finish_sync: Notify,
+}
+
+impl Fake {
+    fn record(&self, call: Call) {
+        self.calls.lock().unwrap().push(call);
+    }
+    fn take(&self) -> Vec<Call> {
+        std::mem::take(&mut *self.calls.lock().unwrap())
+    }
+}
+
+#[async_trait]
+impl Network for Fake {
+    fn now_ms(&self) -> u64 {
+        self.wall_ms.load(Ordering::SeqCst)
+    }
+    async fn proxy_ready(&self, _: &Backend) {
+        self.record(Call::Proxy);
+        self.proxy.notified().await;
+    }
+    async fn usage(
+        &self,
+        _: &Backend,
+        _: &str,
+        _: &str,
+        query: &UsageQuery,
+    ) -> Result<Value, String> {
+        self.record(Call::Usage(query.clone()));
+        Ok(serde_json::json!({"buckets":[]}))
+    }
+    async fn quotas(
+        &self,
+        _: &Backend,
+        due: &[RateLimitProvider],
+        _: ZCodeQuotaRegion,
+    ) -> Vec<ProviderRateLimit> {
+        self.record(Call::Quotas(due.to_vec()));
+        if self.hold_quotas.load(Ordering::SeqCst) {
+            self.finish_quotas.notified().await;
+        }
+        due.iter()
+            .map(|p| ProviderRateLimit::empty(*p, RateLimitStatus::Ok))
+            .collect()
+    }
+    async fn sync(&self, _: &Backend) -> sync_engine::CliRun {
+        self.record(Call::Sync);
+        if self.hold_sync.load(Ordering::SeqCst) {
+            self.finish_sync.notified().await;
+        }
+        let success = self.success.load(Ordering::SeqCst);
+        sync_engine::CliRun {
+            message: if success {
+                Ok("ok".into())
+            } else {
+                Err("fixture".into())
+            },
+            outcome: if success {
+                SyncOutcome::Success
+            } else {
+                SyncOutcome::Failed
+            },
+            reason: None,
+            cli_fallback: None,
+        }
+    }
+    async fn update(&self, _: &Backend) -> Result<Option<UpdateInfo>, String> {
+        self.record(Call::Update);
+        Ok(None)
+    }
+    fn cursor_support(&self, _: &Backend) {
+        self.record(Call::Support);
+    }
+    async fn diagnostics(&self, _: &Backend) -> String {
+        self.record(Call::Diagnostics);
+        "synthetic report".into()
+    }
+}
+
+struct TestHost;
+impl Host for TestHost {
+    fn event(&self, _: &str, _: Value) {}
+    fn request_exit(&self) {}
+}
+
+struct Fixture {
+    dir: TempDir,
+    app: Backend,
+    net: Arc<Fake>,
+}
+
+impl Fixture {
+    fn new(autostart: bool, linked: bool, selected: Vec<RateLimitProvider>) -> Self {
+        Self::with_retirement(autostart, linked, selected, |_| {})
+    }
+
+    fn with_retirement(
+        autostart: bool,
+        linked: bool,
+        selected: Vec<RateLimitProvider>,
+        retire_legacy: impl FnOnce(&Backend) + Send + 'static,
+    ) -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        let config = ConfigManager::with_dir(dir.path().join("cli"), false);
+        if linked {
+            config
+                .save(&VibeUsageConfig {
+                    api_url: Some("https://example.invalid".into()),
+                    api_key: Some("fixture".into()),
+                    ..Default::default()
+                })
+                .unwrap();
+        }
+        let options = Options {
+            roaming_config: dir.path().join("roaming"),
+            local_data: dir.path().join("local"),
+            resources: dir.path().join("resources"),
+            version: "1.0".into(),
+            autostart,
+        };
+        let net = Arc::new(Fake::default());
+        let app = Backend::initialize_with(
+            options,
+            Arc::new(TestHost),
+            config,
+            net.clone(),
+            |app| {
+                assert_eq!(app.ctx().launch_network_ready(), !autostart);
+                app.ctx()
+                    .settings
+                    .lock()
+                    .unwrap()
+                    .set_quota_selection(selected);
+            },
+            retire_legacy,
+        );
+        Self { dir, app, net }
+    }
+    fn reload(&self) -> crate::state::AppCtx {
+        crate::state::AppCtx::new(self.dir.path().join("roaming"))
+    }
+
+    async fn advance(&self, seconds: u64) {
+        self.net.wall_ms.fetch_add(seconds * 1000, Ordering::SeqCst);
+        tokio::time::advance(Duration::from_secs(seconds)).await;
+        settle().await;
+    }
+}
+
+async fn settle() {
+    // All fake operations complete on this runtime, apart from the explicit proxy wait.
+    for _ in 0..8 {
+        tokio::task::yield_now().await;
+    }
+}
+
+fn today() -> UsageQuery {
+    UsageQuery::Days { days: 1 }
+}
+
+#[tokio::test]
+async fn initialization_returns_while_hook_retirement_is_still_waiting() {
+    let (release, wait) = std::sync::mpsc::channel();
+    let (finished, outcome) = tokio::sync::oneshot::channel();
+    let _f = Fixture::with_retirement(false, false, vec![], move |_| {
+        let after_return = wait.recv_timeout(Duration::from_secs(2)).is_ok();
+        finished.send(after_return).unwrap();
+    });
+    let _ = release.send(());
+    assert!(outcome.await.unwrap());
+}
+
+#[tokio::test(start_paused = true)]
+async fn autostart_blocks_every_reader_and_manual_sync_but_not_updates() {
+    let f = Fixture::new(true, true, vec![Cursor]);
+    let app = &f.app;
+    assert!(!app.ctx().launch_network_ready());
+    commands::trigger_sync(app.clone());
+    app.panel_opened(today());
+    app.settings_shown();
+    commands::update_setting(app.clone(), Setting::ShowCostInTray(false)).unwrap();
+    let doctor = tokio::spawn(commands::collect_diagnostics(app.clone()));
+    let quota = tokio::spawn(commands::get_rate_limits(app.clone(), false));
+    let usage = tokio::spawn(commands::fetch_usage(app.clone(), today()));
+    f.advance(90).await;
+    let calls = f.net.take();
+    assert!(calls.contains(&Call::Proxy));
+    assert_eq!(calls.contains(&Call::Update), updater::available());
+    assert!(calls
+        .iter()
+        .all(|c| matches!(c, Call::Proxy | Call::Update)));
+    assert!(!doctor.is_finished() && !quota.is_finished() && !usage.is_finished());
+    f.net.proxy.notify_one();
+    doctor.await.unwrap();
+    quota.await.unwrap();
+    usage.await.unwrap().unwrap();
+    settle().await;
+    let calls = f.net.take();
+    assert!(
+        calls.contains(&Call::Sync)
+            && calls.contains(&Call::Support)
+            && calls.contains(&Call::Diagnostics)
+    );
+    assert_eq!(
+        calls.iter().filter(|c| matches!(c, Call::Usage(_))).count(),
+        1
+    );
+    assert_eq!(
+        calls
+            .iter()
+            .filter(|c| matches!(c, Call::Quotas(_)))
+            .count(),
+        1
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn startup_reads_once_and_only_panel_opening_checks_product_intervals() {
+    let f = Fixture::new(false, true, vec![Cursor, Grok]);
+    settle().await;
+    let mut calls = f.net.take();
+    calls.retain(|c| *c != Call::Update);
+    assert_eq!(calls.len(), 3);
+    assert!(calls.contains(&Call::Sync) && calls.contains(&Call::Usage(today())));
+    assert!(calls.contains(&Call::Quotas(vec![Cursor, Grok])));
+    f.app.panel_opened(today());
+    settle().await;
+    f.advance(61).await;
+    assert!(f.net.take().is_empty());
+    f.app.panel_opened(today());
+    settle().await;
+    let calls = f.net.take();
+    assert_eq!(calls.len(), 2);
+    assert!(calls.contains(&Call::Usage(today())) && calls.contains(&Call::Quotas(vec![Cursor])));
+    f.advance(1738).await;
+    assert!(f.net.take().is_empty());
+    f.advance(1).await;
+    assert_eq!(f.net.take(), [Call::Sync]);
+    f.app.panel_opened(today());
+    settle().await;
+    assert!(f.net.take().contains(&Call::Quotas(vec![Cursor, Grok])));
+}
+
+#[tokio::test(start_paused = true)]
+async fn resume_after_a_missed_interval_syncs_once_at_the_next_heartbeat() {
+    let f = Fixture::new(false, true, vec![Cursor]);
+    f.net.success.store(true, Ordering::SeqCst);
+    settle().await;
+    f.app.panel_opened(today());
+    settle().await;
+    f.net.take();
+    // During Windows sleep the wall clock advances while the timer does not.
+    f.net.wall_ms.fetch_add(3_600_000, Ordering::SeqCst);
+    f.advance(15).await;
+    assert_eq!(f.net.take(), [Call::Sync, Call::Usage(today())]);
+    f.advance(15).await;
+    assert!(f.net.take().is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn forced_refresh_during_startup_runs_once_more_for_all_waiters() {
+    let f = Fixture::new(false, false, vec![Cursor]);
+    f.net.hold_quotas.store(true, Ordering::SeqCst);
+    settle().await;
+    assert!(f.net.take().contains(&Call::Quotas(vec![Cursor])));
+    let refresh = || tokio::spawn(commands::get_rate_limits(f.app.clone(), true));
+    let first = refresh();
+    let second = refresh();
+    settle().await;
+    assert!(f.net.take().is_empty());
+    f.net.finish_quotas.notify_one();
+    settle().await;
+    assert_eq!(f.net.take(), [Call::Quotas(vec![Cursor])]);
+    let third = refresh();
+    settle().await;
+    f.net.hold_quotas.store(false, Ordering::SeqCst);
+    f.net.finish_quotas.notify_one();
+    for waiter in [first, second, third] {
+        assert_eq!(waiter.await.unwrap()[0].provider, Cursor);
+    }
+    assert!(f.net.take().is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn success_rereads_usage_only_and_survives_restart_until_reset() {
+    let f = Fixture::new(false, true, vec![Cursor]);
+    settle().await;
+    f.net.take();
+    assert!(f.reload().sync_state.lock().unwrap().last_sync_at.is_none());
+    f.net.success.store(true, Ordering::SeqCst);
+    commands::trigger_sync(f.app.clone());
+    settle().await;
+    assert_eq!(f.net.take(), [Call::Sync, Call::Usage(today())]);
+    let last = commands::get_sync_state(f.app.clone())
+        .last_sync_at
+        .unwrap();
+    assert_eq!(
+        f.reload().sync_state.lock().unwrap().last_sync_at,
+        Some(last)
+    );
+    assert_eq!(commands::get_sync_history(f.app.clone()).len(), 2);
+    commands::reset_config(f.app.clone()).unwrap();
+    assert_eq!(f.reload().sync_state.lock().unwrap().last_sync_at, None);
+    assert!(commands::get_sync_history(f.app.clone()).is_empty());
+    assert!(f.app.cached_usage().is_none());
+    f.advance(1800).await;
+    assert!(f.net.take().is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn manual_sync_across_a_scheduled_tick_does_not_queue_another_upload() {
+    let f = Fixture::new(false, true, vec![]);
+    settle().await;
+    f.net.take();
+    f.advance(1799).await;
+    f.net.hold_sync.store(true, Ordering::SeqCst);
+    f.net.success.store(true, Ordering::SeqCst);
+    commands::trigger_sync(f.app.clone());
+    settle().await;
+    assert_eq!(f.net.take(), [Call::Sync]);
+    f.advance(1).await;
+    f.net.hold_sync.store(false, Ordering::SeqCst);
+    f.net.finish_sync.notify_one();
+    settle().await;
+    f.advance(15).await;
+    assert_eq!(f.net.take(), [Call::Usage(today())]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn display_patches_do_not_read_even_when_selected_quotas_are_stale() {
+    let f = Fixture::new(false, false, vec![Cursor]);
+    settle().await;
+    f.net.take();
+    f.advance(61).await;
+    commands::update_setting(
+        f.app.clone(),
+        Setting::QuotaProductOrder(vec![Grok, Cursor, Grok]),
+    )
+    .unwrap();
+    commands::update_setting(f.app.clone(), Setting::QuotaSelectedTabId(Some(Cursor))).unwrap();
+    settle().await;
+    assert!(f.net.take().is_empty());
+    commands::update_setting(f.app.clone(), Setting::ShowCostInTray(false)).unwrap();
+    commands::update_setting(f.app.clone(), Setting::ShowTokensInTray(true)).unwrap();
+    settle().await;
+    assert!(f.net.take().is_empty());
+    let saved = f.reload().settings.into_inner().unwrap();
+    assert!(!saved.show_cost_in_tray);
+    assert!(saved.show_tokens_in_tray);
+    assert_eq!(saved.quota_product_order, [Grok, Cursor]);
+    assert_eq!(saved.quota_selected_tab_id, Some(Cursor));
+}
+
+#[tokio::test(start_paused = true)]
+async fn changed_egress_selection_and_cursor_login_refresh_selected_cards() {
+    let f = Fixture::new(false, false, vec![Cursor]);
+    settle().await;
+    f.net.take();
+    f.advance(61).await;
+    commands::update_setting(f.app.clone(), Setting::EgressMode(crate::EgressMode::Pause)).unwrap();
+    settle().await;
+    assert_eq!(f.net.take(), [Call::Quotas(vec![Cursor])]);
+    f.advance(61).await;
+    commands::update_setting(f.app.clone(), Setting::EgressMode(crate::EgressMode::Pause)).unwrap();
+    settle().await;
+    assert!(f.net.take().is_empty());
+    cursor_login::after_change(
+        &f.app,
+        LoginStatus {
+            state: LoginState::SignedOut,
+            email: None,
+            error: None,
+            supported: Some(true),
+        },
+    );
+    settle().await;
+    assert_eq!(f.net.take(), [Call::Quotas(vec![Cursor])]);
+    commands::set_quota_product_selected(f.app.clone(), Grok, true)
+        .await
+        .unwrap();
+    assert_eq!(f.net.take(), [Call::Quotas(vec![Cursor, Grok])]);
+    commands::get_rate_limits(f.app.clone(), true).await;
+    assert_eq!(f.net.take(), [Call::Quotas(vec![Cursor, Grok])]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn preloading_panels_about_history_and_settings_snapshots_are_offline() {
+    let f = Fixture::new(true, false, vec![]);
+    settle().await;
+    let updates: Vec<_> = updater::available()
+        .then_some(Call::Update)
+        .into_iter()
+        .collect();
+    assert_eq!(f.net.take(), updates);
+    assert!(f.app.ctx().launch_network_ready());
+    commands::get_cached_rate_limits(f.app.clone());
+    f.app.cached_usage();
+    commands::get_settings(f.app.clone());
+    commands::get_update_info(f.app.clone());
+    commands::get_sync_history(f.app.clone());
+    commands::get_sync_state(f.app.clone());
+    f.advance(86399).await;
+    assert!(f.net.take().is_empty());
+    f.advance(1).await;
+    assert_eq!(f.net.take(), updates);
+    assert_eq!(
+        commands::check_for_update(f.app.clone()).await.is_ok(),
+        updater::available()
+    );
+    assert_eq!(f.net.take(), updates);
+    f.app.settings_shown();
+    settle().await;
+    assert_eq!(f.net.take(), [Call::Support]);
+    assert_eq!(
+        commands::collect_diagnostics(f.app.clone()).await,
+        "synthetic report"
+    );
+    assert_eq!(f.net.take(), [Call::Diagnostics]);
+}
