@@ -1,4 +1,8 @@
-# Windows 原生面板展示规则
+# Windows 原生库
+
+`src/VibeUsage.Backend` 提供原生后端的 C# 封装和可独立使用的假后端。命令与事件的共用样例、C 头文件、内存所有权、订阅顺序和真 DLL 测试命令见[接口契约](contract/README.md)。
+
+## 面板展示规则
 
 `src/VibeUsage.Display` 是面板和托盘可共用的 .NET 10 纯计算库。它接收额度快照、用量桶、服务端活跃时长、选中的筛选、时区和当前时刻。库只依赖 .NET 基础类库，可以在 macOS 和 Windows 上运行。
 

@@ -1,0 +1,27 @@
+{
+  "kind": "event",
+  "name": "usage-updated",
+  "payload": {
+    "query": {
+      "kind": "days",
+      "days": 1
+    },
+    "data": {
+      "buckets": [
+        {
+          "source": "codex",
+          "project": "sample",
+          "model": "sample",
+          "hostname": "fixture",
+          "bucketStart": "2026-11-28T00:00:00Z",
+          "inputTokens": 12,
+          "outputTokens": 2,
+          "cachedInputTokens": 1,
+          "reasoningOutputTokens": 0,
+          "totalTokens": 15
+        }
+      ],
+      "hasAnyData": true
+    }
+  }
+}

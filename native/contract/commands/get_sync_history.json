@@ -1,0 +1,15 @@
+{
+  "args": {},
+  "value": [
+    {
+      "startedAt": 1,
+      "trigger": "manual",
+      "outcome": "failed",
+      "durationMs": 20,
+      "reason": {
+        "code": "cliExit",
+        "exitCode": 1
+      }
+    }
+  ]
+}

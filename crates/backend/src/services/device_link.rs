@@ -5,7 +5,7 @@
 use crate::services::api_client::{poll_device_code, request_device_code};
 use crate::state::AppCtx;
 use crate::Backend;
-use serde_json::json;
+use serde::Serialize;
 use std::time::Duration;
 use vibe_core::config::{resolve_api_url, verification_url, VibeUsageConfig};
 
@@ -27,7 +27,16 @@ impl Attempt {
     }
 }
 
-fn emit(app: &Backend, payload: serde_json::Value) {
+#[derive(Serialize)]
+#[serde(tag = "status", rename_all = "camelCase")]
+enum DeviceLink<'a> {
+    Success,
+    Error { message: &'a str },
+    Denied,
+    Expired,
+}
+
+fn emit(app: &Backend, payload: DeviceLink<'_>) {
     let _ = app.emit("device-link", payload);
 }
 
@@ -92,6 +101,23 @@ where
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    #[test]
+    fn success_matches_the_host_fixture() {
+        let sample: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../native/contract/events/device-link.json"
+        ))
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(DeviceLink::Success).unwrap(),
+            sample["payload"]
+        );
+        let failure = DeviceLink::Error { message: "fixture" };
+        assert_eq!(
+            serde_json::to_value(failure).unwrap(),
+            serde_json::json!({"status": "error", "message": "fixture"})
+        );
+    }
 
     #[tokio::test]
     async fn a_late_code_cannot_reopen_the_browser_or_replace_the_new_poll() {
@@ -170,10 +196,12 @@ async fn poll_loop(
         if let Some(api_key) = res.api_key {
             let api_url = resolve_api_url(res.api_url.as_deref(), &base_url);
             match configure(&app, api_key, api_url.to_owned()) {
-                Ok(()) => emit(&app, json!({ "status": "success" })),
+                Ok(()) => emit(&app, DeviceLink::Success),
                 Err(_) => emit(
                     &app,
-                    json!({ "status": "error", "message": "无法保存配置" }),
+                    DeviceLink::Error {
+                        message: "无法保存配置",
+                    },
                 ),
             }
             return;
@@ -181,21 +209,21 @@ async fn poll_loop(
         match res.error.as_deref() {
             Some("authorization_pending") | None => continue,
             Some("access_denied") => {
-                emit(&app, json!({ "status": "denied" }));
+                emit(&app, DeviceLink::Denied);
                 return;
             }
             Some("expired_token") => {
-                emit(&app, json!({ "status": "expired" }));
+                emit(&app, DeviceLink::Expired);
                 return;
             }
             Some(other) => {
-                emit(&app, json!({ "status": "error", "message": other }));
+                emit(&app, DeviceLink::Error { message: other });
                 return;
             }
         }
     }
     if app.ctx().device_link.lock().unwrap().generation == id {
-        emit(&app, json!({ "status": "expired" }));
+        emit(&app, DeviceLink::Expired);
     }
 }
 

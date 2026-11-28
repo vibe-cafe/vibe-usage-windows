@@ -1,0 +1,9 @@
+{
+  "args": {
+    "query": {
+      "kind": "days",
+      "days": 1
+    }
+  },
+  "value": null
+}

@@ -1,0 +1,21 @@
+{
+  "kind": "event",
+  "name": "rate-limits-updated",
+  "payload": {
+    "snapshots": [
+      {
+        "provider": "codex",
+        "status": {
+          "kind": "ok"
+        },
+        "fiveHour": {
+          "utilization": 42.5
+        }
+      }
+    ],
+    "refreshing": true,
+    "providers": [
+      "codex"
+    ]
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "kind": "event",
+  "name": "device-link",
+  "payload": {
+    "status": "success"
+  }
+}

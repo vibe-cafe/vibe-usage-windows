@@ -117,6 +117,7 @@ pub struct UpdateInfo {
 #[derive(Default)]
 pub struct RateLimitCache {
     pub refreshing: bool,
+    pub refreshing_providers: Vec<RateLimitProvider>,
     pub completed_forced_reads: u64,
     pub snapshots: HashMap<RateLimitProvider, (ProviderRateLimit, Instant)>,
     last_claude_models: Option<LiveModelHistory>,

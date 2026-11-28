@@ -1,0 +1,15 @@
+{
+  "args": {},
+  "value": {
+    "showCostInTray": true,
+    "showTokensInTray": false,
+    "codexRateLimitEnabled": true,
+    "claudeRateLimitEnabled": false,
+    "selectedQuotaProductIds": [],
+    "quotaProductOrder": [],
+    "quotaSelectedTabId": null,
+    "quotaSelectionInitialized": false,
+    "zCodeQuotaRegion": "bigModel",
+    "egressMode": "auto"
+  }
+}

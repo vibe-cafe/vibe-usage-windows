@@ -1,0 +1,5 @@
+{
+  "kind": "event",
+  "name": "request-exit",
+  "payload": null
+}

@@ -9,6 +9,8 @@ mod system_proxy;
 mod workflow;
 
 pub use egress_check::EgressMode;
+// The native adapter shares these wire types and the backend's runtime.
+pub use {serde, serde_json, tokio};
 use serde::Serialize;
 use serde_json::Value;
 pub use services::api_client::UsageQuery;
@@ -36,6 +38,16 @@ pub struct Options {
 pub trait Host: Send + Sync {
     /// Post to the UI thread. Callbacks may arrive before initialize returns.
     fn event(&self, name: &str, payload: Value);
+    /// Opt in to snapshots and the actual read scope on both refresh edges.
+    /// Existing hosts receive their original start (null) and finish (rows).
+    fn rate_limits_updated(&self, mut snapshot: Value) {
+        let payload = if snapshot["refreshing"] == true {
+            Value::Null
+        } else {
+            snapshot["snapshots"].take()
+        };
+        self.event("rate-limits-updated", payload);
+    }
     fn request_exit(&self);
 }
 
@@ -54,6 +66,14 @@ struct Inner {
 }
 
 impl Backend {
+    /// Contract-test DLL only. No discovery, credential access, processes or
+    /// startup tasks. The adapter admits only local fixture commands.
+    #[cfg(feature = "ffi-fixtures")]
+    pub fn initialize_fixture(options: Options, host: Arc<dyn Host>) -> Self {
+        let config = ConfigManager::with_dir(options.roaming_config.join("cli"), false);
+        Self::new(options, host, config, Arc::new(workflow::Live))
+    }
+
     pub fn initialize(options: Options, host: Arc<dyn Host>) -> Self {
         Self::initialize_with(
             options,
@@ -83,9 +103,10 @@ impl Backend {
         prepare_local(&app);
         // Resolving the old hook's Node command may synchronously run node -v.
         let worker = app.clone();
-        if let Some(tasks) = app.0.tasks.lock().unwrap().as_mut() {
-            tasks.spawn_blocking(move || retire_legacy(&worker));
-        }
+        // Track the async waiter so shutdown can cancel it while node -v finishes.
+        app.spawn(async move {
+            let _ = tokio::task::spawn_blocking(move || retire_legacy(&worker)).await;
+        });
         app.start_network();
         app
     }
@@ -116,7 +137,11 @@ impl Backend {
         // Never enter host code under a service's state/credentials lock.
         app.spawn(async move {
             while let Some((name, payload)) = pending.recv().await {
-                host.event(name, payload);
+                if name == "rate-limits-updated" {
+                    host.rate_limits_updated(payload);
+                } else {
+                    host.event(name, payload);
+                }
             }
         });
         app

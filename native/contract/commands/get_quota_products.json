@@ -1,0 +1,11 @@
+{
+  "args": {},
+  "value": [
+    {
+      "provider": "kimi-code",
+      "displayName": "Kimi Code",
+      "availability": "ready",
+      "isDetected": true
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "args": {
+    "region": "zAI"
+  },
+  "value": [
+    {
+      "provider": "codex",
+      "status": {
+        "kind": "ok"
+      },
+      "fiveHour": {
+        "utilization": 42.5
+      }
+    }
+  ]
+}

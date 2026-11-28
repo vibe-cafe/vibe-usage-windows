@@ -4679,6 +4679,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "vibe-ffi"
+version = "0.7.11"
+dependencies = [
+ "tempfile",
+ "vibe-backend",
+]
+
+[[package]]
 name = "vibe-usage-app"
 version = "0.7.11"
 dependencies = [

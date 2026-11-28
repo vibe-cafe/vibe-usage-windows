@@ -1,0 +1,19 @@
+[package]
+name = "vibe-ffi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+vibe-backend = { path = "../backend" }
+
+[features]
+external-test-diagnostics = ["vibe-backend/external-test-diagnostics"]
+smoke = ["vibe-backend/ffi-fixtures"]
+
+[dev-dependencies]
+tempfile = "3"
+vibe-backend = { path = "../backend", features = ["ffi-fixtures"] }

@@ -75,6 +75,9 @@ pub struct DeviceLinkStart {
     user_code: String,
 }
 
+#[cfg(feature = "ffi-fixtures")]
+pub mod wire_fixtures;
+
 pub async fn start_device_link(app: Backend) -> Result<DeviceLinkStart, String> {
     device_link::start(app)
         .await
