@@ -32,6 +32,8 @@ internal sealed partial class PanelWindow
     private readonly Canvas overlay = new() { IsHitTestVisible = false };
     private (FrameworkElement Row, MeterTooltip Tip)? tooltip;
     private FrameworkElement? tooltipBlock;
+    private Canvas? quotaUnderlay;
+    private Border? hoverBand;
 
     // -- card -----------------------------------------------------------------------------------
 
@@ -45,10 +47,12 @@ internal sealed partial class PanelWindow
             hoveredDetailRow = null;
         }
         tooltip = null;
+        hoverBand = null;
+        quotaUnderlay = new Canvas { IsHitTestVisible = false };
         UIElement body = quota.IsEmpty ? QuotaEmpty()
             : quota.Detail is { } detail ? QuotaDetail(detail, quota)
             : QuotaOverview(quota.Overview);
-        return CardFrame("订阅配额", body, quota.IsEmpty ? null : RefreshButton(quota));
+        return CardFrame("订阅配额", body, quota.IsEmpty ? null : RefreshButton(quota), quotaUnderlay);
     }
 
     /// <summary>
@@ -155,8 +159,7 @@ internal sealed partial class PanelWindow
         const double width = Theme.RightColumnWidth;
         var provider = row.Provider;
         var g = new Grid { Width = width, Height = pitch, Background = Theme.Transparent };
-        var band = HoverBand(width, pitch - 1, 7, 0.06, hoveredOverviewRow == provider);
-        g.Children.Add(band.Host);
+        if (hoveredOverviewRow == provider) g.SizeChanged += (_, _) => { if (hoveredOverviewRow == provider) ShowBand(g, pitch - 1, 7, 0.06); };
 
         bool skeleton = row.ShowsSkeleton;
         bool nonSubscription = row.ReadState == ReadState.NonSubscriptionLogin;
@@ -224,28 +227,50 @@ internal sealed partial class PanelWindow
         string spoken = (provider.DisplayName() + " " + (row.Comment ?? "")).Trim();
         return Bare(g, "row-" + provider, spoken, () => model.Select(provider), on =>
         {
-            if (on) hoveredOverviewRow = provider;
-            else if (hoveredOverviewRow == provider) hoveredOverviewRow = null;
-            band.Band.Opacity = on ? 1 : 0;
+            if (on)
+            {
+                hoveredOverviewRow = provider;
+                ShowBand(g, pitch - 1, 7, 0.06);
+            }
+            else if (hoveredOverviewRow == provider)
+            {
+                hoveredOverviewRow = null;
+                HideBand();
+            }
         });
     }
 
     /// <summary>
     /// The highlight under a hovered row, reaching 8 DIP past it on both
-    /// sides. It sits in a canvas: a negative margin would be clipped to the
-    /// row by layout.
+    /// sides (Mac: the row's background with a negative padding). It is drawn
+    /// on a layer behind the whole card interior and placed from the row, so
+    /// nothing between the card and the row clips it to the row's width.
     /// </summary>
-    private static (Canvas Host, Border Band) HoverBand(double width, double height, double radius, double alpha, bool on)
+    private void ShowBand(FrameworkElement row, double height, double radius, double alpha)
     {
-        var band = new Border
+        if (quotaUnderlay is not { } layer || row.ActualWidth <= 0) return;
+        Point at;
+        try
         {
-            Width = width + 16, Height = height, CornerRadius = new CornerRadius(radius),
-            Background = Theme.Solid(Theme.TextC(alpha)), Opacity = on ? 1 : 0,
-        };
-        Canvas.SetLeft(band, -8);
-        var host = new Canvas { IsHitTestVisible = false, HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top };
-        host.Children.Add(band);
-        return (host, band);
+            at = row.TransformToVisual(layer).TransformPoint(new Point(0, 0));
+        }
+        catch (ArgumentException)
+        {
+            return;
+        }
+        hoverBand ??= new Border();
+        hoverBand.Width = row.ActualWidth + 16;
+        hoverBand.Height = height;
+        hoverBand.CornerRadius = new CornerRadius(radius);
+        hoverBand.Background = Theme.Solid(Theme.TextC(alpha));
+        Canvas.SetLeft(hoverBand, at.X - 8);
+        Canvas.SetTop(hoverBand, at.Y);
+        if (hoverBand.Parent == null) layer.Children.Add(hoverBand);
+    }
+
+    private void HideBand()
+    {
+        if (hoverBand?.Parent is Canvas layer) layer.Children.Remove(hoverBand);
     }
 
     /// <summary>「5h 12%」: label 11, number 13 medium, the percent sign dimmer unless the number is coloured (Mac ModernMeterChip).</summary>
@@ -411,8 +436,6 @@ internal sealed partial class PanelWindow
     {
         const double width = Theme.RightColumnWidth;
         var g = new Grid { Height = 32, Width = width, Background = Theme.Transparent };
-        var (bandHost, band) = HoverBand(width, 32, 6, 0.05, hoveredDetailRow == m.Id);
-        g.Children.Add(bandHost);
         g.Children.Add(Theme.RuleLine());
         double baseline = 1 + Theme.BaselineIn(31, (13, Face.Mono), (11, Face.Mono), (11, Face.Text));
         var label = Theme.T(m.Label, 11, Face.Mono, Wt.Regular, Theme.Secondary);
@@ -465,10 +488,10 @@ internal sealed partial class PanelWindow
         var tip = QuotaFormat.Tooltip(m);
         void Light(bool on)
         {
-            band.Opacity = on ? 1 : 0;
             if (on)
             {
                 hoveredDetailRow = m.Id;
+                ShowBand(holder, 32, 6, 0.05);
                 Note("hover allowance-" + m.Id, "");
                 if (tip == null) return;
                 ShowTooltip(holder, tip);
@@ -477,6 +500,7 @@ internal sealed partial class PanelWindow
             else if (hoveredDetailRow == m.Id)
             {
                 hoveredDetailRow = null;
+                HideBand();
                 HideTooltip();
             }
         }
@@ -485,11 +509,16 @@ internal sealed partial class PanelWindow
         holder.PointerCanceled += (_, _) => Light(false);
         holder.GotFocus += (_, _) => { if (holder.FocusState == FocusState.Keyboard) Light(true); };
         holder.LostFocus += (_, _) => Light(false);
-        if (hoveredDetailRow == m.Id && tip != null)
+        if (hoveredDetailRow == m.Id)
         {
-            tooltip = (holder, tip);
+            if (tip != null) tooltip = (holder, tip);
             // Placed once the row has its size (a CI scene opens with it hovered).
-            holder.SizeChanged += (_, _) => { if (tooltip is { } t && t.Row == holder) PlaceTooltip(); };
+            holder.SizeChanged += (_, _) =>
+            {
+                if (hoveredDetailRow != m.Id) return;
+                ShowBand(holder, 32, 6, 0.05);
+                if (tooltip is { } t && t.Row == holder) PlaceTooltip();
+            };
         }
         return holder;
     }

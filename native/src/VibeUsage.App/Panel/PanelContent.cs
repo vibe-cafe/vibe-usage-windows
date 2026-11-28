@@ -143,7 +143,8 @@ internal sealed partial class PanelWindow
     // -- cards ----------------------------------------------------------------------------------
 
     /// <summary>Mac <c>ModernCard</c>: 20 DIP title row (13 semibold, secondary) with an optional control at its right edge, the body 8 below.</summary>
-    private static Grid CardFrame(string title, UIElement body, FrameworkElement? accessory = null)
+    /// <param name="underlay">When given, lies behind the whole card interior (padding included), for highlights that reach past the body.</param>
+    private static Grid CardFrame(string title, UIElement body, FrameworkElement? accessory = null, Canvas? underlay = null)
     {
         var stack = new StackPanel { Spacing = 8 };
         var titleRow = new Grid { Height = 20 };
@@ -156,7 +157,12 @@ internal sealed partial class PanelWindow
         }
         stack.Children.Add(titleRow);
         stack.Children.Add(body);
-        return Theme.Card(stack);
+        if (underlay == null) return Theme.Card(stack);
+        stack.Margin = new Thickness(Theme.CardPadding - 1);
+        var inside = new Grid();
+        inside.Children.Add(underlay);
+        inside.Children.Add(stack);
+        return Theme.Card(inside, new Thickness(0));
     }
 
     private static Grid Body(double height, params UIElement[] children)
