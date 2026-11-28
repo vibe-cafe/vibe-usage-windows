@@ -98,7 +98,7 @@ public partial class ShellApp : Application
         flyout.WarmUp(openAfterwards: !options.Autostart);
     }
 
-    private void OnTrayContextMenu(Win32.POINT anchor)
+    private void OnTrayContextMenu(Win32.POINT anchor, bool keyboard)
     {
         if (tray is null || flyout is null || model is null) return;
         flyout.PrepareForMenu();
@@ -113,12 +113,13 @@ public partial class ShellApp : Application
         }, defaultId: 1);
 
         // Dismissed, 打开面板 and 立即同步 hand the foreground back to where it
-        // was; 设置 and 退出 don't need it.
-        if (cmd is 0 or 1 or 2) tray.RestoreForegroundAfterMenu();
+        // was; 设置 and 退出 don't need it, nor does 打开面板 from the keyboard:
+        // there the panel takes the keyboard, so Esc closes it (decision 4).
+        if (OpenPolicy.RestoresForegroundAfterMenu(cmd, keyboard)) tray.RestoreForegroundAfterMenu();
         switch (cmd)
         {
             case 1:
-                flyout.Show(anchor, OpenSource.Menu);
+                flyout.Show(anchor, keyboard ? OpenSource.MenuKeyboard : OpenSource.Menu);
                 break;
             case 2:
                 model.TriggerSync();
@@ -205,14 +206,24 @@ public partial class ShellApp : Application
         if (quitting) return;
         quitting = true;
         ShellLog.Write("session ending");
-        iconFileTimer?.Stop();
-        flyout?.Hide("session-end", auto: false);
-        flyout?.Dispose();
-        settings?.AppWindow.Hide();
-        tray?.Dispose();
-        var close = Task.Run(() => model?.Dispose());
-        bool closed = close.Wait(TimeSpan.FromSeconds(3));
-        ShellLog.Write($"session ending: backend closed={closed}");
-        Environment.Exit(0);
+        try
+        {
+            iconFileTimer?.Stop();
+            flyout?.Hide("session-end", auto: false);
+            flyout?.Dispose();
+            settings?.AppWindow.Hide();
+            tray?.Dispose();
+            var close = Task.Run(() => model?.Dispose());
+            bool closed = close.Wait(TimeSpan.FromSeconds(3));
+            ShellLog.Write($"session ending: backend closed={closed}");
+        }
+        catch (Exception ex)
+        {
+            ShellLog.Write($"session ending: {ex.GetType().Name} while closing");
+        }
+        finally
+        {
+            Environment.Exit(0);
+        }
     }
 }

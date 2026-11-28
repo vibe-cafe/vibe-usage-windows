@@ -10,6 +10,7 @@ public class OpenPolicyTests
     [Theory]
     [InlineData(OpenSource.TrayMouse, false)]
     [InlineData(OpenSource.Menu, false)]
+    [InlineData(OpenSource.MenuKeyboard, true)]
     [InlineData(OpenSource.TrayKeyboard, true)]
     [InlineData(OpenSource.Relaunch, true)]
     [InlineData(OpenSource.Startup, true)]
@@ -20,9 +21,22 @@ public class OpenPolicyTests
     }
 
     [Fact]
+    public void KeyboardMenuOpenKeepsTheForegroundForThePanel()
+    {
+        // Mouse menu: 打开面板 hands the foreground back (no activation); keyboard menu: the panel takes it.
+        Assert.True(OpenPolicy.RestoresForegroundAfterMenu(1, keyboard: false));
+        Assert.False(OpenPolicy.RestoresForegroundAfterMenu(1, keyboard: true));
+        Assert.True(OpenPolicy.RestoresForegroundAfterMenu(0, keyboard: true));
+        Assert.True(OpenPolicy.RestoresForegroundAfterMenu(2, keyboard: true));
+        Assert.False(OpenPolicy.RestoresForegroundAfterMenu(3, keyboard: false));
+        Assert.False(OpenPolicy.RestoresForegroundAfterMenu(4, keyboard: false));
+    }
+
+    [Fact]
     public void FocusRingOnlyForTheKeyboard()
     {
         Assert.True(OpenPolicy.ShowsFocusRing(OpenSource.TrayKeyboard));
+        Assert.True(OpenPolicy.ShowsFocusRing(OpenSource.MenuKeyboard));
         Assert.False(OpenPolicy.ShowsFocusRing(OpenSource.Relaunch));
         Assert.False(OpenPolicy.ShowsFocusRing(OpenSource.Startup));
     }

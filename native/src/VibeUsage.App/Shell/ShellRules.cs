@@ -10,8 +10,10 @@ public enum OpenSource
     TrayMouse,
     /// <summary>Enter or Space on the tray icon after Win+B.</summary>
     TrayKeyboard,
-    /// <summary>「打开面板」 in the tray icon's right-click menu.</summary>
+    /// <summary>「打开面板」 in the tray icon's menu opened by a right click.</summary>
     Menu,
+    /// <summary>「打开面板」 in the tray icon's menu opened from the keyboard (menu key or Shift+F10 after Win+B).</summary>
+    MenuKeyboard,
     /// <summary>The exe started again while running: Start menu, shortcut, restart after an update.</summary>
     Relaunch,
     /// <summary>This process started without --autostart.</summary>
@@ -29,10 +31,18 @@ public enum OpenSource
 public static class OpenPolicy
 {
     public static bool Activates(OpenSource source) =>
-        source is OpenSource.TrayKeyboard or OpenSource.Relaunch or OpenSource.Startup;
+        source is OpenSource.TrayKeyboard or OpenSource.MenuKeyboard or OpenSource.Relaunch or OpenSource.Startup;
 
-    /// <summary>Only a keyboard open shows the focus ring on the first control.</summary>
-    public static bool ShowsFocusRing(OpenSource source) => source == OpenSource.TrayKeyboard;
+    /// <summary>Only keyboard opens show the focus ring on the first control.</summary>
+    public static bool ShowsFocusRing(OpenSource source) => source is OpenSource.TrayKeyboard or OpenSource.MenuKeyboard;
+
+    /// <summary>
+    /// After the tray menu, the foreground goes back to where it was, except
+    /// when 「打开面板」 came from the keyboard: then the panel takes it.
+    /// Menu commands: 0 dismissed, 1 打开面板, 2 立即同步, 3 设置, 4 退出.
+    /// </summary>
+    public static bool RestoresForegroundAfterMenu(uint command, bool keyboard) =>
+        command is 0 or 2 || command == 1 && !keyboard;
 }
 
 /// <summary>What told the open panel that the user went elsewhere.</summary>

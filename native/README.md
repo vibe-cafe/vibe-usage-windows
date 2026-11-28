@@ -47,7 +47,7 @@ Windows 按总票 #85 决定 1 只提供新版，筛选和分布的维度为终�
 
 外壳的规矩：
 
-- 不写联网代码。`BannedSymbols.txt` 把 HTTP、套接字、网页控件、远程图片、`Process` 和 `Launcher` 列为编译错误；打开网页交给后端的 `open_external`。
+- 不写联网代码。`BannedSymbols.txt` 把下面这些列为编译错误：.NET 的 HTTP（`HttpClient` 及其处理器、`HttpRequestMessage`、`WebRequest`/`HttpWebRequest`/`FtpWebRequest`、`WebClient`、`HttpListener`）、套接字和监听（`Socket`、`TcpClient`、`TcpListener`、`UdpClient`、`NetworkStream`、`ClientWebSocket`、QUIC）、`SslStream`、`SmtpClient`、`Dns`、`Ping`；WinRT 的 `Windows.Web.Http.HttpClient`、各类套接字和监听、后台上传下载、联合源和 AtomPub 客户端；`WebView2`；会去拉地址的图片源（`BitmapImage`、`SvgImageSource`）；启动外部程序或网址的 `Process`、`Launcher`、`RemoteLauncher`。打开网页交给后端的 `open_external`。这是编译期的补充手段，按类型名拦截，拦不住列表外的写法，也不能代替运行时的联网实测。
 - 不用键盘鼠标输入类接口（全局热键、低级钩子、`GetAsyncKeyState`、模拟按键）。关面板只靠窗口失活和进程外的无障碍事件钩子：前台变化；只看任务栏进程的鼠标捕获和焦点变化（托盘打开后任务栏本来就是前台，点它的空白处不会换前台）；启动时系统没给前台的话，再看留在前面的那个程序的鼠标捕获。钩子在面板开着时才挂，收起就摘。
 - 手动启动、再次启动、键盘打开时面板拿键盘。Windows 只让刚被用户启动的进程在启动早期拿前台，WinUI 初始化会把这次机会用掉，所以 `Program.Main` 在初始化之前先对自己调用 `AllowSetForegroundWindow`，预热窗口也直接以激活方式显示。
 - 不用靠反射的数据绑定和运行时加载的 XAML 字符串；界面在代码里搭，JSON 走源码生成。

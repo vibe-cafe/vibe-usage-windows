@@ -40,7 +40,6 @@
     <Version>0.8.0</Version>
     <Product>Vibe Usage</Product>
     <Company>Vibe Café</Company>
-    <SatelliteResourceLanguages>en;zh-Hans</SatelliteResourceLanguages>
   </PropertyGroup>
 
   <!-- Only the WinUI parts of the Windows App SDK: the metapackage also pulls

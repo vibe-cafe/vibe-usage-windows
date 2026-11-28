@@ -28,7 +28,7 @@ if (-not $changed) {
 $size = [int][Math]::Round(16 * $Percent / 100)
 $reloaded = Wait-LogLine "tray: icon .*taskbar, ${size}px" 10000
 $l = New-LogLines
-Add-Result "I 系统缩放改成 $Percent %：托盘图标按 ${size} 像素重载" ($added -and $reloaded -and [bool]($l | Where-Object { $_ -match 'tray: icon reloaded' })) $l
+Add-Result "I 系统缩放改成 $Percent %：托盘图标按 ${size} 像素重载" ($added -and $reloaded -and [bool]($l | Where-Object { $_ -match 'tray: icon reloaded .*ok=True' })) $l
 Stop-App
 Write-Summary (Join-Path $OutDir "dpi-results.json")
 if ($script:Results | Where-Object { -not $_.Pass }) { exit 1 }

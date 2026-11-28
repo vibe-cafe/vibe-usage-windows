@@ -22,6 +22,8 @@ internal static class Win32
     public const uint WM_CONTEXTMENU = 0x007B;
     public const uint WM_TIMER = 0x0113;
     public const uint WM_LBUTTONDOWN = 0x0201;
+    public const uint WM_RBUTTONDOWN = 0x0204;
+    public const uint WM_RBUTTONUP = 0x0205;
     public const uint WM_DPICHANGED = 0x02E0;
     public const uint WM_USER = 0x0400;
     public const uint WM_APP = 0x8000;

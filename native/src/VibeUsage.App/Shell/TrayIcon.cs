@@ -20,7 +20,9 @@ namespace VibeUsage.App.Shell;
 ///
 /// NOTIFYICON_VERSION_4: a left click arrives as NIN_SELECT, Enter or Space
 /// on the icon focused with Win+B as NIN_KEYSELECT, a right click or the menu
-/// key as WM_CONTEXTMENU; wParam carries the icon's anchor point.
+/// key as WM_CONTEXTMENU; wParam carries the icon's anchor point. A right
+/// click is preceded by the icon's WM_RBUTTONDOWN/UP, the keyboard's menu
+/// isn't: that tells the two apart.
 /// </summary>
 internal sealed partial class TrayIcon : IDisposable
 {
@@ -40,11 +42,13 @@ internal sealed partial class TrayIcon : IDisposable
     private int simulatedFailures;
     private string tip = "Vibe Usage";
     private IntPtr menuPreviousForeground;
+    private long lastRightButton = long.MinValue / 2;
+    private const long RightClickMenuMs = 1000;
 
     public IntPtr Hwnd { get; }
 
     public event Action<Win32.POINT, bool>? Selected;   // anchor, keyboard
-    public event Action<Win32.POINT>? ContextMenuRequested;
+    public event Action<Win32.POINT, bool>? ContextMenuRequested; // anchor, keyboard
     public event Action? LeftButtonDown;
     public event Action<bool>? OpenRequested;           // activate
     public event Action? SessionEnding;
@@ -295,6 +299,10 @@ internal sealed partial class TrayIcon : IDisposable
                     case Win32.WM_LBUTTONDOWN:
                         LeftButtonDown?.Invoke();
                         break;
+                    case Win32.WM_RBUTTONDOWN:
+                    case Win32.WM_RBUTTONUP:
+                        lastRightButton = Environment.TickCount64;
+                        break;
                     case Win32.NIN_SELECT:
                         Selected?.Invoke(anchor, false);
                         break;
@@ -302,7 +310,9 @@ internal sealed partial class TrayIcon : IDisposable
                         Selected?.Invoke(anchor, true);
                         break;
                     case Win32.WM_CONTEXTMENU:
-                        ContextMenuRequested?.Invoke(anchor);
+                        bool keyboard = Environment.TickCount64 - lastRightButton > RightClickMenuMs;
+                        ShellLog.Write($"tray menu requested keyboard={keyboard}");
+                        ContextMenuRequested?.Invoke(anchor, keyboard);
                         break;
                 }
                 return IntPtr.Zero;

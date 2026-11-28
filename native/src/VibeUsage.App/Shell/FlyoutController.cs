@@ -21,8 +21,9 @@ namespace VibeUsage.App.Shell;
 /// Closing:
 /// 1. An activated panel losing activation (<see cref="DismissSignal.Deactivated"/>).
 /// 2. While open, an out-of-context EVENT_SYSTEM_FOREGROUND hook (accessibility
-///    event, not an input hook) sees another program's window take the
-///    foreground; removed as soon as the panel hides.
+///    event, not an input hook) sees another window take the foreground,
+///    including our settings window (a tray open never activates the panel,
+///    so it gets no deactivation then); removed as soon as the panel hides.
 /// 3. After a tray open the taskbar already is the foreground, so a click on
 ///    an empty part of it changes nothing there. While open, two more
 ///    out-of-context hooks limited to the taskbar's process (Explorer) watch
@@ -272,7 +273,9 @@ internal sealed partial class FlyoutController : IDisposable
             if (!visible || options.Pin || hwnd == panel.Hwnd) return;
             if (unchecked((int)(eventTime - shownAtTick)) < 0) return; // happened before this open
             string cls = Win32.ClassName(hwnd);
-            var reason = DismissPolicy.HideReason(DismissSignal.ForegroundChanged, cls, Now - shownAt, false, openedFromOverflow);
+            // Our own windows count too (the settings window clicked while the panel is up);
+            // only the panel's own popups don't.
+            var reason = DismissPolicy.HideReason(DismissSignal.ForegroundChanged, cls, Now - shownAt, IsOwnTransient(hwnd), openedFromOverflow);
             if (reason == null) ShellLog.Write($"foreground -> {cls} {Now - shownAt}ms after opening, staying open");
             else Hide(reason, auto: true);
         }
@@ -344,7 +347,7 @@ internal sealed partial class FlyoutController : IDisposable
         if (foregroundHook == IntPtr.Zero)
         {
             foregroundHook = Win32.SetWinEventHook(Win32.EVENT_SYSTEM_FOREGROUND, Win32.EVENT_SYSTEM_FOREGROUND, IntPtr.Zero,
-                foregroundProc, 0, 0, Win32.WINEVENT_OUTOFCONTEXT | Win32.WINEVENT_SKIPOWNPROCESS);
+                foregroundProc, 0, 0, Win32.WINEVENT_OUTOFCONTEXT);
             if (foregroundHook == IntPtr.Zero) ShellLog.Write("foreground hook unavailable");
         }
         var taskbar = Win32.FindWindowW("Shell_TrayWnd", null);

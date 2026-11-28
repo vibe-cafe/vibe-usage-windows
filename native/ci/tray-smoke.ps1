@@ -302,17 +302,47 @@ if ($menu -ne [IntPtr]::Zero) {
 }
 Key 0x1B
 Pump 800
-Check 'G 右键：系统原生菜单' (New-LogLines) 'menu: owner foreground=True'
+$l = New-LogLines
+Check 'G 右键：系统原生菜单' $l 'menu: owner foreground=True'
+Check "G'' 鼠标右键打开的菜单认作鼠标入口" $l 'tray menu requested keyboard=False'
 
 # M: the menu's actions.
 Click $ix $iy -Right; Pump 1000; Key 0x28; Key 0x28; Key 0x0D; Pump 2500
 $l = New-LogLines
 Add-Result 'M1 菜单「立即同步」：只同步用量，不开面板' ((Any $l 'command=2') -and (Any $l 'sync requested') -and (Any $l 'sync label Syncing') -and -not (Any $l 'show source=')) $l
 Click $ix $iy -Right; Pump 1000; Key 0x28; Key 0x0D; Pump 1500
-Check 'M2 菜单「打开面板」：面板弹出' (New-LogLines) 'show source=Menu'
+$l = New-LogLines
+Add-Result 'M2 右键菜单「打开面板」：面板弹出，前台还给原处（不拿键盘）' (Any $l 'show source=Menu .*activate=no isForeground=False') $l
 Close-Panel
+
+# M2k: the same menu from the keyboard (menu key or Shift+F10 on the icon after Win+B). The test
+# plays Explorer's part: it passes the foreground right on and posts the icon's WM_CONTEXTMENU,
+# which, unlike a right click, comes without WM_RBUTTONDOWN/UP.
+Focus-Form
+$trayHost = Find-Window 'VibeUsage.Native.TrayHost'
+$appPid = (Get-Process -Name 'vibe-usage-app' | Select-Object -First 1).Id
+[VuNative]::AllowSetForegroundWindow([uint32]$appPid) | Out-Null
+[VuNative]::PostMessageW($trayHost, 0x8001, [IntPtr](($iy -shl 16) -bor ($ix -band 0xFFFF)), [IntPtr]((1 -shl 16) -bor 0x7B)) | Out-Null
+Pump 1200
+Key 0x28; Key 0x0D
+Pump 1500
+$l = New-LogLines
+Add-Result 'M2k 键盘打开的菜单「打开面板」：面板拿到键盘，焦点框落在第一个控件' ((Any $l 'tray menu requested keyboard=True') -and (Any $l 'show source=MenuKeyboard.*activate=True.*isForeground=True') -and (Any $l 'focus \w+ ring=True ok=True')) $l
+Key 0x1B
+Pump 1000
+Check "M2k' 键盘菜单打开后按 Esc：面板收起" (New-LogLines) 'hide reason=esc'
+Close-Panel
+
 Click $ix $iy -Right; Pump 1000; Key 0x28; Key 0x28; Key 0x28; Key 0x0D; Pump 2000
 Check 'M3 菜单「设置」：设置窗口到最前面' (New-LogLines) 'settings shown foreground=True'
+# M3': settings stays open, the panel is opened from the tray, then the settings window is clicked.
+# The tray open never activated the panel, so only the foreground hook can notice.
+Click $ix $iy
+Pump 1500
+New-LogLines | Out-Null
+Click ([int]($work.Left + $work.Width / 2)) ([int]($work.Top + $work.Height / 2))
+Pump 1200
+Check "M3' 设置窗口开着时从托盘点开面板，再点设置窗口：面板收起" (New-LogLines) 'hide reason=foreground-changed fg=WinUIDesktopWin32WindowClass'
 Key 0x73 @(0x12)
 Pump 800
 New-LogLines | Out-Null
@@ -431,6 +461,17 @@ $ok = Wait-LogLine 'TaskbarCreated' 15000
 Pump 1500
 $l = New-LogLines
 Add-Result 'EX Explorer 重启后托盘图标自动回来' ($ok -and (Any $l 'tray: added')) $l
+$ic = Wait-IconCenter 10000
+if ($ic) {
+    Click $ic[0] $ic[1]
+    Pump 1500
+    Click $ic[0] $ic[1]
+    Pump 1500
+    $l = New-LogLines
+    Add-Result "EX' Explorer 重启后再点图标：能打开、能收起" ((Any $l 'show source=TrayMouse') -and (Any $l 'hide reason=')) $l
+} else {
+    Add-Result "EX' Explorer 重启后再点图标（图标位置拿不到）" $false
+}
 
 Stop-App
 $form.Close()
