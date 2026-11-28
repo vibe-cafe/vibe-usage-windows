@@ -64,7 +64,7 @@ public partial class ShellApp : Application
         tray.SessionEnding += EndSession;
 
         var context = SynchronizationContext.Current ?? new DispatcherQueueSynchronizationContext(dispatcher);
-        model = new AppModel(DemoBackend.Create(options.Demo, context));
+        model = new AppModel(BackendHost.Create(options, context));
         model.ExitRequested += () => dispatcher.TryEnqueue(Quit);
         try
         {

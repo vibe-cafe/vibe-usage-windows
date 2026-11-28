@@ -15,7 +15,7 @@ $logDir = Join-Path $OutDir 'logs-dpi'
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 Use-Log (Join-Path $logDir 'shell.log')
 Stop-App
-$proc = Start-App @('--autostart', "--test-log-dir=$logDir")
+$proc = Start-App @('--fake-backend', '--autostart', "--test-log-dir=$logDir")
 $added = Wait-LogLine 'tray: added after' 10000
 Write-Host ((New-LogLines) -join "`n")
 & "$PSScriptRoot/set-dpi.ps1" -Percent $Percent
