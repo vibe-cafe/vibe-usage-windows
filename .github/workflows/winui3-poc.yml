@@ -107,10 +107,10 @@ jobs:
           retention-days: 30
 
 
-  # Issue #86 measurements (heavy): run on a manual trigger or a commit whose
-  # message contains 「[实测]」.
+  # Issue #86 measurements (heavy): run on a manual trigger, sizes on a commit
+  # whose message contains 「[实测」, the 35-minute network test only with 「[实测-联网]」.
   size:
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[实测]')
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[实测')
     runs-on: windows-2025
     strategy:
       fail-fast: false
@@ -162,7 +162,7 @@ jobs:
           retention-days: 30
 
   network:
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[实测]')
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[实测-联网]')
     needs: build
     runs-on: windows-2025
     timeout-minutes: 75

@@ -123,6 +123,7 @@ function Smoke([string]$name, [string]$dir) {
     if ($alive) { Stop-Process -Id $p.Id -Force }
     Start-Sleep -Seconds 2
     $l = Get-Content (Join-Path $logDir 'panel-poc.log') -ErrorAction SilentlyContinue
+    Copy-Item (Join-Path $logDir 'panel-poc.log') (Join-Path $OutDir "smoke-$Variant-$name.log") -ErrorAction SilentlyContinue
     $errors = @($l | Where-Object { $_ -match 'failed|unhandled|ERROR' } | Select-Object -First 3)
     [ordered]@{ started = ($null -ne $shownMs); alive = $alive; msToPanel = $shownMs; errors = $errors }
 }
@@ -131,6 +132,8 @@ $result.smokeLean = Smoke 'lean' $lean
 
 # -- Defender ----------------------------------------------------------------------------
 $mp = "$env:ProgramFiles\Windows Defender\MpCmdRun.exe"
+# Current signatures first, so every variant is scanned with the same, fresh definitions.
+if (Test-Path $mp) { & $mp -SignatureUpdate 2>&1 | Select-Object -Last 2 | ForEach-Object { Write-Host "signature update: $_" } }
 $status = Get-MpComputerStatus -ErrorAction SilentlyContinue
 $result.defender = [ordered]@{
     available = (Test-Path $mp)
