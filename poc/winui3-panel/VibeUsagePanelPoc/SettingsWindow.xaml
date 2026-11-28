@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Window
+    x:Class="VibeUsage.PanelPoc.SettingsWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Title="Vibe Usage 设置">
+
+    <Window.SystemBackdrop>
+        <MicaBackdrop />
+    </Window.SystemBackdrop>
+
+    <!-- A normal app window (Mica, title bar, taskbar button), unlike the panel. Placeholder content. -->
+    <Grid Language="zh-CN">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="48" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <Grid x:Name="AppTitleBar" Padding="16,0,0,0" ColumnSpacing="12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <BitmapIcon Width="16" Height="16" ShowAsMonochrome="True" UriSource="ms-appx:///Assets/Glyph.png"
+                        VerticalAlignment="Center" />
+            <TextBlock Grid.Column="1" Text="Vibe Usage 设置" Style="{StaticResource CaptionTextBlockStyle}"
+                       VerticalAlignment="Center" />
+        </Grid>
+
+        <ScrollViewer Grid.Row="1" Padding="36,8,36,28">
+            <StackPanel Spacing="4" MaxWidth="860" HorizontalAlignment="Stretch">
+                <TextBlock Text="设置" Style="{StaticResource TitleTextBlockStyle}" Margin="0,0,0,4" />
+                <TextBlock Text="界面样品，下面的开关不会生效。" Style="{StaticResource PanelCaptionSecondaryStyle}" Margin="0,0,0,20" />
+
+                <TextBlock Text="常规" Style="{StaticResource BodyStrongTextBlockStyle}" Margin="1,0,0,6" />
+                <Border Style="{StaticResource SettingsCardStyle}">
+                    <Grid ColumnSpacing="16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock Text="开机自启" Style="{StaticResource BodyTextBlockStyle}" />
+                            <TextBlock Text="登录 Windows 后在通知区域待命，不弹出面板" Style="{StaticResource PanelCaptionSecondaryStyle}" />
+                        </StackPanel>
+                        <ToggleSwitch Grid.Column="1" IsOn="True" OnContent="开" OffContent="关" MinWidth="0" />
+                    </Grid>
+                </Border>
+                <Border Style="{StaticResource SettingsCardStyle}">
+                    <Grid ColumnSpacing="16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock Text="外观" Style="{StaticResource BodyTextBlockStyle}" />
+                            <TextBlock Text="面板和窗口的深浅色" Style="{StaticResource PanelCaptionSecondaryStyle}" />
+                        </StackPanel>
+                        <ComboBox Grid.Column="1" SelectedIndex="0" VerticalAlignment="Center" MinWidth="140">
+                            <x:String>跟随系统</x:String>
+                            <x:String>浅色</x:String>
+                            <x:String>深色</x:String>
+                        </ComboBox>
+                    </Grid>
+                </Border>
+
+                <TextBlock Text="订阅配额" Style="{StaticResource BodyStrongTextBlockStyle}" Margin="1,20,0,6" />
+                <Border Style="{StaticResource SettingsCardStyle}">
+                    <Grid ColumnSpacing="16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock Text="Codex" Style="{StaticResource BodyTextBlockStyle}" />
+                            <TextBlock Text="5 小时和 7 天额度" Style="{StaticResource PanelCaptionSecondaryStyle}" />
+                        </StackPanel>
+                        <ToggleSwitch Grid.Column="1" IsOn="True" OnContent="开" OffContent="关" MinWidth="0" />
+                    </Grid>
+                </Border>
+                <Border Style="{StaticResource SettingsCardStyle}">
+                    <Grid ColumnSpacing="16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock Text="Claude" Style="{StaticResource BodyTextBlockStyle}" />
+                            <TextBlock Text="5 小时、7 天和模型额度" Style="{StaticResource PanelCaptionSecondaryStyle}" />
+                        </StackPanel>
+                        <ToggleSwitch Grid.Column="1" IsOn="True" OnContent="开" OffContent="关" MinWidth="0" />
+                    </Grid>
+                </Border>
+
+                <TextBlock Text="网络" Style="{StaticResource BodyStrongTextBlockStyle}" Margin="1,20,0,6" />
+                <Border Style="{StaticResource SettingsCardStyle}">
+                    <Grid ColumnSpacing="16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock Text="出口检测" Style="{StaticResource BodyTextBlockStyle}" />
+                            <TextBlock Text="读取额度前确认网络出口所在地区" Style="{StaticResource PanelCaptionSecondaryStyle}" />
+                        </StackPanel>
+                        <ToggleSwitch Grid.Column="1" IsOn="True" OnContent="开" OffContent="关" MinWidth="0" />
+                    </Grid>
+                </Border>
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
+</Window>

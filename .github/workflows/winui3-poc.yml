@@ -1,0 +1,87 @@
+# Throwaway WinUI 3 panel sample (branch poc/winui3-panel only, never merged).
+# Builds unsigned, self-contained x64 and arm64 folders (unzip and run) and
+# screenshots the panel on the runner. Touches nothing else in the repo.
+name: WinUI 3 panel sample
+
+on:
+  push:
+    branches: [poc/winui3-panel]
+    paths:
+      - "poc/winui3-panel/**"
+      - ".github/workflows/winui3-poc.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: winui3-poc-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_NOLOGO: "1"
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+
+jobs:
+  test:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: "10.0.x"
+      - name: Unit tests (placement, click race)
+        run: dotnet test poc/winui3-panel/tests/PanelPoc.Tests.csproj -c Release
+
+  build:
+    runs-on: windows-2025
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            platform: x64
+          - arch: arm64
+            platform: ARM64
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: "10.0.x"
+      - name: Publish (self-contained, unpackaged)
+        run: >
+          dotnet publish poc/winui3-panel/VibeUsagePanelPoc/VibeUsagePanelPoc.csproj
+          -c Release -r win-${{ matrix.arch }} -p:Platform=${{ matrix.platform }}
+          -o out/VibeUsagePanelPoc-${{ matrix.arch }}
+      - name: Size
+        shell: pwsh
+        run: |
+          $dir = "out/VibeUsagePanelPoc-${{ matrix.arch }}"
+          $files = Get-ChildItem $dir -Recurse -File
+          "{0} files, {1:N1} MB" -f $files.Count, (($files | Measure-Object Length -Sum).Sum / 1MB)
+          Compress-Archive -Path "$dir/*" -DestinationPath "out/size-check.zip"
+          "zip {0:N1} MB" -f ((Get-Item out/size-check.zip).Length / 1MB)
+      - uses: actions/upload-artifact@v7
+        with:
+          name: VibeUsagePanelPoc-${{ matrix.arch }}
+          path: out/VibeUsagePanelPoc-${{ matrix.arch }}/
+          retention-days: 30
+
+  screenshot:
+    needs: build
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: VibeUsagePanelPoc-x64
+          path: C:\poc\app
+      - name: Run the sample and screenshot the panel
+        shell: pwsh
+        run: ./poc/winui3-panel/ci/screenshot.ps1 -AppDir C:\poc\app -OutDir C:\poc\shots
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: winui3-panel-screenshots
+          path: C:\poc\shots\
+          retention-days: 30
