@@ -369,7 +369,7 @@ Check "K' 键盘打开后按 Esc：面板收起" (New-LogLines) 'hide reason=esc
 # R: a second start of the exe (Start menu, shortcut, restart after an update),
 # launched from the test window so the launcher is the foreground process, as Explorer is.
 Focus-Form
-Start-App @("--test-log-dir=$logDir") | Out-Null
+Start-App @('--fake-backend', "--test-log-dir=$logDir") | Out-Null
 Pump 3500
 $l = New-LogLines
 Add-Result 'R1 再次启动：交给已运行的实例，面板打开并拿到键盘' ((Any $l 'second start: asked') -and (Any $l 'show source=Relaunch.*activate=True.*isForeground=True')) $l
@@ -377,13 +377,13 @@ Key 0x1B
 Pump 1000
 Check 'R2 再次启动打开后按 Esc：面板收起' (New-LogLines) 'hide reason=esc'
 Focus-Form
-Start-App @("--test-log-dir=$logDir") | Out-Null
+Start-App @('--fake-backend', "--test-log-dir=$logDir") | Out-Null
 Pump 3500
 New-LogLines | Out-Null
 Click $fx $fy
 Pump 1500
 Check 'R3 再次启动打开后点回原窗口：面板收起' (New-LogLines) 'hide reason=(deactivated|foreground-changed)'
-$late = Start-App @("--test-log-dir=$logDir", '--autostart')
+$late = Start-App @('--fake-backend', "--test-log-dir=$logDir", '--autostart')
 $exited = $late.WaitForExit(10000)
 Pump 1000
 $l = New-LogLines

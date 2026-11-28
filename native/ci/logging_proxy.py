@@ -1,9 +1,10 @@
 """The chain test's HTTP proxy (CI only), standing in for the user's proxy
 client. Logs every request with the process that sent it. It reaches nothing
-outside this machine: *.test is passed to the local fake service, hosts given
-with --hold are answered 200 and then held open without forwarding (a managed
-Node stays waiting, so quitting with Node alive can be tested), everything
-else is refused with 403."""
+outside this machine: *.test goes to the local fake service, hosts given with
+--tunnel host=port are tunnelled to that local port (the local HTTPS service),
+hosts given with --hold are answered 200 and then held open without
+forwarding (a managed Node stays waiting, so quitting with Node alive can be
+tested), everything else is refused with 403."""
 import argparse
 import select
 import socket
@@ -16,7 +17,9 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--port', type=int, default=18888)
 parser.add_argument('--log', required=True)
 parser.add_argument('--hold', action='append', default=[])
+parser.add_argument('--tunnel', action='append', default=[])
 args = parser.parse_args()
+tunnels = {item.split('=')[0]: int(item.split('=')[1]) for item in args.tunnel}
 log = Log(args.log)
 REFUSED = b'HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n'
 
@@ -66,7 +69,12 @@ class Handler(socketserver.BaseRequestHandler):
         if method == 'CONNECT':
             host, _, port = target.rpartition(':')
             port = int(port or 443)
-            verdict = 'tunnel-to-fake' if host.endswith('.test') else 'held-open' if host in args.hold else 'refused-403'
+            if host.endswith('.test'):
+                verdict, local = 'tunnel-to-fake', port
+            elif host in tunnels:
+                verdict, local = 'tunnel-to-local-https', tunnels[host]
+            else:
+                verdict, local = ('held-open' if host in args.hold else 'refused-403'), None
             log.write(pid=pid, process=name, method=method, host=host, port=port, verdict=verdict)
             if verdict == 'refused-403':
                 c.sendall(REFUSED)
@@ -74,7 +82,7 @@ class Handler(socketserver.BaseRequestHandler):
                 c.sendall(b'HTTP/1.1 200 Connection established\r\n\r\n')
                 hold(c)
             else:
-                upstream = socket.create_connection(('127.0.0.1', port))
+                upstream = socket.create_connection(('127.0.0.1', local))
                 c.sendall(b'HTTP/1.1 200 Connection established\r\n\r\n')
                 if rest:
                     upstream.sendall(rest)

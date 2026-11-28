@@ -18,11 +18,14 @@ log = Log(args.log)
 
 
 def usage():
+    # Today only (the runner's clock is UTC, as the panel's "today" there), so the
+    # panel's total is exactly $12.34 and 4.2M tokens whatever the hour.
     now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    midnight = now.replace(hour=0)
     mix = [('claude-code', 'claude-opus-4-5', 0.45), ('codex', 'gpt-5.1-codex', 0.35), ('cursor', 'composer-1', 0.20)]
     buckets = []
     for hours_back, weight in ((2, 0.3), (1, 0.3), (0, 0.4)):
-        start = (now - timedelta(hours=hours_back)).strftime('%Y-%m-%dT%H:%M:%SZ')
+        start = max(now - timedelta(hours=hours_back), midnight).strftime('%Y-%m-%dT%H:%M:%SZ')
         for source, model, share in mix:
             tokens = int(4_200_000 * weight * share)
             buckets.append({

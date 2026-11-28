@@ -46,7 +46,7 @@ Windows 按总票 #85 决定 1 只提供新版，筛选和分布的维度为终�
 1. 跑 `tests/VibeUsage.App.Tests`（外壳的纯逻辑：打开和收起的规则、托盘重试、定位、点击竞态、启动参数、同步文字、图形路径、假数据），这一步在 macOS 上也能跑：`dotnet test native/tests/VibeUsage.App.Tests -c Release`（SDK 不在 PATH 时照上文的写法）。
 2. `dotnet publish native/src/VibeUsage.App/VibeUsage.App.csproj -c Release -r win-x64 -p:Platform=x64`，出现裁剪警告或禁用接口警告就失败。
 3. 另一台机器下载产物，`ci/screenshot.ps1` 用 PrintWindow 存原尺寸面板截图，`ci/tray-smoke.ps1` 真实点击托盘图标，从 App 自己的日志判每一项；切到 150% 后（`ci/dpi-icon.ps1` 同时检查托盘图标重载）再各跑一轮。这两步用假后端。截图、日志和逐项结果在产物 `native-ui-results` 里。
-4. 第三台机器跑 `ci/chain.ps1`：真后端读本机假 VibeCafé 服务（`ci/fake_vibecafe.py`，App 经自定义服务地址 `http://vibecafe-fake.test:18080` 找到它），画到面板再退出。途中验证开机自启时代理就绪前不读不同步；用会记录进程的测试代理（`ci/logging_proxy.py`）做总票的「测试二」，再在没有代理、「暂停」和「自动但出口检测得不到答复」两种设置下核对不发厂商请求（直连尝试由 `ci/tls_sink.py` 记下）；带着托管的 node 退出后立刻删除安装目录。防火墙拦下主程序和 node 的所有外连（本机回环不受影响），测试代理只转发到本机假服务，账号和 Codex 令牌都是编的。结果在产物 `native-chain-results` 里。
+4. 第三台机器跑 `ci/chain.ps1`：真后端读本机假 VibeCafé 服务（`ci/fake_vibecafe.py`，App 经自定义服务地址 `http://vibecafe-fake.test:18080` 找到它），画到面板再退出。途中验证开机自启时代理就绪前不读不同步；用会记录进程的测试代理（`ci/logging_proxy.py`）做总票的「测试二」，再在没有代理、「暂停」和「自动但出口检测得不到答复」两种设置下核对不发厂商请求（直连尝试由 `ci/tls_service.py` 接住并记下）；带着托管的 node 退出后立刻删除安装目录。要看的 HTTPS 站点（chatgpt.com、github.com、registry.npmjs.org）由本机 HTTPS 服务（`ci/tls_service.py`，一次性测试 CA 签发证书，只在这一轮信任）接住，能看到每个请求的路径和是否带认证头、账号头（只记有没有，不记值）。每一轮都把预期之外的目的地和防火墙审计里主程序、node 的外连判为失败。防火墙拦下主程序和 node 的所有外连（本机回环不受影响），测试代理只转发到本机服务，账号和 Codex 令牌都是编的。结果在产物 `native-chain-results` 里。
 
 这些脚本会往运行机注入模拟的鼠标键盘、改主题和缩放，只在 Actions 上跑，不要在真机上运行。
 
@@ -58,4 +58,4 @@ Windows 按总票 #85 决定 1 只提供新版，筛选和分布的维度为终�
 - 不用靠反射的数据绑定和运行时加载的 XAML 字符串；界面在代码里搭，JSON 走源码生成。
 - 日志只记窗口类名，不记任何窗口标题、输入或设置值。默认在 `%LOCALAPPDATA%\ai.vibecafe.vibe-usage.windows\logs\shell.log`，超过 1 MB 时启动换到 `shell.old.log`。
 
-启动参数：`--autostart` 是开机自启登记带的参数，只进托盘；已在运行时再收到它就直接退出，不弹面板。`--fake-backend` 改用内存假后端。其余以 `--test-` 开头的参数只给 CI 用：`--test-data-dir=`（后端的设置和日志放在这个目录下的 `roaming`、`local` 里，不碰用户的应用数据）、`--test-log-dir=`、`--test-pin`（不自动收起）、`--test-expand`、`--test-scroll-end`、`--test-demo=single`、`--test-rect-file=`、`--test-icon-file=`、`--test-tray-add-failures=`。
+启动参数：`--autostart` 是开机自启登记带的参数，只进托盘；已在运行时再收到它就直接退出，不弹面板。`--fake-backend` 改用内存假后端。其余以 `--test-` 开头的参数只给 CI 用：`--test-data-dir=`（后端的漫游配置和本地数据目录改用这个目录下的 `roaming`、`local`；与 CLI 共用的账号配置 `~\.vibe-usage` 不受它影响，外壳日志的位置另由 `--test-log-dir=` 决定）、`--test-log-dir=`、`--test-pin`（不自动收起）、`--test-expand`、`--test-scroll-end`、`--test-demo=single`、`--test-rect-file=`、`--test-icon-file=`、`--test-tray-add-failures=`。
