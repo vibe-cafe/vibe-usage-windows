@@ -72,6 +72,95 @@ impl Download {
 }
 
 #[tokio::test]
+async fn next_download_removes_only_old_updater_partials() {
+    let test = Download::new().await;
+    let dir = test.directory.path();
+    let old = [
+        dir.join("VibeUsage-abC123.part"),
+        dir.join("VibeUsage-987XYZ.part"),
+    ];
+    let keep = [
+        dir.join("OtherApp-abC123.part"),
+        dir.join("VibeUsage-9.9.9-Setup.exe.part"),
+        dir.join("VibeUsage-9.9.8-Setup.exe"),
+    ];
+    for path in old.iter().chain(&keep) {
+        fs::write(path, b"previous").unwrap();
+    }
+    let subdir = dir.join("VibeUsage-Dir123.part");
+    fs::create_dir(&subdir).unwrap();
+    let nested = subdir.join("VibeUsage-abC123.part");
+    fs::write(&nested, b"nested").unwrap();
+
+    let digest = hex::encode(Sha256::digest(b"new"));
+    let serve = async {
+        let _socket = test.respond(3, b"new").await;
+        assert!(
+            old.iter().all(|path| !path.exists()),
+            "stale downloads survived"
+        );
+    };
+    let (result, ()) = tokio::join!(test.fetch(Some(&digest)), serve);
+    assert_eq!(fs::read(result.unwrap()).unwrap(), b"new");
+    for path in keep {
+        assert_eq!(fs::read(path).unwrap(), b"previous");
+    }
+    assert_eq!(fs::read(nested).unwrap(), b"nested");
+}
+
+#[tokio::test]
+async fn rename_retries_access_denied_and_sharing_violation_on_the_same_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let partial = tempfile::NamedTempFile::new_in(&dir)
+        .unwrap()
+        .into_temp_path();
+    fs::write(&partial, b"verified").unwrap();
+    let installer = dir.path().join("setup.exe");
+    fs::write(&installer, b"previous").unwrap();
+
+    let mut errors = [5, 32].into_iter();
+    let started = std::time::Instant::now();
+    persist_installer(partial, |path| {
+        if let Some(code) = errors.next() {
+            return Err(tempfile::PathPersistError {
+                error: std::io::Error::from_raw_os_error(code),
+                path,
+            });
+        }
+        path.persist(&installer)
+    })
+    .await
+    .unwrap();
+    assert!(started.elapsed() >= Duration::from_millis(400));
+    assert_eq!(fs::read(installer).unwrap(), b"verified");
+    assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+}
+
+#[tokio::test]
+async fn rename_returns_the_last_error_and_discards_the_partial() {
+    for (code, expected_attempts) in [(32, 6), (2, 1)] {
+        let dir = tempfile::tempdir().unwrap();
+        let partial = tempfile::NamedTempFile::new_in(&dir)
+            .unwrap()
+            .into_temp_path();
+        let mut attempts = 0;
+        let err = persist_installer(partial, |path| {
+            attempts += 1;
+            assert!(attempts <= expected_attempts);
+            Err(tempfile::PathPersistError {
+                error: std::io::Error::from_raw_os_error(code),
+                path,
+            })
+        })
+        .await
+        .unwrap_err();
+        assert_eq!(attempts, expected_attempts);
+        assert_eq!(err.raw_os_error(), Some(code));
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+}
+
+#[tokio::test]
 async fn slow_continuous_download_writes_before_eof_and_outlasts_the_old_deadline() {
     let test = Download::new().await;
     let body = [b'x'; 61];

@@ -24,6 +24,10 @@ pub const UPDATE_MANIFEST_URL: &str =
 /// 2026-11-11).
 pub const INSTALLER_ARGS: [&str; 3] = ["/P", "/UPDATE", "/R"];
 
+const PART_PREFIX: &str = "VibeUsage-";
+const PART_SUFFIX: &str = ".part";
+const PART_RANDOM_LEN: usize = 6;
+
 fn installer_command(installer: &Path) -> std::process::Command {
     crate::process_utils::executable_command(installer, &INSTALLER_ARGS)
 }
@@ -197,6 +201,8 @@ async fn download_installer(
     let network_error = |e| format!("下载失败：{e}");
     let write_error = |e| format!("写入安装包失败：{e}");
 
+    remove_stale_partials(directory).await;
+
     // Bound the wait for headers as well as each body read. A request-wide
     // timeout would cut off a slow download even while data is arriving.
     let mut response = timeout(idle_timeout, http.get(&info.url).send())
@@ -207,8 +213,9 @@ async fn download_installer(
         .map_err(network_error)?;
 
     let partial = tempfile::Builder::new()
-        .prefix("VibeUsage-")
-        .suffix(".part")
+        .prefix(PART_PREFIX)
+        .rand_bytes(PART_RANDOM_LEN)
+        .suffix(PART_SUFFIX)
         .tempfile_in(directory)
         .map_err(write_error)?;
     let (file, partial_path) = partial.into_parts();
@@ -228,13 +235,51 @@ async fn download_installer(
         return Err("安装包校验失败 (SHA-256 不匹配)".into());
     }
 
-    // TempPath removes the partial on error. Only a verified file gets the
+    // TempPath attempts cleanup on error. Only a verified file gets the
     // launchable name, including when a previous attempt left an installer.
     let installer = directory.join(format!("VibeUsage-{}-Setup.exe", info.version));
-    partial_path
-        .persist(&installer)
-        .map_err(|e| write_error(e.error))?;
+    persist_installer(partial_path, |path| path.persist(&installer))
+        .await
+        .map_err(write_error)?;
     Ok(installer)
+}
+
+async fn remove_stale_partials(directory: &Path) {
+    let Ok(mut entries) = tokio::fs::read_dir(directory).await else {
+        return;
+    };
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let name = entry.file_name();
+        let random = name
+            .to_str()
+            .and_then(|name| name.strip_prefix(PART_PREFIX))
+            .and_then(|name| name.strip_suffix(PART_SUFFIX));
+        let matches_name = random.is_some_and(|id| {
+            id.len() == PART_RANDOM_LEN && id.bytes().all(|byte| byte.is_ascii_alphanumeric())
+        });
+        if matches_name && entry.file_type().await.is_ok_and(|kind| kind.is_file()) {
+            let _ = tokio::fs::remove_file(entry.path()).await;
+        }
+    }
+}
+
+async fn persist_installer(
+    mut partial: tempfile::TempPath,
+    mut persist: impl FnMut(tempfile::TempPath) -> Result<(), tempfile::PathPersistError>,
+) -> std::io::Result<()> {
+    let mut retries_left = 5;
+    loop {
+        match persist(partial) {
+            // Windows scanners can briefly cause ERROR_ACCESS_DENIED (5) or
+            // ERROR_SHARING_VIOLATION (32) after the last write.
+            Err(e) if retries_left > 0 && matches!(e.error.raw_os_error(), Some(5 | 32)) => {
+                partial = e.path;
+                retries_left -= 1;
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+            result => return result.map_err(|e| e.error),
+        }
+    }
 }
 
 #[cfg(test)]
