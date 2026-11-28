@@ -71,14 +71,11 @@ internal static class XamlDiagnostics
 
     public static void Run()
     {
-        var resources = Application.Current.Resources;
         foreach (var key in Keys)
         {
             try
             {
-                bool found = resources.TryGetValue(key, out var value);
-                if (!found) PocLog.Write($"diag resource {key}: MISSING");
-                else if (value is null) PocLog.Write($"diag resource {key}: null");
+                XamlReader.Load("<ContentControl " + Ns + " Tag=\"{StaticResource " + key + "}\" />");
             }
             catch (Exception ex)
             {

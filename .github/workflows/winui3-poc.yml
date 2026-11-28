@@ -41,8 +41,17 @@ jobs:
         include:
           - arch: x64
             platform: x64
+            name: VibeUsagePanelPoc-x64
+            slim: "false"
           - arch: arm64
             platform: ARM64
+            name: VibeUsagePanelPoc-arm64
+            slim: "false"
+          # Experiment: only the WinUI components of the Windows App SDK.
+          - arch: x64
+            platform: x64
+            name: VibeUsagePanelPoc-x64-slim
+            slim: "true"
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-dotnet@v6
@@ -52,11 +61,11 @@ jobs:
         run: >
           dotnet publish poc/winui3-panel/VibeUsagePanelPoc/VibeUsagePanelPoc.csproj
           -c Release -r win-${{ matrix.arch }} -p:Platform=${{ matrix.platform }}
-          -o out/VibeUsagePanelPoc-${{ matrix.arch }}
+          -p:PocSlim=${{ matrix.slim }} -o out/${{ matrix.name }}
       - name: Size
         shell: pwsh
         run: |
-          $dir = "out/VibeUsagePanelPoc-${{ matrix.arch }}"
+          $dir = "out/${{ matrix.name }}"
           $files = Get-ChildItem $dir -Recurse -File
           "{0} files, {1:N1} MB" -f $files.Count, (($files | Measure-Object Length -Sum).Sum / 1MB)
           $files | Sort-Object Length -Descending | Select-Object -First 25 |
@@ -66,8 +75,8 @@ jobs:
           "zip {0:N1} MB" -f ((Get-Item out/size-check.zip).Length / 1MB)
       - uses: actions/upload-artifact@v7
         with:
-          name: VibeUsagePanelPoc-${{ matrix.arch }}
-          path: out/VibeUsagePanelPoc-${{ matrix.arch }}/
+          name: ${{ matrix.name }}
+          path: out/${{ matrix.name }}/
           retention-days: 30
 
   screenshot:
@@ -82,9 +91,33 @@ jobs:
       - name: Run the sample and screenshot the panel
         shell: pwsh
         run: ./poc/winui3-panel/ci/screenshot.ps1 -AppDir C:\poc\app -OutDir C:\poc\shots
+      - name: Click the tray icon (smoke test, runner VM)
+        shell: pwsh
+        run: ./poc/winui3-panel/ci/interaction.ps1 -AppDir C:\poc\app -OutDir C:\poc\shots
       - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: winui3-panel-screenshots
           path: C:\poc\shots\
           retention-days: 30
+
+  slim-smoke:
+    needs: build
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: VibeUsagePanelPoc-x64-slim
+          path: C:\poc\slim
+      - name: Does the slim build start and open the panel?
+        shell: pwsh
+        run: |
+          $logDir = "C:\poc\slim-log"
+          $p = Start-Process C:\poc\slim\VibeUsagePanelPoc.exe -ArgumentList @('--open', '--pin', "--log-dir=$logDir") -PassThru
+          Start-Sleep -Seconds 10
+          "exited: $($p.HasExited)"
+          if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
+          $log = Get-Content "$logDir\panel-poc.log" -ErrorAction SilentlyContinue
+          $log | ForEach-Object { $_ }
+          if (-not ($log | Where-Object { $_ -match 'show source=Startup' })) { throw 'slim build did not open the panel' }

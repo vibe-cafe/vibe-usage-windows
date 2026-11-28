@@ -103,8 +103,9 @@
                 <Setter Property="Fill" Value="{ThemeResource TextFillColorTertiaryBrush}" />
             </Style>
 
-            <!-- Chrome-less buttons; hover and press fills come from the panel's lightweight overrides. -->
-            <Style x:Key="PanelIconButtonStyle" TargetType="Button" BasedOn="{StaticResource DefaultButtonStyle}">
+            <!-- Chrome-less buttons; hover and press fills come from the panel's lightweight overrides.
+                 No BasedOn: the control's default style (template) always applies underneath. -->
+            <Style x:Key="PanelIconButtonStyle" TargetType="Button">
                 <Setter Property="Width" Value="36" />
                 <Setter Property="Height" Value="32" />
                 <Setter Property="Padding" Value="0" />
@@ -112,14 +113,14 @@
                 <Setter Property="BorderThickness" Value="0" />
             </Style>
 
-            <Style x:Key="PanelTextButtonStyle" TargetType="Button" BasedOn="{StaticResource DefaultButtonStyle}">
+            <Style x:Key="PanelTextButtonStyle" TargetType="Button">
                 <Setter Property="Height" Value="32" />
                 <Setter Property="Padding" Value="8,0,10,0" />
                 <Setter Property="Background" Value="Transparent" />
                 <Setter Property="BorderThickness" Value="0" />
             </Style>
 
-            <Style x:Key="PanelRowButtonStyle" TargetType="Button" BasedOn="{StaticResource DefaultButtonStyle}">
+            <Style x:Key="PanelRowButtonStyle" TargetType="Button">
                 <Setter Property="Background" Value="Transparent" />
                 <Setter Property="BorderThickness" Value="0" />
                 <Setter Property="HorizontalAlignment" Value="Stretch" />

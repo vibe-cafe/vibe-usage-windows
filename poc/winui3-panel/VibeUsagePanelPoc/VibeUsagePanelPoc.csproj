@@ -31,8 +31,15 @@
     <SatelliteResourceLanguages>en;zh-Hans</SatelliteResourceLanguages>
   </PropertyGroup>
 
-  <ItemGroup>
+  <!-- Default: the Windows App SDK metapackage (includes AI/ML/Widgets components the
+       panel never uses). -p:PocSlim=true references only the WinUI components, to see
+       how small a real build could be. -->
+  <ItemGroup Condition="'$(PocSlim)' != 'true'">
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.7.0" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(PocSlim)' == 'true'">
+    <PackageReference Include="Microsoft.WindowsAppSDK.WinUI" Version="2.7.0" />
+    <PackageReference Include="Microsoft.WindowsAppSDK.Foundation" Version="2.7.0" />
   </ItemGroup>
 
   <ItemGroup>
