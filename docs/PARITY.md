@@ -89,7 +89,9 @@
 
 ## CLI Windows 适配（不再内置快照）
 
-应用不再内置 CLI：`src-tauri/resources/cli-bootstrap.mjs` 在每次调用时解析 npm `latest`、校验 sha512 后缓存并用内置 Node 运行。解析或下载 `latest` 失败时改跑缓存里最新的完整版本（缓存为空时照旧失败），国内访问 npm 时断时续也不会让同步失败；macOS 现在也自带 Node、跑同一份脚本，这层退路两端一致。原先由 `scripts/vendor-cli.mjs` 打的那批 Windows 补丁已随 `windows-support` PR 进入上游（`src/init.js` 的 `cmd /c start`、`codex.js` / `qwen-code.js` 的反斜杠 cwd、`opencode-roots.js` 的 `%LOCALAPPDATA%\opencode`、`amp.js` 的 `%LOCALAPPDATA%\amp\threads`，以及 `config.json` / `state.json` 被误建成目录时的自愈）。
+Windows 和 macOS 共用 `cli-bootstrap.mjs`。每次先查 npm `latest`，命中完整缓存就直接运行。新下载的包必须与元数据中的 SHA-512 匹配才会解压。缺少摘要、校验不符或下载失败时，两端都以 `download` 阶段回退到版本号最高的完整缓存。只有安装成功才清理，保留刚装好的版本和按回退顺序排在最前的另外两个完整版本，额外保留其他启动器在用的版本。旧缓存继续按 `complete` 标记和入口文件认定完整。
+
+原先由 `scripts/vendor-cli.mjs` 打的那批 Windows 补丁已随 `windows-support` PR 进入上游（`src/init.js` 的 `cmd /c start`、`codex.js` / `qwen-code.js` 的反斜杠 cwd、`opencode-roots.js` 的 `%LOCALAPPDATA%\opencode`、`amp.js` 的 `%LOCALAPPDATA%\amp\threads`，以及 `config.json` / `state.json` 被误建成目录时的自愈）。
 
 两处不属于"已上游"：
 
