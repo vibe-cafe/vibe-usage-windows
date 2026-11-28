@@ -1,0 +1,15 @@
+{
+  "args": {},
+  "value": {
+    "snapshots": [
+      {
+        "provider": "codex",
+        "status": {
+          "kind": "noData"
+        }
+      }
+    ],
+    "refreshing": false,
+    "providers": []
+  }
+}

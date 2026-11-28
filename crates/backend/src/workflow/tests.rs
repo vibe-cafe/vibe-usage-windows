@@ -116,9 +116,15 @@ impl Network for Fake {
     }
 }
 
-struct TestHost;
+#[derive(Default)]
+struct TestHost {
+    quota_events: Mutex<Vec<Value>>,
+}
 impl Host for TestHost {
     fn event(&self, _: &str, _: Value) {}
+    fn rate_limits_updated(&self, payload: Value) {
+        self.quota_events.lock().unwrap().push(payload);
+    }
     fn request_exit(&self) {}
 }
 
@@ -126,6 +132,7 @@ struct Fixture {
     dir: TempDir,
     app: Backend,
     net: Arc<Fake>,
+    host: Arc<TestHost>,
 }
 
 impl Fixture {
@@ -158,9 +165,10 @@ impl Fixture {
             autostart,
         };
         let net = Arc::new(Fake::default());
+        let host = Arc::new(TestHost::default());
         let app = Backend::initialize_with(
             options,
-            Arc::new(TestHost),
+            host.clone(),
             config,
             net.clone(),
             |app| {
@@ -173,7 +181,7 @@ impl Fixture {
             },
             retire_legacy,
         );
-        Self { dir, app, net }
+        Self { dir, app, net, host }
     }
     fn reload(&self) -> crate::state::AppCtx {
         crate::state::AppCtx::new(self.dir.path().join("roaming"))
@@ -195,6 +203,30 @@ async fn settle() {
 
 fn today() -> UsageQuery {
     UsageQuery::Days { days: 1 }
+}
+
+#[tokio::test(start_paused = true)]
+async fn refresh_events_name_only_the_products_due_in_this_read() {
+    let f = Fixture::new(false, false, vec![Cursor, Grok]);
+    settle().await;
+    f.host.quota_events.lock().unwrap().clear();
+    // Cursor's one-minute cache expires while Grok's five-minute cache is fresh.
+    f.advance(61).await;
+    f.net.hold_quotas.store(true, Ordering::SeqCst);
+    let read = tokio::spawn(commands::get_rate_limits(f.app.clone(), false));
+    settle().await;
+    let current = serde_json::to_value(commands::get_cached_rate_limits(f.app.clone())).unwrap();
+    assert_eq!(current["providers"], serde_json::json!(["cursor"]));
+    assert_eq!(current["refreshing"], true);
+    f.net.finish_quotas.notify_one();
+    read.await.unwrap();
+    settle().await;
+    let events = f.host.quota_events.lock().unwrap();
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[0], current);
+    assert_eq!(events[1]["providers"], current["providers"]);
+    assert_eq!(events[1]["refreshing"], false);
+    assert_eq!(events[1]["snapshots"].as_array().unwrap().len(), 2);
 }
 
 #[tokio::test]

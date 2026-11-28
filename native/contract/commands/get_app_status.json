@@ -1,0 +1,13 @@
+{
+  "args": {},
+  "value": {
+    "configured": false,
+    "hostname": "fixture",
+    "apiUrl": "https://example.invalid",
+    "version": "0.8.0",
+    "isDev": false,
+    "runtimeAvailable": false,
+    "testDiagnosticsAvailable": false,
+    "updatesAvailable": true
+  }
+}

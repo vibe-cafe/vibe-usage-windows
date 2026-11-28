@@ -1,0 +1,17 @@
+{
+  "args": {
+    "region": "bigModel",
+    "apiKey": "synthetic-only"
+  },
+  "value": [
+    {
+      "provider": "codex",
+      "status": {
+        "kind": "ok"
+      },
+      "fiveHour": {
+        "utilization": 42.5
+      }
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "args": {
+    "provider": "opencode-go",
+    "selected": true
+  },
+  "value": [
+    {
+      "provider": "codex",
+      "status": {
+        "kind": "ok"
+      },
+      "fiveHour": {
+        "utilization": 42.5
+      }
+    }
+  ]
+}

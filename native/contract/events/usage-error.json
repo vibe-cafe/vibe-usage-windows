@@ -1,0 +1,11 @@
+{
+  "kind": "event",
+  "name": "usage-error",
+  "payload": {
+    "query": {
+      "kind": "days",
+      "days": 1
+    },
+    "error": "未配置"
+  }
+}

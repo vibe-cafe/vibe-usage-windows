@@ -90,11 +90,9 @@ pub async fn get_rate_limits(app: &Backend, force: bool) -> Vec<ProviderRateLimi
     let requested_after = ctx.rate_limits.lock().unwrap().completed_forced_reads;
     let _refresh_guard = ctx.rate_limit_refresh.lock().await;
     let effective_force = {
-        let mut cache = ctx.rate_limits.lock().unwrap();
-        cache.refreshing = true;
+        let cache = ctx.rate_limits.lock().unwrap();
         force && cache.completed_forced_reads == requested_after
     };
-    let _ = app.emit("rate-limits-updated", ());
     // Lock order is settings -> cache, also used by credential mutation commands.
     let (region, generation) = {
         let settings = ctx.settings.lock().unwrap();
@@ -107,6 +105,12 @@ pub async fn get_rate_limits(app: &Backend, force: bool) -> Vec<ProviderRateLimi
         .into_iter()
         .filter(|p| needs_refresh(app, *p, effective_force))
         .collect();
+    {
+        let mut cache = ctx.rate_limits.lock().unwrap();
+        cache.refreshing = true;
+        cache.refreshing_providers = due.clone();
+    }
+    let _ = app.emit("rate-limits-updated", cached_rate_limits(app));
     if !due.is_empty() {
         let snapshots = app.0.network.quotas(app, &due, region).await;
         let mut cache = ctx.rate_limits.lock().unwrap();
@@ -119,11 +123,16 @@ pub async fn get_rate_limits(app: &Backend, force: bool) -> Vec<ProviderRateLimi
     {
         let mut cache = ctx.rate_limits.lock().unwrap();
         cache.refreshing = false;
+        cache.refreshing_providers.clear();
         if effective_force {
             cache.completed_forced_reads += 1;
         }
     }
-    let _ = app.emit("rate-limits-updated", &result);
+    let _ = app.emit("rate-limits-updated", CachedRateLimits {
+        snapshots: result.clone(),
+        refreshing: false,
+        providers: due,
+    });
     for snapshot in &result {
         test_diagnostics::record_result(&app.options().local_data, snapshot);
     }
@@ -201,6 +210,7 @@ pub(crate) async fn read_due(
 pub struct CachedRateLimits {
     snapshots: Vec<ProviderRateLimit>,
     refreshing: bool,
+    providers: Vec<RateLimitProvider>,
 }
 
 /// What the cards show without reading anything: the last results, or an
@@ -222,6 +232,7 @@ pub fn cached_rate_limits(app: &Backend) -> CachedRateLimits {
     CachedRateLimits {
         snapshots,
         refreshing: cache.refreshing || !ctx.launch_network_ready(),
+        providers: cache.refreshing_providers.clone(),
     }
 }
 

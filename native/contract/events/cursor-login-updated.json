@@ -1,0 +1,8 @@
+{
+  "kind": "event",
+  "name": "cursor-login-updated",
+  "payload": {
+    "state": "signedOut",
+    "supported": null
+  }
+}
