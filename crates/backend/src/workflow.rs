@@ -16,6 +16,12 @@ use vibe_core::{ProviderRateLimit, RateLimitProvider};
 // operations which would have reached the client or a managed subprocess.
 #[async_trait]
 pub(crate) trait Network: Send + Sync {
+    fn now_ms(&self) -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64
+    }
     async fn proxy_ready(&self, app: &Backend);
     async fn usage(
         &self,

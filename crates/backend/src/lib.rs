@@ -64,6 +64,8 @@ impl Backend {
                 commands::initialize_quota_selection(app.ctx(), &app.options().local_data);
                 services::auto_launch::migrate_run_value();
                 services::claude_usage::set_bundled_node(services::sync_engine::bundled_node(app));
+            },
+            |app| {
                 let _ = services::rate_limits::statusline_hook(app).retire_legacy();
             },
         )
@@ -75,9 +77,15 @@ impl Backend {
         config: ConfigManager,
         network: Arc<dyn workflow::Network>,
         prepare_local: impl FnOnce(&Backend),
+        retire_legacy: impl FnOnce(&Backend) + Send + 'static,
     ) -> Self {
         let app = Self::new(options, host, config, network);
         prepare_local(&app);
+        // Resolving the old hook's Node command may synchronously run node -v.
+        let worker = app.clone();
+        if let Some(tasks) = app.0.tasks.lock().unwrap().as_mut() {
+            tasks.spawn_blocking(move || retire_legacy(&worker));
+        }
         app.start_network();
         app
     }

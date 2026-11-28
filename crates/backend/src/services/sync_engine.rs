@@ -189,13 +189,6 @@ fn set_state(app: &Backend, update: impl FnOnce(&mut SyncState)) {
     let _ = app.emit("sync-state", &snapshot);
 }
 
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
-}
-
 /// Request work that must not be dropped if another run is already in flight.
 /// Overlapping callers coalesce into a single follow-up after the in-flight
 /// run finishes (so a post-config sync still executes).
@@ -280,7 +273,7 @@ async fn run_sync_once(app: Backend) {
     } else {
         SyncTrigger::Scheduled
     };
-    let started_at = now_ms();
+    let started_at = app.0.network.now_ms();
     let started = std::time::Instant::now();
     let run = app.0.network.sync(&app).await;
     let current = ctx.account_generation.lock().unwrap();
@@ -303,7 +296,7 @@ async fn run_sync_once(app: Backend) {
 
     match run.message {
         Ok(message) => {
-            let last = now_ms();
+            let last = app.0.network.now_ms();
             if ctx.update_settings(|s| s.last_successful_sync_at = Some(last)).is_err() {
                 log::warn!("failed to save last successful sync");
             }

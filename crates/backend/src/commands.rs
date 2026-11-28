@@ -319,17 +319,23 @@ pub enum Setting {
 }
 
 pub fn update_setting(app: Backend, change: Setting) -> Result<AppSettings, String> {
+    let mut egress_changed = false;
     let snapshot = app.ctx().update_settings(|next| match change {
         Setting::ShowCostInTray(value) => next.show_cost_in_tray = value,
         Setting::ShowTokensInTray(value) => next.show_tokens_in_tray = value,
-        Setting::EgressMode(value) => next.egress_mode = value,
+        Setting::EgressMode(value) => {
+            egress_changed = next.egress_mode != value;
+            next.egress_mode = value;
+        }
         Setting::QuotaProductOrder(order) => {
             next.quota_product_order = quota_product::normalize_selection(order)
         }
         Setting::QuotaSelectedTabId(provider) => next.quota_selected_tab_id = provider,
     })?;
     let _ = app.emit("settings-updated", &snapshot);
-    app.refresh_quotas();
+    if egress_changed {
+        app.refresh_quotas();
+    }
     Ok(snapshot)
 }
 

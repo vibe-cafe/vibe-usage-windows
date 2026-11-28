@@ -85,13 +85,15 @@ pub async fn get_rate_limits(app: &Backend, force: bool) -> Vec<ProviderRateLimi
     // (`AppCtx::wait_launch_network`), whoever asks — the window, a
     // selection change or a key change. The window shows its loading state.
     ctx.wait_launch_network().await;
-    // A caller that waited for an in-flight forced refresh consumes that
-    // result instead of immediately starting the same work again.
-    let (_refresh_guard, effective_force) = match ctx.rate_limit_refresh.try_lock() {
-        Ok(guard) => (guard, force),
-        Err(_) => (ctx.rate_limit_refresh.lock().await, false),
+    // Only a forced read completed while we waited can satisfy another
+    // forced request. A startup or panel read may have skipped fresh cards.
+    let requested_after = ctx.rate_limits.lock().unwrap().completed_forced_reads;
+    let _refresh_guard = ctx.rate_limit_refresh.lock().await;
+    let effective_force = {
+        let mut cache = ctx.rate_limits.lock().unwrap();
+        cache.refreshing = true;
+        force && cache.completed_forced_reads == requested_after
     };
-    ctx.rate_limits.lock().unwrap().refreshing = true;
     let _ = app.emit("rate-limits-updated", ());
     // Lock order is settings -> cache, also used by credential mutation commands.
     let (region, generation) = {
@@ -114,7 +116,13 @@ pub async fn get_rate_limits(app: &Backend, force: bool) -> Vec<ProviderRateLimi
     }
 
     let result = cached_rate_limits(app).snapshots;
-    ctx.rate_limits.lock().unwrap().refreshing = false;
+    {
+        let mut cache = ctx.rate_limits.lock().unwrap();
+        cache.refreshing = false;
+        if effective_force {
+            cache.completed_forced_reads += 1;
+        }
+    }
     let _ = app.emit("rate-limits-updated", &result);
     for snapshot in &result {
         test_diagnostics::record_result(&app.options().local_data, snapshot);
