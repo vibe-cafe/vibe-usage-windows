@@ -66,16 +66,8 @@ pub fn get_app_status(app: AppHandle) -> AppStatus {
 
 #[tauri::command]
 pub async fn fetch_usage(app: AppHandle, query: UsageQuery) -> Result<Value, String> {
-    let (http, base_url, api_key) = {
-        let ctx = app.state::<AppCtx>();
-        let config = ctx.config.load().ok_or("未配置")?;
-        let base_url = ctx.config.effective_api_url(&config);
-        let api_key = config.api_key.ok_or("未配置")?;
-        (ctx.http.clone(), base_url, api_key)
-    };
-    api_client::fetch_usage(&http, &base_url, &api_key, &query)
-        .await
-        .map_err(|e| e.to_string())
+    let ctx = app.state::<AppCtx>();
+    api_client::fetch_linked_usage(&ctx.http, &ctx.config, &query, ctx.wait_launch_network()).await
 }
 
 // -- Device link --------------------------------------------------------------
@@ -232,6 +224,9 @@ pub async fn set_quota_product_selected(
             selected,
         );
         settings.set_quota_selection(next);
+        if provider == RateLimitProvider::ClaudeCode && !selected {
+            ctx.rate_limits.lock().unwrap().invalidate_claude();
+        }
         drop(settings);
         ctx.save_settings();
         let settings = ctx.settings.lock().unwrap().clone();
@@ -372,6 +367,9 @@ pub fn set_settings(app: AppHandle, mut settings: AppSettings) {
     {
         let ctx = app.state::<AppCtx>();
         let mut current = ctx.settings.lock().unwrap();
+        if current.claude_rate_limit_enabled && !settings.claude_rate_limit_enabled {
+            ctx.rate_limits.lock().unwrap().invalidate_claude();
+        }
         if current.z_code_quota_region != settings.z_code_quota_region {
             ctx.rate_limits.lock().unwrap().invalidate_zcode();
         }

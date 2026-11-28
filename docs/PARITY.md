@@ -23,8 +23,9 @@
 
 聚合口径（`src/lib/aggregate.ts` ↔ Swift 各 View 的 filtered/chartData）：
 
-- 总 Token = input + output + reasoning + cachedInput（`computedTotal`）
-- 趋势图 Token 三段堆叠：output+reasoning（白 0.9）/ input（白 0.5）/ cached（白 0.24）
+- 总 Token = input + output + reasoning + cachedInput + cacheCreation5mTokens + cacheCreation1hTokens（`computedTotal`，旧数据缺少的缓存写入项按 0 算）
+- 趋势图 Token 三段堆叠为 output + reasoning（白 0.9）、input + 缓存写入（白 0.5）、缓存读取（白 0.24）
+- 自定义日期按本地日历选整日。Windows 的用量和活跃时长来自同一份 `/api/usage` 响应，请求携带选择日期时的 IANA 时区，以及起始日零点至末日次日零点前 1 毫秒的 UTC ISO 时刻（macOS #119）。
 - 模型筛选**不作用于 sessions**（活跃时长）— macOS 既有行为，保持一致
 - 「今天」与「24H」同拉 `days=1`，仅客户端 midnight cutoff 不同（菜单栏/托盘统计同样应用 cutoff）
 - Donut Top6 + 其他；空维度值显示「未知」
@@ -58,12 +59,13 @@
 | Cursor 单独登录（设置里 Cursor 一行：未登录 + 登录 / 等待（含邮箱确认提示）/ 邮箱 + 退出 / 已失效 + 重新登录（旁边次要的退出），不带说明文字；Vibe Usage 自己的钥匙串条目；每次启动 CLI 用 `--cursor-login-stdin` 递凭据；到期前 7 天 `login cursor --refresh`；卡片 `signIn` 两个空态点开设置。2026-11-25 维护者批准，macOS 由同期 PR 实现） | `services/cursor_login.rs`（登录、续期、被拒后续期一次、失效、退出、检查 CLI 支不支持）+ `services/credential_store.rs`（Credential Manager 读写，和 ZCode 共用；条目 `ai.vibecafe.vibe-usage.windows/cursor/login`，超过单条 2560 字节时分条）+ `lib/cursorLogin.ts`（文案与 macOS 逐字一致）+ `RateLimitCard.tsx`（`signIn` 空态，整张卡片打开设置的 Cursor 一行）。见 `docs/SUBSCRIPTION_QUOTAS.md`「Cursor 探测约束」 |
 | `RuntimeDetector` | `crates/core/runtime.rs`（Windows 路径 + 捆绑 node 兜底） |
 | `CodexRateLimitReader` | `crates/core/rate_limit/codex.rs` |
-| `RateLimitCoordinator` + `ClaudeUsageProbe` + `ClaudeUsageCache` | 面板先显示 Claude Code 的本机缓存，没有可用缓存时显示有效的桌面端记录，再用受限的 `get_usage` 实时读取。实时失败优先用 Claude Code 缓存，最后用 Claude Desktop 的记录。`crates/core/src/claude_code.rs` 依次检查显式指定、独立安装、PATH（含 npm shim）、桌面端最新的完整版本；Windows 的三处桌面端目录和待实测项见 `docs/SUBSCRIPTION_QUOTAS.md`。 |
+| `RateLimitCoordinator` + `ClaudeUsageProbe` + `ClaudeUsageCache` | 面板先预览本机数据，再用受限的 `get_usage` 实时读取。预览和实时失败后的回退都优先用有效的 Claude Code 缓存，其次用有效的桌面端记录。组织策略禁止探测时只用有效的桌面端记录。`crates/core/src/claude_code.rs` 依次查找显式指定的程序、独立安装、PATH（含 npm shim）和桌面端自带的最新完整版本。Windows 的三处桌面端目录和待实测项见 `docs/SUBSCRIPTION_QUOTAS.md`。 |
+| Claude 模型周额度（macOS #118 的 `modelScopedMeters`） | Windows 从 Claude Code 实时回复和缓存解析 Fable 等模型周额度，读取时跳过已重置的模型行。Windows 经典卡片只显示账号提供的通用窗口（`5h`、`7d`），只有 `7d` 时就显示一行，诊断也只统计卡片显示的窗口。macOS 仅在新版面板显示 Fable，Windows 原生版的展示另行设计。 |
 | 旧 `StatuslineHook` | `crates/core/statusline_hook.rs` 仅用于安全退休本应用可证明归属的旧 hook |
 | 设置「关于」→「诊断信息」：「复制诊断信息」最小本机摘要 + App 本机保留最近 10 次同步摘要（一键诊断 1b；维护者 2026-11-09 在架构审批门批准方案修订二：「可以开工，你派活吧。 1、2、3我都同意。」） | `services/diagnostics.rs`（白名单结构化字段）+ `services/cli_doctor.rs`（并入 CLI 的 `doctor --json`，方案 2′）+ `services/sync_history.rs`（`sync-history.json`）+ `lib/diagnostics.ts`（排版与兜底过滤）；字段、脱敏和存放位置见 `docs/DIAGNOSTICS.md`。macOS 同一功能由 vibe-usage-app 按同一方案实现（并入 `doctor --json` 那一步 macOS 尚未做） |
 | `MenuBarController`（NSStatusItem + NSPanel） | `tray.rs` + `panel.rs`（托盘 + 标准主窗口，可调整大小）+ `window_geometry.rs`（再次打开时缩到屏幕放得下再居中） |
 | Sparkle | `services/updater.rs`（latest.json + SHA-256 + NSIS 被动模式覆盖升级，见 `docs/WINDOWS_UPDATE.md`） |
-| `SMAppService`（登录项） | `auto-launch` crate（HKCU Run 注册表键，值带 `--autostart`；带它启动时只进托盘、不弹主窗口（2026-11-26 维护者定，G02），点托盘图标再打开；设了代理（含 PAC 暂时取不到）、有同步或配额要读时，读配额和每一次同步（手动的也算）都等到代理就绪——应用自己的代理变量，或同步服务器、各厂商主机的系统路由（含 PAC）指向的端口能连上——最多等 2 分钟，等待期间配额卡显示「正在读取」；一个代理都没设就不等，四家厂商的读取改由出口检测把关，与 macOS `LoginLaunch` 对齐；旧注册值在启动时补上参数，不碰任务管理器的启用开关） |
+| `SMAppService`（登录项） | `auto-launch` crate（HKCU Run 注册表键，值带 `--autostart`）。开机自启只进托盘，点图标再打开面板（G02）。已链接账号或启用了配额卡时，面板用量（也供托盘统计）、配额和同步（含手动同步）共用一次启动等待。应用代理变量或系统路由（含 PAC）指定的代理端口能连上就放行，PAC 暂时取不到也会等，上限约 2 分钟。等待期间托盘提示先显示「Vibe Usage」，面板用量显示「加载中」，配额卡显示「正在读取」。放行后用当前账号和服务器读用量，已解绑就不发请求。没设代理时首轮检查即放行，四家厂商的读取仍由出口检测把关。手动启动直接读取。旧注册值在启动时补上参数，保留任务管理器的启用开关。 |
 | `EgressCheck`（没检测到代理时，先匿名检测出口国家再读 Codex、Claude；设置「隐私保护 → 没检测到代理时」三选一（自动判断（推荐）/ 暂停读取 / 照常读取），转给 CLI 检测 Antigravity） | `src-tauri/src/egress_check.rs`（同样的检测主机、地区、缓存时长和文案；网卡地址用 `GetAdaptersAddresses` 求摘要；设置在「隐私保护」分区，同样的弹出菜单（`MenuSelect`，自绘、对齐 macOS 原生弹出菜单），存为 `settings.json` 的 `egressMode`（开发时的两个旧字段读入时映射）；环境变量 `VIBE_USAGE_EGRESS_CHECK=1|0` / `VIBE_USAGE_REQUIRE_PROXY=1|0`） |
 | `SystemProxy`（按网址解析系统代理，PAC 由系统求值，交给 CLI、Claude Code 和厂商请求） | `src-tauri/src/system_proxy.rs`（注册表手动代理含按协议分开的写法和例外列表、PAC 由 WinHTTP 求值；CLI 的主机清单含 Cursor 登录用的 `api2.cursor.sh`；reqwest 每次请求现解析；Claude 用 `claude_pac.rs` 取 PAC 首项的协议。Claude 有主机须经 SOCKS 时，`crates/core/src/claude_relay.rs` 为本次探测提供认证 HTTP CONNECT，按启动时固定的每个主机的路线走 SOCKS5、HTTP 或用户的直连规则，未解析的路线拒绝） |
 
@@ -87,7 +89,9 @@
 
 ## CLI Windows 适配（不再内置快照）
 
-应用不再内置 CLI：`src-tauri/resources/cli-bootstrap.mjs` 在每次调用时解析 npm `latest`、校验 sha512 后缓存并用内置 Node 运行。解析或下载 `latest` 失败时改跑缓存里最新的完整版本（缓存为空时照旧失败），国内访问 npm 时断时续也不会让同步失败；macOS 现在也自带 Node、跑同一份脚本，这层退路两端一致。原先由 `scripts/vendor-cli.mjs` 打的那批 Windows 补丁已随 `windows-support` PR 进入上游（`src/init.js` 的 `cmd /c start`、`codex.js` / `qwen-code.js` 的反斜杠 cwd、`opencode-roots.js` 的 `%LOCALAPPDATA%\opencode`、`amp.js` 的 `%LOCALAPPDATA%\amp\threads`，以及 `config.json` / `state.json` 被误建成目录时的自愈）。
+Windows 和 macOS 共用 `cli-bootstrap.mjs`。每次先查 npm `latest`，命中完整缓存就直接运行。新下载的包必须与元数据中的 SHA-512 匹配才会解压。缺少摘要、校验不符或下载失败时，两端都以 `download` 阶段回退到版本号最高的完整缓存。只有安装成功才清理，保留刚装好的版本和按回退顺序排在最前的另外两个完整版本，额外保留其他启动器在用的版本。旧缓存继续按 `complete` 标记和入口文件认定完整。
+
+原先由 `scripts/vendor-cli.mjs` 打的那批 Windows 补丁已随 `windows-support` PR 进入上游（`src/init.js` 的 `cmd /c start`、`codex.js` / `qwen-code.js` 的反斜杠 cwd、`opencode-roots.js` 的 `%LOCALAPPDATA%\opencode`、`amp.js` 的 `%LOCALAPPDATA%\amp\threads`，以及 `config.json` / `state.json` 被误建成目录时的自愈）。
 
 两处不属于"已上游"：
 

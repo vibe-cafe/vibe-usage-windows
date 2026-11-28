@@ -1,6 +1,6 @@
 # 隐私政策：Vibe Usage for Windows
 
-最后更新：2026-11-26
+最后更新：2026-11-28
 
 本文说明 Vibe Usage Windows 版（下称「App」），以及它在你电脑上运行的命令行组件 `@vibe-cafe/vibe-usage`（下称「CLI」），会读取什么、保存什么、把什么发到哪里。本文按代码的实际行为编写；代码改变时会同步更新，历史版本见本仓库的提交记录。
 
@@ -20,7 +20,7 @@
 | 需要运行 CLI 时（同步，或读取 Kimi Code、ZCode、Grok、OpenCode Go、Cursor、Antigravity / AGY 的配额） | npm 官方源（`registry.npmjs.org`） | 查询 `@vibe-cafe/vibe-usage` 的最新版本，下载、校验后缓存在本机。连不上时改用本机缓存。 |
 | 安装时，仅在电脑缺少 WebView2 时 | 微软 | 安装程序下载微软的 WebView2 引导程序。 |
 | 订阅配额卡开启时 | 见下文 | 用你本机已有的登录信息查询额度。 |
-| 开机自启、系统设了代理、有同步或配额要读时 | 系统代理设置里的 PAC 地址和代理端口 | 读取配额和同步之前（更新检查和面板读取 Vibe 用量不等），每 2 秒读一次系统代理设置（会取 PAC 文件；PAC 地址要求 Windows 登录时，按系统默认方式使用当前身份），并试连代理端口，确认代理已就绪，最多 2 分钟。试连只建立连接，不发送任何数据，不带任何账号。系统没设代理时不等。 |
+| 开机自启、系统设了代理、有同步或配额要读时 | 系统代理设置里的 PAC 地址和代理端口 | 同步、读取配额和面板读取 Vibe 用量之前（更新检查不等），每 2 秒读一次系统代理设置（会取 PAC 文件；PAC 地址要求 Windows 登录时，按系统默认方式使用当前身份），并试连代理端口，确认代理已就绪，最多 2 分钟。试连只建立连接，不发送任何数据，不带任何账号。系统没设代理时不等。 |
 | 要读 Codex、Claude、Grok、Antigravity 的额度、又没检测到代理时（「没检测到代理时」选「自动判断（推荐）」） | 该厂商地址的 Cloudflare 节点（Codex 是 `chatgpt.com`，Claude 是 Anthropic 的地址，Grok 是 `cli-chat-proxy.grok.com`） | 出口检测：用同一条线路访问一次 `/cdn-cgi/trace`，不带任何账号、Cookie 和令牌，只读其中的国家代码。同一地址 10 分钟内最多一次，暂停中每分钟最多一次，换了网络就重新检测。Grok 和 Antigravity 由 CLI 用同样的办法检测（Google 的地址没有这个页面，Antigravity 用 `chatgpt.com` 代替；它要走代理而 Google 直连时改用 `api.anthropic.com`）。Cloudflare 会看到你的出网 IP，但看不到账号。 |
 
 **跟着你的代理。** App 自己的请求和子进程都使用当前 Windows 代理设置和代理环境变量。App 和其他 CLI 在 PAC 失败时可使用已启用的手动代理。Claude 探测遇到未解析的路线则拒绝该连接。

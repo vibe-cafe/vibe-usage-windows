@@ -14,9 +14,11 @@ use std::sync::Mutex;
 use std::time::Instant;
 use vibe_core::claude_code::{ClaudeLaunch, LaunchOrigin, LaunchVia};
 use vibe_core::quota_product::DiscoveryEnvironment;
-use vibe_core::rate_limit::claude_read::{candidate_answer, empty_after_failure, offline_snapshot};
+use vibe_core::rate_limit::claude_models::{weekly_meters, AccountScope};
 #[cfg(test)]
 use vibe_core::rate_limit::claude_read::nonessential_traffic_disabled_snapshot;
+use vibe_core::rate_limit::claude_read::{candidate_answer, empty_after_failure, offline_snapshot};
+use vibe_core::rate_limit::now_epoch;
 use vibe_core::{
     ProviderRateLimit, RateLimitEmptyReason, RateLimitLiveFailure, RateLimitProvider,
     RateLimitSource, RateLimitStatus, RateLimitWindow,
@@ -512,7 +514,10 @@ async fn run_probe(
     };
     attempt.answer = Some(AnswerFields::of(&payload));
 
-    if let Some(snapshot) = snapshot_from_payload(&payload, now_epoch()) {
+    if let Some(mut snapshot) = snapshot_from_payload(&payload, now_epoch()) {
+        if snapshot.status == RateLimitStatus::Ok {
+            snapshot.claude_account = steps.account;
+        }
         // stdin was closed by `exchange`; give the child a short graceful-exit
         // window, then terminate the whole tree so no helper survives a refresh.
         attempt.exit = finish(&mut child, Duration::from_secs(1)).await;
@@ -547,6 +552,7 @@ struct Steps {
     usage_sent: Option<Instant>,
     initialize: Option<Duration>,
     get_usage: Option<Duration>,
+    account: Option<AccountScope>,
 }
 
 impl Steps {
@@ -556,6 +562,7 @@ impl Steps {
             usage_sent: None,
             initialize: None,
             get_usage: None,
+            account: None,
         }
     }
 }
@@ -589,6 +596,12 @@ async fn exchange(
         };
         match response.get("request_id").and_then(Value::as_str) {
             Some("vibe-init") if !sent_usage => {
+                if response.get("subtype").and_then(Value::as_str) == Some("success") {
+                    steps.account = AccountScope::new(
+                        response.pointer("/response/account/email").and_then(Value::as_str),
+                        response.pointer("/response/account/organization").and_then(Value::as_str),
+                    );
+                }
                 sent_usage = true;
                 steps.initialize = Some(steps.started.elapsed());
                 steps.usage_sent = Some(Instant::now());
@@ -646,6 +659,8 @@ fn parse_payload(root: &Value, now: f64) -> Option<ProviderRateLimit> {
     Some(ProviderRateLimit {
         provider: RateLimitProvider::ClaudeCode,
         meters: Vec::new(),
+        model_scoped_meters: weekly_meters(limits.get("limits"), now),
+        claude_account: None,
         five_hour,
         seven_day,
         plan_label: root
@@ -710,9 +725,19 @@ fn cached_snapshot_from(path: &Path, now: f64) -> Option<ProviderRateLimit> {
     if five_hour.is_none() && seven_day.is_none() {
         return None;
     }
+    let claude_account = if cached_account.is_some_and(|id| !id.is_empty()) && cached_account == active_account {
+        AccountScope::new(
+            root.pointer("/oauthAccount/emailAddress").and_then(Value::as_str),
+            root.pointer("/oauthAccount/organizationName").and_then(Value::as_str),
+        )
+    } else {
+        None
+    };
     Some(ProviderRateLimit {
         provider: RateLimitProvider::ClaudeCode,
         meters: Vec::new(),
+        model_scoped_meters: weekly_meters(limits.get("limits"), now),
+        claude_account,
         five_hour,
         seven_day,
         plan_label: None,
@@ -750,13 +775,6 @@ fn capitalize(raw: &str) -> String {
         .next()
         .map(|first| first.to_uppercase().collect::<String>() + chars.as_str())
         .unwrap_or_default()
-}
-
-fn now_epoch() -> f64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs_f64())
-        .unwrap_or(0.0)
 }
 
 #[cfg(test)]
@@ -958,6 +976,48 @@ mod tests {
         let snapshot = cached_snapshot_from(&file, now).unwrap();
         assert!(snapshot.five_hour.is_none());
         assert_eq!(snapshot.seven_day.unwrap().utilization, 47.0);
+    }
+
+    #[test]
+    fn live_and_offline_cache_read_the_same_raw_weekly_models() {
+        let now = 1_800_000_000.0;
+        let limits = json!({
+            "seven_day": {"utilization": 47},
+            "limits": [{"group":"weekly", "scope":{"model":{"display_name":"Fable"}}, "percent":12, "resets_at":now + 60.0}],
+            "model_scoped": [{"display_name":"Fable", "utilization":99}]
+        });
+        let live = snapshot_from_payload(&json!({"rate_limits":limits}), now).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join(".claude.json");
+        let mut config = json!({
+            "oauthAccount":{"accountUuid":"fixture", "emailAddress":"a@example.invalid", "organizationName":""},
+            "cachedUsageUtilization":{"fetchedAtMs":now * 1000.0, "accountUuid":"fixture", "utilization":limits}
+        });
+        std::fs::write(&file, config.to_string()).unwrap();
+        let paused = offline_snapshot(
+            Some(RateLimitLiveFailure::ProxyNotDetected),
+            || cached_snapshot_from(&file, now),
+            || panic!("valid Claude Code cache should win over Desktop"),
+        )
+        .unwrap();
+        assert_eq!(paused.live_failure, Some(RateLimitLiveFailure::ProxyNotDetected));
+        assert_eq!(paused.meter_count(), 1);
+        assert_eq!(paused.source, Some(RateLimitSource::Cache));
+        assert_eq!(paused.model_scoped_meters, live.model_scoped_meters);
+        let models = paused.model_scoped_meters.unwrap();
+        assert_eq!(models.len(), 1);
+        assert_eq!((models[0].label.as_str(), models[0].utilization), ("Fable", 12.0));
+        assert_eq!(paused.claude_account, AccountScope::new(Some("a@example.invalid"), None));
+        assert!(paused.five_hour.is_none());
+        assert_eq!(paused.seven_day.unwrap().utilization, 47.0);
+
+        let after_reset = cached_snapshot_from(&file, now + 60.0).unwrap();
+        assert_eq!(after_reset.model_scoped_meters, Some(vec![]));
+        assert_eq!(after_reset.seven_day.unwrap().utilization, 47.0);
+
+        config["cachedUsageUtilization"].as_object_mut().unwrap().remove("accountUuid");
+        std::fs::write(&file, config.to_string()).unwrap();
+        assert_eq!(cached_snapshot_from(&file, now).unwrap().claude_account, None);
     }
 
     #[test]

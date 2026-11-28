@@ -238,7 +238,7 @@ function meterWindow(meter: RateLimitMeter): RateLimitWindow {
   };
 }
 
-function ProviderCard({ snapshot }: { snapshot: ProviderRateLimit }) {
+export function ProviderCard({ snapshot }: { snapshot: ProviderRateLimit }) {
   const state = useAppState();
   const name = providerLabel(snapshot.provider, state.quotaProducts);
   const provenance = quotaProvenanceText(snapshot);

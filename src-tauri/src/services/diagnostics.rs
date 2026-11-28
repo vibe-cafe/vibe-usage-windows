@@ -358,10 +358,6 @@ fn quota_card(provider: RateLimitProvider, snapshot: Option<&ProviderRateLimit>)
             data_as_of: None,
         };
     };
-    let windows = [snapshot.five_hour.is_some(), snapshot.seven_day.is_some()]
-        .into_iter()
-        .filter(|present| *present)
-        .count();
     QuotaCard {
         provider,
         // The kind only: `Error`'s message is never copied.
@@ -376,7 +372,7 @@ fn quota_card(provider: RateLimitProvider, snapshot: Option<&ProviderRateLimit>)
         source: snapshot.source,
         live_failure: snapshot.live_failure,
         empty_reason: snapshot.empty_reason,
-        meter_count: snapshot.meters.len() + windows,
+        meter_count: snapshot.meter_count(),
         data_as_of: snapshot.data_as_of,
     }
 }
