@@ -13,11 +13,14 @@ using VibeUsage.Backend;
 namespace VibeUsage.App.State;
 
 /// <summary>
-/// The in-memory fake backend with made-up data in the shape of the Mac
-/// design's sample (Codex, Claude, Cursor, Grok; $41.20 and 65.5M today).
-/// Nothing here touches the network, the disk or credentials. Until the
-/// vertical slice (#94) wires <see cref="NativeBackend"/>, the shell always
-/// runs on this; afterwards CI screenshots keep using it.
+/// The in-memory fake backend with made-up data: the quota readings of the
+/// Mac panel renderer's scene (<see cref="DemoScenes"/>; 131a by default:
+/// Claude, Codex, Cursor, Grok) and today's usage ($41.20 and 65.5M).
+/// 「刷新额度」 pretends to read for a moment; dragging a round button saves
+/// the order in memory. Nothing here touches the network, the disk or
+/// credentials. Until the vertical slice (#94) wires
+/// <see cref="NativeBackend"/>, the shell always runs on this; afterwards CI
+/// screenshots keep using it.
 /// </summary>
 internal static class DemoBackend
 {
@@ -31,16 +34,29 @@ internal static class DemoBackend
 }
 
 /// <summary>Answers for the commands the shell sends; the rest fall back to the shared contract samples.</summary>
-internal sealed class DemoData(DemoScenario scenario, DateTimeOffset now)
+internal sealed class DemoData
 {
-    private const double Hour = 3600, Day = 86400;
-    private DateTimeOffset lastSync = now.AddMinutes(-26);
+    private readonly DemoScene scene;
+    private readonly DateTimeOffset now;
+    private readonly DemoReadings readings;
+    private readonly object gate = new();
+    private DateTimeOffset lastSync;
+    private string[] order;
+    private bool refreshing;
 
-    public static readonly string[] Subscriptions = ["codex", "claudeCode", "cursor", "grok"];
     public const double TotalCost = 41.20;
     public const long TotalTokens = 65_500_000;
 
-    private string[] Enabled => scenario == DemoScenario.Single ? ["claudeCode"] : Subscriptions;
+    public DemoData(DemoScenario scenario, DateTimeOffset now)
+    {
+        scene = DemoScenes.For(scenario);
+        this.now = now;
+        readings = new DemoReadings(now);
+        lastSync = now.AddMinutes(-26);
+        order = scene.Subscriptions;
+    }
+
+    private string[] Enabled => scene.Subscriptions;
 
     public JsonElement Answer(FakeBackend fake, string name, JsonElement args)
     {
@@ -61,9 +77,18 @@ internal sealed class DemoData(DemoScenario scenario, DateTimeOffset now)
             case "get_settings":
                 return Element(Settings());
             case "get_cached_rate_limits":
-                return Element(new JsonObject { ["snapshots"] = Quotas(), ["refreshing"] = false, ["providers"] = new JsonArray() });
+                lock (gate)
+                {
+                    string[] reading = refreshing ? Enabled : scene.Refreshing;
+                    return Element(Cache(reading));
+                }
             case "get_rate_limits":
+                StartRefresh(fake);
                 return Element(Quotas());
+            case "get_quota_products":
+                return Element(Products());
+            case "update_setting":
+                return Element(UpdateSetting(fake, args));
             case "cached_usage":
                 return Element(new JsonObject { ["query"] = TodayQuery(), ["data"] = Usage() });
             case "fetch_usage":
@@ -83,6 +108,88 @@ internal sealed class DemoData(DemoScenario scenario, DateTimeOffset now)
             default:
                 return Fixture(name);
         }
+    }
+
+    private JsonObject Cache(string[] reading) => new()
+    {
+        ["snapshots"] = Quotas(),
+        ["refreshing"] = reading.Length > 0,
+        ["providers"] = Strings(reading),
+    };
+
+    /// <summary>「刷新额度」: every enabled subscription reads for a moment, then the same numbers come back.</summary>
+    private void StartRefresh(FakeBackend fake)
+    {
+        lock (gate)
+        {
+            if (refreshing) return;
+            refreshing = true;
+        }
+        Publish(fake, Cache(Enabled));
+        _ = FinishRefresh(fake);
+    }
+
+    private async Task FinishRefresh(FakeBackend fake)
+    {
+        await Task.Delay(2500).ConfigureAwait(false);
+        lock (gate) refreshing = false;
+        Publish(fake, Cache([]));
+    }
+
+    private static void Publish(FakeBackend fake, JsonObject cache)
+    {
+        try
+        {
+            fake.Publish(new BackendEvent.QuotasChanged(Typed(cache, b => b.GetCachedRateLimitsAsync())));
+        }
+        catch (ObjectDisposedException)
+        {
+            // The app quit during the pretend read.
+        }
+    }
+
+    /// <summary>The product catalogue: all eight, detected unless the scene says otherwise.</summary>
+    private JsonArray Products()
+    {
+        (string Id, string Name)[] catalog =
+        [
+            ("codex", "Codex"), ("claudeCode", "Claude"), ("cursor", "Cursor"), ("kimi-code", "Kimi Code"),
+            ("grok", "Grok"), ("opencode-go", "OpenCode Go"), ("zcode", "ZCode"), ("antigravity", "Antigravity / AGY"),
+        ];
+        return new JsonArray(catalog.Select(p => (JsonNode)new JsonObject
+        {
+            ["provider"] = p.Id,
+            ["displayName"] = p.Name,
+            ["availability"] = "ready",
+            ["isDetected"] = !scene.NotDetected.Contains(p.Id),
+        }).ToArray());
+    }
+
+    /// <summary>The only setting the panel writes is the subscriptions' order (dragging a round button); kept in memory.</summary>
+    private JsonObject UpdateSetting(FakeBackend fake, JsonElement args)
+    {
+        if (args.TryGetProperty("change", out var change) && change.TryGetProperty("quotaProductOrder", out var list))
+        {
+            lock (gate) order = list.EnumerateArray().Select(e => e.GetString() ?? "").Where(e => e.Length > 0).ToArray();
+        }
+        var settings = Settings();
+        try
+        {
+            fake.Publish(new BackendEvent.SettingsChanged(Typed(settings, b => b.GetSettingsAsync())));
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+        return settings;
+    }
+
+    /// <summary>A command answer as the typed record the events carry, read through the backend library's own contract.</summary>
+    private static T Typed<T>(JsonObject json, Func<FakeBackend, Task<T>> read)
+    {
+        using var parser = new FakeBackend(new SynchronizationContext());
+        var element = Element(json);
+        parser.Respond = (_, _) => Task.FromResult(element);
+        return read(parser).GetAwaiter().GetResult();
     }
 
     private async Task FinishSync(FakeBackend fake)
@@ -112,7 +219,7 @@ internal sealed class DemoData(DemoScenario scenario, DateTimeOffset now)
         ["codexRateLimitEnabled"] = true,
         ["claudeRateLimitEnabled"] = true,
         ["selectedQuotaProductIds"] = Strings(Enabled),
-        ["quotaProductOrder"] = Strings(Enabled),
+        ["quotaProductOrder"] = Strings(order),
         ["quotaSelectedTabId"] = null,
         ["quotaSelectionInitialized"] = true,
         ["zCodeQuotaRegion"] = "bigModel",
@@ -120,56 +227,11 @@ internal sealed class DemoData(DemoScenario scenario, DateTimeOffset now)
         ["lastSuccessfulSyncAt"] = lastSync.ToUnixTimeMilliseconds(),
     };
 
-    /// <summary>
-    /// The design's sample: Codex 5h 12% / 7d 79% running 17% ahead, Claude
-    /// 5h 36% / 7d 31% 8% ahead, Cursor's month 41% on pace, Grok's week 88%
-    /// with 17% to spare. A window used <c>u</c>% and running <c>lag</c>
-    /// points ahead of time has <c>(u − lag)</c>% of its length behind it.
-    /// </summary>
+    /// <summary>The scene's readings of the enabled subscriptions.</summary>
     private JsonArray Quotas()
     {
-        var all = new Dictionary<string, JsonObject>
-        {
-            ["codex"] = Quota("codex", fiveHour: Window(88, 17, 5 * Hour), sevenDay: Window(21, -9, 7 * Day)),
-            ["claudeCode"] = Quota("claudeCode", fiveHour: Window(64, 8, 5 * Hour), sevenDay: Window(69, 4, 7 * Day)),
-            ["cursor"] = Quota("cursor", meters: [Meter("plan", "Monthly", Window(59, 2, 30 * Day))]),
-            ["grok"] = Quota("grok", sevenDay: Window(12, -17, 7 * Day)),
-        };
-        var list = new JsonArray();
-        foreach (var id in Enabled) list.Add((JsonNode)all[id]);
-        return list;
-    }
-
-    private JsonObject Quota(string provider, JsonObject? fiveHour = null, JsonObject? sevenDay = null, JsonObject[]? meters = null)
-    {
-        var q = new JsonObject
-        {
-            ["provider"] = provider,
-            ["status"] = new JsonObject { ["kind"] = "ok" },
-            ["fetchedAt"] = now.ToUnixTimeMilliseconds() / 1000.0,
-        };
-        if (fiveHour != null) q["fiveHour"] = fiveHour;
-        if (sevenDay != null) q["sevenDay"] = sevenDay;
-        if (meters != null) q["meters"] = new JsonArray(meters.Select(m => (JsonNode)m).ToArray());
-        return q;
-    }
-
-    private JsonObject Window(double used, double lag, double length)
-    {
-        double elapsed = (used - lag) / 100 * length;
-        return new JsonObject
-        {
-            ["utilization"] = used,
-            ["resetsAt"] = now.ToUnixTimeMilliseconds() / 1000.0 + (length - elapsed),
-            ["windowDuration"] = length,
-        };
-    }
-
-    private static JsonObject Meter(string id, string label, JsonObject window)
-    {
-        var m = new JsonObject { ["id"] = id, ["label"] = label };
-        foreach (var (key, value) in window) m[key] = value?.DeepClone();
-        return m;
+        var all = readings.For(scene);
+        return new JsonArray(Enabled.Select(id => (JsonNode)all[id].DeepClone()).ToArray());
     }
 
     private JsonObject TodayQuery()

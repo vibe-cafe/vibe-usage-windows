@@ -4,13 +4,25 @@ using System.Globalization;
 
 namespace VibeUsage.App.Shell;
 
-/// <summary>Which made-up data the fake backend shows (CI screenshots pick one).</summary>
-public enum DemoScenario
+/// <summary>
+/// Which made-up data the fake backend shows: a scene of the Mac panel
+/// renderer, by its design id (<c>State/DemoScenes.cs</c>; CI screenshots
+/// pick one per run). Unknown ids show the default scene.
+/// </summary>
+public sealed record DemoScenario(string Id)
 {
-    /// <summary>Four subscriptions: the 概览 row and the overview.</summary>
-    Subscriptions,
-    /// <summary>One subscription: no 概览 row, the card opens on it.</summary>
-    Single,
+    /// <summary>Four subscriptions: the 概览 row and the overview (Mac 131a).</summary>
+    public static readonly DemoScenario Subscriptions = new("131a");
+
+    /// <summary>One subscription: no 概览 row, the card opens on it (Mac 132g).</summary>
+    public static readonly DemoScenario Single = new("132g");
+
+    public static DemoScenario Parse(string value) => value switch
+    {
+        "single" => Single,
+        "subscriptions" => Subscriptions,
+        _ => new(value),
+    };
 }
 
 /// <summary>
@@ -56,7 +68,7 @@ public sealed class LaunchOptions
             else if (a == "--test-pin") o.Pin = true;
             else if (a == "--test-expand") o.Expand = true;
             else if (a == "--test-scroll-end") o.ScrollEnd = true;
-            else if (Value(a, "--test-demo=") is string demo) o.Demo = demo == "single" ? DemoScenario.Single : DemoScenario.Subscriptions;
+            else if (Value(a, "--test-demo=") is string demo) o.Demo = DemoScenario.Parse(demo);
             else if (Value(a, "--test-rect-file=") is string rect) o.RectFile = rect;
             else if (Value(a, "--test-icon-file=") is string icon) o.IconFile = icon;
             else if (Value(a, "--test-tray-add-failures=") is string n

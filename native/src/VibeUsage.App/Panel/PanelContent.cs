@@ -17,10 +17,9 @@ namespace VibeUsage.App.Panel;
 /// What the panel draws, rebuilt from <see cref="State.AppModel"/> on every
 /// change. The container is final: header (Mac <c>ModernHeaderBar</c>), the
 /// 概览 row (<c>ModernSubscriptionRow</c>), the scrolling cards, the footer
-/// (<c>ModernFooterBar</c>), sizes and type from the Mac theme. The card
-/// bodies are placeholders fed by the display library: names, figures and
-/// verdicts only; meters, rings, the curve, filters and the distribution
-/// rings come with the quota card (#95) and recent usage (#96).
+/// (<c>ModernFooterBar</c>), sizes and type from the Mac theme. The 订阅配额
+/// card is <c>QuotaCard.cs</c> (#95); the 近期消耗 and details bodies are
+/// placeholders fed by the display library until recent usage (#96).
 ///
 /// Every control is a real <see cref="Button"/> with a Narrator name, so
 /// keyboard focus, Enter/Space and the Windows focus ring work from the start.
@@ -34,6 +33,12 @@ internal sealed partial class PanelWindow
 
     private void Render()
     {
+        if (drag?.Active == true)
+        {
+            // Rebuilding would drop the button being dragged; draw once it is dropped.
+            renderPending = true;
+            return;
+        }
         var now = DateTimeOffset.Now;
         focusables.Clear();
         var quota = model.QuotaDisplay(now);
@@ -48,6 +53,8 @@ internal sealed partial class PanelWindow
         cards.Children.Add(UsageCard(usage));
         if (model.IsConfigured && model.Panel.DetailsExpanded) cards.Children.Add(Details(usage));
         RenderFooter();
+        if (tooltip != null) DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, PlaceTooltip);
+        else HideTooltip();
     }
 
     private void RenderFooter()
@@ -119,20 +126,7 @@ internal sealed partial class PanelWindow
         sep.Margin = new Thickness(12, 0, 12, 0);
         row.Children.Add(sep);
 
-        var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Center };
-        foreach (var s in quota.Buttons)
-        {
-            bool selected = quota.Detail?.Provider == s.Provider;
-            var holder = new Grid { Width = 30, Height = 30 };
-            holder.Children.Add(Icons.RoundButtonFace(s.Provider, selected, false));
-            var provider = s.Provider;
-            buttons.Children.Add(Bare(holder, "sub-" + provider, s.ButtonHelp, () => model.Select(provider), on =>
-            {
-                holder.Children.Clear();
-                holder.Children.Add(Icons.RoundButtonFace(provider, selected, on));
-            }, s.ButtonHelp));
-        }
-        row.Children.Add(buttons);
+        row.Children.Add(RoundButtons(quota));
         g.Children.Add(row);
 
         var gear = Icons.Fluent(Icons.Gear, 12.5, Theme.Tertiary);
@@ -148,12 +142,18 @@ internal sealed partial class PanelWindow
 
     // -- cards ----------------------------------------------------------------------------------
 
-    /// <summary>Mac <c>ModernCard</c>: 20 DIP title row (13 semibold, secondary), the body 8 below.</summary>
-    private static Grid CardFrame(string title, UIElement body)
+    /// <summary>Mac <c>ModernCard</c>: 20 DIP title row (13 semibold, secondary) with an optional control at its right edge, the body 8 below.</summary>
+    private static Grid CardFrame(string title, UIElement body, FrameworkElement? accessory = null)
     {
         var stack = new StackPanel { Spacing = 8 };
         var titleRow = new Grid { Height = 20 };
         titleRow.Children.Add(Theme.AtBaseline(Theme.T(title, 13, Face.Text, Wt.SemiBold, Theme.Secondary), Theme.BaselineIn(20, (13, Face.Text))));
+        if (accessory != null)
+        {
+            accessory.HorizontalAlignment = HorizontalAlignment.Right;
+            accessory.VerticalAlignment = VerticalAlignment.Center;
+            titleRow.Children.Add(accessory);
+        }
         stack.Children.Add(titleRow);
         stack.Children.Add(body);
         return Theme.Card(stack);
@@ -165,117 +165,6 @@ internal sealed partial class PanelWindow
         foreach (var c in children) g.Children.Add(c);
         return g;
     }
-
-    // 订阅配额 (placeholder body) ----------------------------------------------------------------
-
-    private UIElement QuotaCard(QuotaPanelDisplay quota)
-    {
-        UIElement body = quota.IsEmpty ? QuotaEmpty(quota)
-            : quota.Detail is { } detail ? QuotaDetail(detail)
-            : QuotaOverview(quota.Overview);
-        return CardFrame("订阅配额", Body(Theme.CardBodyHeight, body));
-    }
-
-    private UIElement QuotaEmpty(QuotaPanelDisplay quota)
-    {
-        var stack = new StackPanel { Spacing = 10, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
-        var title = Theme.T(quota.EmptyTitle ?? "", 13, Face.Text, Wt.Regular, Theme.Secondary);
-        title.HorizontalAlignment = HorizontalAlignment.Center;
-        stack.Children.Add(title);
-        var action = Theme.T(quota.EmptyActionLabel ?? "", 13, Face.Text, Wt.Medium, Theme.Text);
-        var button = Bare(action, "empty-settings", quota.EmptyActionLabel ?? "", () => SettingsRequested?.Invoke());
-        button.HorizontalAlignment = HorizontalAlignment.Center;
-        stack.Children.Add(button);
-        return stack;
-    }
-
-    /// <summary>One line per subscription: mark and name, its windows' remaining share, the verdict.</summary>
-    private static UIElement QuotaOverview(QuotaOverviewDisplay overview)
-    {
-        var stack = new StackPanel();
-        foreach (var s in overview.Rows) stack.Children.Add(QuotaLine(s));
-        if (overview.Remainder is { } rest)
-        {
-            var text = Theme.Block(Theme.R(rest.Label, 11), Theme.R(rest.Summary is { } sum ? " · " + sum : "", 11));
-            text.Foreground = Toned(rest.Tone, Theme.Secondary);
-            stack.Children.Add(Theme.Line(text, 30));
-        }
-        return stack;
-    }
-
-    private static UIElement QuotaLine(QuotaSubscriptionDisplay s)
-    {
-        var g = new Grid { Height = 34 };
-        g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        g.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(80) });
-
-        var name = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, VerticalAlignment = VerticalAlignment.Center };
-        name.Children.Add(Icons.Mark(s.Provider, 16, Theme.Strong));
-        var title = Theme.T(s.Provider.OverviewName(), 13, Face.Text, Wt.Medium, Theme.Text);
-        name.Children.Add(title);
-        g.Children.Add(name);
-
-        var chips = Theme.Block();
-        foreach (var chip in s.OverviewChips)
-        {
-            if (chips.Inlines.Count > 0) chips.Inlines.Add(Theme.Gap(12));
-            chips.Inlines.Add(Theme.R(chip.Label, 11, Face.Mono, Wt.Regular, Theme.Secondary));
-            chips.Inlines.Add(Theme.Gap(5));
-            chips.Inlines.Add(Theme.R(QuotaPercent(chip.Remaining), 13, Face.Mono, Wt.Medium, Toned(chip.Tone, Theme.Text)));
-            chips.Inlines.Add(Theme.R("%", 11, Face.Mono, Wt.Regular, Theme.Secondary));
-        }
-        if (s.OverviewChips.Count == 0)
-            chips.Inlines.Add(Theme.R(s.ButtonStatus, 11, Face.Text, Wt.Regular, Theme.Secondary));
-        Grid.SetColumn(chips, 1);
-        g.Children.Add(chips);
-
-        var comment = Theme.T(s.Comment ?? "", 11, Face.Text, Wt.Regular, Toned(s.CommentTone, Theme.Secondary));
-        comment.HorizontalAlignment = HorizontalAlignment.Right;
-        Grid.SetColumn(comment, 2);
-        g.Children.Add(comment);
-        return g;
-    }
-
-    /// <summary>A subscription on its own: its plan and up to three windows, each with the forecast.</summary>
-    private static UIElement QuotaDetail(QuotaSubscriptionDisplay d)
-    {
-        var stack = new StackPanel();
-        var head = new Grid { Height = 30 };
-        var name = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, VerticalAlignment = VerticalAlignment.Center };
-        name.Children.Add(Icons.Mark(d.Provider, 16, Theme.Strong));
-        var title = Theme.Block(Theme.R(d.Provider.DisplayName(), 13, Face.Text, Wt.SemiBold),
-            Theme.R(d.PlanLabel is { } plan ? "  " + plan : "", 11, Face.Text, Wt.Regular, Theme.Secondary));
-        name.Children.Add(title);
-        head.Children.Add(name);
-        var comment = Theme.T(d.Comment ?? "", 11, Face.Text, Wt.Regular, Toned(d.CommentTone, Theme.Secondary));
-        comment.HorizontalAlignment = HorizontalAlignment.Right;
-        head.Children.Add(comment);
-        stack.Children.Add(head);
-
-        if (d.CompactRows.Count == 0)
-        {
-            stack.Children.Add(Theme.Line(Theme.T(d.DetailTitle ?? d.ButtonStatus, 13, Face.Text, Wt.Regular, Theme.Text), 30));
-            if (d.DetailReason is { } reason) stack.Children.Add(Theme.Line(Theme.T(reason, 11, Face.Text, Wt.Regular, Theme.Secondary), 20));
-            return stack;
-        }
-        foreach (var m in d.CompactRows)
-        {
-            var line = new Grid { Height = 30 };
-            var figure = Theme.Block(Theme.R(m.Label, 11, Face.Mono, Wt.Regular, Theme.Secondary), Theme.Gap(8),
-                Theme.R(m.Remaining is double r ? QuotaPercent(r) : "—", 13, Face.Mono, Wt.Medium, Toned(m.Tone, Theme.Text)),
-                Theme.R(m.Remaining is null ? "" : "%", 11, Face.Mono, Wt.Regular, Theme.Secondary));
-            line.Children.Add(figure);
-            var note = Theme.T(m.Prediction?.Text ?? m.Message ?? "", 11, Face.Text, Wt.Regular, Theme.Secondary);
-            note.HorizontalAlignment = HorizontalAlignment.Right;
-            line.Children.Add(note);
-            stack.Children.Add(line);
-        }
-        if (d.FoldLabel is { } fold) stack.Children.Add(Theme.Line(Theme.T(fold, 11, Face.Text, Wt.Regular, Theme.Secondary), 24));
-        return stack;
-    }
-
-    private static string QuotaPercent(double remaining) => QuotaFormat.Percent(remaining);
 
     private static Brush Toned(PaceTone tone, Brush neutral) => tone switch
     {

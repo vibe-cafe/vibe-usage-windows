@@ -28,6 +28,8 @@ internal sealed class AppModel : IDisposable
     public AppSettings? Settings { get; private set; }
     public QuotaCache? Quotas { get; private set; }
     public UsageSnapshot? Usage { get; private set; }
+    /// <summary>Products the backend found installed (「未检测到安装」 vs 「没读到额度，原因未知」); null until read.</summary>
+    public IReadOnlySet<DisplayProvider>? Detected { get; private set; }
     public SyncState Sync { get; private set; } = new("idle");
     public UsagePanelState Panel { get; } = new();
 
@@ -56,6 +58,21 @@ internal sealed class AppModel : IDisposable
             e => e is BackendEvent.UsageChanged u ? (true, u.Value) : (false, null), u => Set(() => Usage = u)));
         Status = await backend.GetAppStatusAsync();
         Changed?.Invoke();
+        ReadDetected();
+    }
+
+    /// <summary>The local product catalogue (no network): which products are installed.</summary>
+    private async void ReadDetected()
+    {
+        try
+        {
+            var products = await backend.GetQuotaProductsAsync();
+            Set(() => Detected = products.Where(p => p.IsDetected).Select(p => DisplayMapping.Provider(p.Provider)).ToHashSet());
+        }
+        catch (Exception ex)
+        {
+            ShellLog.Write($"get_quota_products failed: {(ex is BackendException b ? b.Code : ex.GetType().Name)}");
+        }
     }
 
     private void Set(Action change)
@@ -85,7 +102,8 @@ internal sealed class AppModel : IDisposable
     {
         var snapshots = Quotas?.Snapshots.Select(DisplayMapping.Quota).ToArray() ?? [];
         var refreshing = Quotas is { Refreshing: true } q ? q.Providers.Select(DisplayMapping.Provider).ToHashSet() : null;
-        return new QuotaPanelDisplay(snapshots, Enabled, Panel.SelectedSubscription, now, refreshing);
+        var region = Settings is { } s ? DisplayMapping.Region(s.ZCodeQuotaRegion) : VibeUsage.Display.ZCodeRegion.BigModel;
+        return new QuotaPanelDisplay(snapshots, Enabled, Panel.SelectedSubscription, now, refreshing, Detected, region);
     }
 
     /// <summary>Today's figures from the cached usage, or null before the first read.</summary>
@@ -119,6 +137,36 @@ internal sealed class AppModel : IDisposable
         Panel.DetailsExpanded = !Panel.DetailsExpanded;
         ShellLog.Write($"details {(Panel.DetailsExpanded ? "expanded" : "collapsed")}");
         Changed?.Invoke();
+    }
+
+    /// <summary>
+    /// 「刷新额度」 and 「重试」: quotas only, never a usage sync (Mac
+    /// <c>refreshQuotas</c>). Ignored while a read in the button's scope is
+    /// running. The backend reads every enabled subscription: reading only
+    /// the one on screen (Mac <c>refreshRateLimit(for:)</c>) is the backend's
+    /// 「只刷一家」 (#95), which changes the requests and waits for the
+    /// maintainer's approval.
+    /// </summary>
+    public void RefreshQuotas(QuotaPanelDisplay display)
+    {
+        if (display.IsRefreshing) return;
+        ShellLog.Write($"quota refresh requested scope={(display.Detail?.Provider.ToString() ?? "all")}");
+        Run(() => backend.GetRateLimitsAsync(force: true), "get_rate_limits");
+    }
+
+    /// <summary>
+    /// Dragging a round button: <paramref name="provider"/> goes before
+    /// <paramref name="before"/>, or after the last enabled subscription when
+    /// null (Mac <c>moveQuotaProduct</c>), in the order Settings stores.
+    /// </summary>
+    public void MoveSubscription(DisplayProvider provider, DisplayProvider? before)
+    {
+        if (Settings is not { } s) return;
+        var order = SubscriptionOrder.Move(s.QuotaProductOrder, Enabled.Select(DisplayMapping.Backend).ToArray(),
+            DisplayMapping.Backend(provider), before is { } b ? DisplayMapping.Backend(b) : null);
+        if (order == null) return;
+        ShellLog.Write($"move {provider} before {(before?.ToString() ?? "end")}");
+        Run(() => backend.UpdateSettingAsync(SettingChange.QuotaProductOrder(order)), "update_setting");
     }
 
     public void TriggerSync()

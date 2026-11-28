@@ -99,7 +99,7 @@ public class DemoDataTests
     {
         var (backend, settings, quotas, _) = await Load(DemoScenario.Subscriptions);
         using var _b = backend;
-        Assert.Equal([Backend.Provider.Codex, Backend.Provider.ClaudeCode, Backend.Provider.Cursor, Backend.Provider.Grok],
+        Assert.Equal([Backend.Provider.ClaudeCode, Backend.Provider.Codex, Backend.Provider.Cursor, Backend.Provider.Grok],
             settings.SelectedQuotaProductIds);
         var snapshots = quotas.Snapshots.Select(DisplayMapping.Quota).ToArray();
         var enabled = settings.SelectedQuotaProductIds.Select(DisplayMapping.Provider).ToArray();

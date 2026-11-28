@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <!-- The shell's pure parts (open and close rules, tray retry, placement,
        click race, launch options, sync label, path markup, display mapping,
-       demo data), compiled from the app's sources: no WinUI, runs on macOS. -->
+       demo data and scenes, subscription order), compiled from the app's sources: no WinUI, runs on macOS. -->
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>disable</ImplicitUsings>
@@ -20,6 +20,8 @@
     <Compile Include="../../src/VibeUsage.App/Panel/ProviderMarks.cs" Link="App/ProviderMarks.cs" />
     <Compile Include="../../src/VibeUsage.App/State/DisplayMapping.cs" Link="App/DisplayMapping.cs" />
     <Compile Include="../../src/VibeUsage.App/State/DemoBackend.cs" Link="App/DemoBackend.cs" />
+    <Compile Include="../../src/VibeUsage.App/State/DemoScenes.cs" Link="App/DemoScenes.cs" />
+    <Compile Include="../../src/VibeUsage.App/State/SubscriptionOrder.cs" Link="App/SubscriptionOrder.cs" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />

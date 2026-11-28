@@ -7,9 +7,11 @@ using D = VibeUsage.Display;
 namespace VibeUsage.App.State;
 
 /// <summary>
-/// Backend contract records → the display library's inputs. The skeleton maps
-/// what its placeholders draw (status, windows, meters, plan, times); the
-/// quota card (#95) adds source, failure, empty reason and sign-in.
+/// Backend contract records → the display library's inputs: status, windows,
+/// meters, plan, times, and what the card explains with (source, failure,
+/// empty reason, Cursor sign-in). Codes the library does not know stay null,
+/// so a newer backend never makes the card guess (docs/SUBSCRIPTION_QUOTAS.md
+/// 「空态判定（不猜）」).
 /// </summary>
 internal static class DisplayMapping
 {
@@ -25,6 +27,20 @@ internal static class DisplayMapping
         _ => D.Provider.Antigravity,
     };
 
+    public static B.Provider Backend(D.Provider p) => p switch
+    {
+        D.Provider.Codex => B.Provider.Codex,
+        D.Provider.ClaudeCode => B.Provider.ClaudeCode,
+        D.Provider.Cursor => B.Provider.Cursor,
+        D.Provider.KimiCode => B.Provider.KimiCode,
+        D.Provider.Grok => B.Provider.Grok,
+        D.Provider.OpenCodeGo => B.Provider.OpenCodeGo,
+        D.Provider.ZCode => B.Provider.ZCode,
+        _ => B.Provider.Antigravity,
+    };
+
+    public static D.ZCodeRegion Region(B.ZCodeRegion r) => r == B.ZCodeRegion.ZAi ? D.ZCodeRegion.Zai : D.ZCodeRegion.BigModel;
+
     public static D.QuotaSnapshot Quota(B.Quota q) => new(Provider(q.Provider), Status(q.Status.Kind))
     {
         FiveHour = Window(q.FiveHour),
@@ -35,6 +51,13 @@ internal static class DisplayMapping
         ResetCreditsCount = q.ResetCreditsCount is ulong n ? (int)Math.Min(n, int.MaxValue) : null,
         FetchedAt = Seconds(q.FetchedAt),
         DataAsOf = Seconds(q.DataAsOf),
+        Source = Source(q.Source),
+        SourceLabel = q.SourceLabel,
+        EmptyReason = Empty(q.EmptyReason),
+        LiveFailure = Failure(q.LiveFailure?.Code),
+        HttpStatus = q.LiveFailure?.Status,
+        EgressRegion = q.LiveFailure?.Region,
+        SignIn = q.SignIn switch { "required" => D.CursorSignIn.Required, "expired" => D.CursorSignIn.Expired, _ => null },
     };
 
     private static D.QuotaStatus Status(string kind) => kind switch
@@ -46,6 +69,31 @@ internal static class DisplayMapping
         "error" => D.QuotaStatus.Error,
         _ => D.QuotaStatus.NoData,
     };
+
+    private static D.QuotaSource? Source(string? source) => source switch
+    {
+        "live" => D.QuotaSource.Live,
+        "cache" => D.QuotaSource.Cache,
+        "desktopRecord" => D.QuotaSource.DesktopRecord,
+        "localLog" => D.QuotaSource.LocalLog,
+        _ => null,
+    };
+
+    private static D.EmptyReason? Empty(string? reason) => reason switch
+    {
+        "limitReached" => D.EmptyReason.LimitReached,
+        "noWindow" => D.EmptyReason.NoWindow,
+        "notEntitled" => D.EmptyReason.NotEntitled,
+        "sessionWithoutPlanLimits" => D.EmptyReason.SessionWithoutPlanLimits,
+        "periodEnded" => D.EmptyReason.PeriodEnded,
+        "noLocalRecord" => D.EmptyReason.NoLocalRecord,
+        "nonessentialTrafficDisabled" => D.EmptyReason.NonessentialTrafficDisabled,
+        _ => null,
+    };
+
+    /// <summary>The backend's failure codes (Rust <c>RateLimitLiveFailure</c>, camelCase) share the library's names.</summary>
+    internal static D.Failure? Failure(string? code) =>
+        code is { Length: > 0 } && char.IsLower(code[0]) && Enum.TryParse<D.Failure>(code, ignoreCase: true, out var f) ? f : null;
 
     private static D.QuotaWindow? Window(B.QuotaWindow? w) =>
         w == null ? null : new(w.Utilization, Seconds(w.ResetsAt), w.WindowDuration);

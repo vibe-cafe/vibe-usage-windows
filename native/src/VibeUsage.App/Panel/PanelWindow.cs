@@ -95,6 +95,9 @@ internal sealed partial class PanelWindow : Window
         root.Children.Add(rowHost);
         root.Children.Add(scroller);
         root.Children.Add(footerHost);
+        // Above every card and the scroller: the allowance tooltip and the dragged round button.
+        Grid.SetRowSpan(overlay, 4);
+        root.Children.Add(overlay);
         Content = root;
 
         root.KeyDown += OnKeyDown;
@@ -103,8 +106,10 @@ internal sealed partial class PanelWindow : Window
             part.SizeChanged += (_, _) => ContentHeightChanged?.Invoke();
         scroller.ViewChanged += (_, e) =>
         {
+            if (tooltip != null) PlaceTooltip();
             if (!e.IsIntermediate && scroller.VerticalOffset > 0) Note("scroll", $"offset={scroller.VerticalOffset:0}");
         };
+        root.SizeChanged += (_, _) => { if (tooltip != null) PlaceTooltip(); };
 
         Hwnd = WindowNative.GetWindowHandle(this);
         var presenter = OverlappedPresenter.Create();
@@ -162,12 +167,25 @@ internal sealed partial class PanelWindow : Window
     {
         notedThisOpen.Clear();
         focusKey = null;
+        hoveredOverviewRow = null;
+        hoveredDetailRow = null;
+        quotaExpanded = false;
+        quotaShownDetail = null;
         bool scrollEnd = false;
         if (firstOpen)
         {
             firstOpen = false;
             if (options.Expand) model.Panel.DetailsExpanded = true;
             scrollEnd = options.ScrollEnd;
+            // CI screenshots: the scene's selection, hover and fold, which a pointer would set.
+            if (DemoScenes.Find(options.Demo) is { } scene)
+            {
+                model.Panel.SelectedSubscription = scene.Selected;
+                quotaShownDetail = scene.Selected;
+                hoveredOverviewRow = scene.HoveredOverviewRow;
+                hoveredDetailRow = scene.HoveredDetailRow;
+                quotaExpanded = scene.Expanded;
+            }
         }
         Render();
         scroller.ChangeView(null, 0, null, true);
@@ -177,16 +195,21 @@ internal sealed partial class PanelWindow : Window
     }
 
     /// <summary>The panel was hidden.</summary>
-    public void OnHidden() => clock?.Stop();
+    public void OnHidden()
+    {
+        clock?.Stop();
+        if (drag != null) EndDrag();
+        HideTooltip();
+    }
 
-    /// <summary>「N 分钟前同步」 moves on while the panel is up (Mac: TimelineView every 30 s).</summary>
+    /// <summary>「N 分钟前同步」 and the quota pace move on while the panel is up (Mac: TimelineView every 30 s).</summary>
     private void StartClock()
     {
         if (clock == null)
         {
             clock = DispatcherQueue.CreateTimer();
             clock.Interval = TimeSpan.FromSeconds(30);
-            clock.Tick += (_, _) => RenderFooter();
+            clock.Tick += (_, _) => Render();
         }
         clock.Start();
     }

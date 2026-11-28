@@ -232,24 +232,4 @@ internal static class Icons
         });
         return g;
     }
-
-    /// <summary>
-    /// A round subscription button's face for the skeleton: the dark well and
-    /// the provider mark; selected brightens the rim. The quota arc, the white
-    /// dot and drag-to-reorder come with the quota card (#95).
-    /// </summary>
-    public static Grid RoundButtonFace(Provider provider, bool selected, bool hovered)
-    {
-        const double size = 30;
-        var g = new Grid { Width = size, Height = size, IsHitTestVisible = false };
-        g.Children.Add(new Ellipse { Width = size, Height = size, Fill = new SolidColorBrush(Theme.Hex(0x121518)) });
-        g.Children.Add(new Ellipse
-        {
-            Width = size, Height = size, StrokeThickness = selected ? 1.5 : 1,
-            Stroke = new SolidColorBrush(selected ? Theme.InkC(0.85) : Theme.InkC(hovered ? 0.3 : 0.16)),
-        });
-        var mark = new SolidColorBrush(selected || hovered ? Theme.TextC() : Theme.TextC(0.86));
-        g.Children.Add(Mark(provider, 18, mark));
-        return g;
-    }
 }

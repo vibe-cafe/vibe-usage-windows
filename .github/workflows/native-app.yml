@@ -1,8 +1,10 @@
 # The native Windows shell (WinUI 3, native/src/VibeUsage.App): unit tests of
 # its pure parts, a self-contained fully trimmed x64 publish, then on a second
 # runner the original-size screenshots (PrintWindow) and the tray smoke test,
-# at 100 % and again at 150 %. The app runs on the in-memory fake backend:
-# no network, no credentials, no user data.
+# at 100 % and again at 150 %; on two more runners every scene of the 订阅配额
+# card at 100 % and 150 % and, at 100 %, the card driven by pointer and
+# keyboard. The app runs on the in-memory fake backend: no network, no
+# credentials, no user data.
 name: Native app
 
 on:
@@ -98,5 +100,44 @@ jobs:
         if: always()
         with:
           name: native-ui-results
+          path: C:\vu\out\
+          retention-days: 14
+
+  quota:
+    needs: build
+    runs-on: windows-2025
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        percent: [100, 150]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: vibe-usage-native-x64
+          path: C:\vu\app
+      - name: Scale to ${{ matrix.percent }} %
+        id: dpi
+        if: matrix.percent != 100
+        shell: pwsh
+        run: |
+          . ./native/ci/common.ps1
+          Set-Resolution @('1920x1200', '1920x1080')
+          ./native/ci/set-dpi.ps1 -Percent ${{ matrix.percent }}
+          if ($LASTEXITCODE -ne 0) { Write-Host "::warning::the runner refused ${{ matrix.percent }} %"; "scaled=false" >> $env:GITHUB_OUTPUT; exit 0 }
+          "scaled=true" >> $env:GITHUB_OUTPUT
+      - name: 订阅配额 scenes at ${{ matrix.percent }} %
+        if: matrix.percent == 100 || steps.dpi.outputs.scaled == 'true'
+        shell: pwsh
+        run: ./native/ci/quota-screens.ps1 -AppDir C:\vu\app -OutDir C:\vu\out -Tag ${{ matrix.percent }}
+      - name: 订阅配额 driven by pointer and keyboard
+        if: always() && matrix.percent == 100
+        shell: pwsh
+        run: ./native/ci/quota-smoke.ps1 -AppDir C:\vu\app -OutDir C:\vu\out
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: native-quota-${{ matrix.percent }}
           path: C:\vu\out\
           retention-days: 14
