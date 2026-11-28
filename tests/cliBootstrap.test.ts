@@ -8,7 +8,7 @@
 import { fork, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -304,8 +304,8 @@ describe("cli-bootstrap: latest resolves", () => {
   });
 
   for (const [name, tarball, extra, stage] of [
-    ["the download fails", { type: "status", status: 404 }, {}, "download"],
-    ["the download drops", { type: "network" }, {}, "download"],
+    ["the download fails", { type: "status", status: 404 }, { integrity: "sha512-AAAA" }, "download"],
+    ["the download drops", { type: "network" }, { integrity: "sha512-AAAA" }, "download"],
     ["the download does not verify", { type: "body", body: "not the package" }, { integrity: "sha512-AAAA" }, "download"],
     ["the package will not unpack", { type: "body", body: "not a gzip archive" }, { integrity: "sha512-" + createHash("sha512").update("not a gzip archive").digest("base64") }, "install"],
   ] as const) {
@@ -315,6 +315,7 @@ describe("cli-bootstrap: latest resolves", () => {
       expect(run.status).toBe(0);
       expect(run.stdout).toBe("ran 0.14.11 sync\n");
       expect(run.failures).toEqual([]);
+      expect(run.stub).toContain("tarball requested");
       expect(run.notices).toHaveLength(1);
       expect(run.notices[0]).toMatch(
         new RegExp(`^${NOTICE} stage=${stage}; running cached @vibe-cafe/vibe-usage@0\\.14\\.11 `),
@@ -324,7 +325,7 @@ describe("cli-bootstrap: latest resolves", () => {
   }
 
   it("fails with the old download messages when nothing is cached", () => {
-    const status = launch({ latest: latest("0.16.0"), tarball: { type: "status", status: 404 } });
+    const status = launch({ latest: published("0.16.0").latest, tarball: { type: "status", status: 404 } });
     expect(status.status).toBe(1);
     expect(status.failures).toEqual([`${FAILURE} download failed (404) for @vibe-cafe/vibe-usage@0.16.0`]);
 
@@ -337,7 +338,7 @@ describe("cli-bootstrap: latest resolves", () => {
   });
 
   for (const extra of [{}, { integrity: "sha256-AAAA" }] as Record<string, string>[]) {
-    it(`refuses a usable tarball with ${extra.integrity ?? "no integrity"} and falls back if possible`, () => {
+    it(`skips the tarball request with ${extra.integrity ?? "no integrity"} and falls back if possible`, () => {
       const plan = { ...published("0.16.0"), latest: latest("0.16.0", extra) };
       for (const warm of [false, true]) {
         if (warm) {
@@ -348,9 +349,11 @@ describe("cli-bootstrap: latest resolves", () => {
         expect(run.status).toBe(warm ? 0 : 1);
         expect(run.stdout).toBe(warm ? "ran 0.14.11 sync\n" : "");
         expect(run.stderr).toHaveLength(1);
-        expect(run.stderr[0]).toContain(warm ? "notice: stage=download;" : FAILURE + " download failed");
-        expect(run.stderr[0]).toContain("sha512");
-        expect(run.urls).toEqual(["https://registry.npmjs.org/@vibe-cafe/vibe-usage/latest", "https://registry.npmjs.org/fake/-/fake-0.16.0.tgz"]);
+        const reason = "download failed (missing sha512 integrity) for @vibe-cafe/vibe-usage@0.16.0";
+        expect(run.stderr[0]).toBe(warm
+          ? `${NOTICE} stage=download; running cached @vibe-cafe/vibe-usage@0.14.11 because latest is unavailable (${reason})`
+          : `${FAILURE} ${reason}`);
+        expect(run.urls).toEqual(["https://registry.npmjs.org/@vibe-cafe/vibe-usage/latest"]);
         expect(existsSync(join(home, "cli-cache", "0.16.0"))).toBe(false);
       }
     });
@@ -358,6 +361,30 @@ describe("cli-bootstrap: latest resolves", () => {
 });
 
 describe("cli-bootstrap: cache retention", () => {
+  it.each([
+    ["writeFileSync", "ENOSPC"],
+    ["rmdirSync", "EBUSY"],
+  ])("uses the next complete version when %s fails with %s while holding latest", (method, code) => {
+    cache({ "1.0.0": {}, "1.0.1": {} });
+    mkdirSync(join(home, "cli-cache", ".pruning-test"));
+    appendFileSync(new URL(stubUrl), `
+      import fs from "node:fs";
+      import { syncBuiltinESMExports } from "node:module";
+      const original = fs.${method};
+      fs.${method} = (path, ...args) => {
+        if (path.endsWith("1.0.1")) throw Object.assign(new Error("${code}"), { code: "${code}" });
+        return original(path, ...args);
+      };
+      syncBuiltinESMExports();
+    `);
+    const run = launch(published("1.0.1"));
+    expect(run.status).toBe(0);
+    expect(run.stdout).toBe("ran 1.0.0 sync\n");
+    expect(run.stub).toContain("tarball requested");
+    expect(run.notices).toHaveLength(1);
+    expect(run.notices[0]).toContain("stage=install;");
+  });
+
   it("keeps the installed rollback and the two newest complete alternatives", () => {
     cache({ "1.0.9": {}, "1.0.10": {}, "1.0.11": {}, "1.0.12": { entry: false }, ".staging-test": {}, "unrelated": {} });
     expect(launch(published("0.9.0")).stdout).toBe("ran 0.9.0 sync\n");
