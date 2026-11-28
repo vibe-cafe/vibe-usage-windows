@@ -60,6 +60,8 @@ pub fn read_from(capture_file: &Path, enabled: bool, now: f64) -> ProviderRateLi
     ProviderRateLimit {
         provider: RateLimitProvider::ClaudeCode,
         meters: Vec::new(),
+        model_scoped_meters: None,
+        claude_account: None,
         five_hour,
         seven_day,
         // Can't distinguish Pro vs Max from this payload — leave nil.

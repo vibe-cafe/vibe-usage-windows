@@ -3,6 +3,7 @@
 
 pub mod claude;
 pub mod claude_desktop;
+pub mod claude_models;
 pub mod codex;
 
 use serde::{Deserialize, Serialize};
@@ -273,6 +274,11 @@ pub struct ProviderRateLimit {
     pub provider: RateLimitProvider,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub meters: Vec<RateLimitMeter>,
+    /// Claude's raw weekly model list. An explicit empty list withdraws prior rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_scoped_meters: Option<Vec<RateLimitMeter>>,
+    #[serde(skip)]
+    pub claude_account: Option<claude_models::AccountScope>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub five_hour: Option<RateLimitWindow>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -297,10 +303,19 @@ pub struct ProviderRateLimit {
 }
 
 impl ProviderRateLimit {
+    pub fn meter_count(&self) -> usize {
+        self.meters.len()
+            + usize::from(self.five_hour.is_some())
+            + usize::from(self.seven_day.is_some())
+            + self.model_scoped_meters.as_ref().map_or(0, Vec::len)
+    }
+
     pub fn empty(provider: RateLimitProvider, status: RateLimitStatus) -> Self {
         Self {
             provider,
             meters: Vec::new(),
+            model_scoped_meters: None,
+            claude_account: None,
             five_hour: None,
             seven_day: None,
             plan_label: None,
@@ -332,7 +347,7 @@ impl ProviderRateLimit {
     }
 }
 
-pub(crate) fn now_epoch() -> f64 {
+pub fn now_epoch() -> f64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs_f64())

@@ -300,6 +300,8 @@ fn parse_usage_response(root: &Value, now: f64) -> Option<ProviderRateLimit> {
     Some(ProviderRateLimit {
         provider: RateLimitProvider::Codex,
         meters: Vec::new(),
+        model_scoped_meters: None,
+        claude_account: None,
         source_label: None,
         source: Some(RateLimitSource::Live),
         live_failure: None,

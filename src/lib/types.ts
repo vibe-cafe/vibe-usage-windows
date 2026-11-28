@@ -408,6 +408,7 @@ export interface ProviderRateLimit {
   /** Absent/null means "the source did not say" — never render a verdict. */
   emptyReason?: RateLimitEmptyReason | null;
   meters?: RateLimitMeter[];
+  modelScopedMeters?: RateLimitMeter[];
   fiveHour?: RateLimitWindow | null;
   sevenDay?: RateLimitWindow | null;
   planLabel?: string | null;
@@ -522,4 +523,4 @@ export interface UpdateInfo {
 export type UsageQuery =
   | { kind: "days"; days: number }
   | { kind: "from"; fromIso: string }
-  | { kind: "custom"; fromDate: string; toDate: string };
+  | { kind: "custom"; fromIso: string; toIso: string; tz: string };

@@ -72,15 +72,11 @@ mod enabled {
     }
 
     pub(super) fn record_result(snapshot: &ProviderRateLimit) {
-        let typed_windows = [snapshot.five_hour.as_ref(), snapshot.seven_day.as_ref()]
-            .into_iter()
-            .flatten()
-            .count();
         record(
             "quota_refresh_result",
             vec![snapshot.provider],
             Some(status_code(&snapshot.status)),
-            Some(snapshot.meters.len() + typed_windows),
+            Some(snapshot.meter_count()),
             None,
         );
     }
