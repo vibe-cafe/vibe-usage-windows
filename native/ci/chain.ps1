@@ -141,6 +141,13 @@ foreach ($program in "$Install\vibe-usage-app.exe", "$Install\node\node.exe") {
     New-NetFirewallRule -DisplayName "vibe-usage-chain block $(Split-Path $program -Leaf)" -Direction Outbound -Action Block -Program $program | Out-Null
 }
 auditpol /set /subcategory:"Filtering Platform Connection" /success:enable /failure:enable | Out-Null
+# Control for the audit check below: the install's own node tries 192.0.2.1:443 (TEST-NET-1,
+# never routed anywhere); the block rule must stop it and the audit must record it.
+$tF = Get-Date
+$probe = & "$Install\node\node.exe" -e "const s=require('net').connect({host:'192.0.2.1',port:443,timeout:4000});s.on('connect',()=>{console.log('connected');process.exit(0)});s.on('error',e=>{console.log('error '+e.code);process.exit(0)});s.on('timeout',()=>{console.log('timeout');process.exit(0)})" 2>&1
+Start-Sleep -Seconds 2
+$control = @(Get-DirectConnections $tF | Where-Object { $_.dest -eq '192.0.2.1' })
+Add-Result "F0 对照：安装目录里的 node 直连 192.0.2.1:443 被防火墙拦下并记入审计（node 输出：$probe；审计 $($control.Count) 条）" ($control.Count -gt 0 -and "$probe" -notmatch 'connected')
 foreach ($name in 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'all_proxy', 'no_proxy') {
     Remove-Item "Env:$name" -ErrorAction SilentlyContinue
 }
