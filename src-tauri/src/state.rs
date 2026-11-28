@@ -198,8 +198,8 @@ pub struct AppCtx {
     /// (cost, tokens) for the active time range, pushed by the frontend.
     pub tray_stats: Mutex<Option<(f64, i64)>>,
     /// False while a login launch (`--autostart`) waits for the user's proxy
-    /// (`system_proxy::wait_for_launch_proxy`): quota reads and syncs wait for
-    /// it (`wait_launch_network`). True otherwise.
+    /// (`system_proxy::wait_for_launch_proxy`): usage reads, quota reads and
+    /// syncs share that wait (`wait_launch_network`). True otherwise.
     pub launch_network: tokio::sync::watch::Sender<bool>,
     /// The Cursor sign-in this app keeps (`services::cursor_login`).
     pub cursor_login: crate::services::cursor_login::CursorLogin,
