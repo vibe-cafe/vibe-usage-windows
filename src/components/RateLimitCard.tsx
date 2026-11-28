@@ -258,9 +258,6 @@ export function ProviderCard({ snapshot }: { snapshot: ProviderRateLimit }) {
     }
     if (snapshot.sevenDay) rows.push({ kind: "live", label: "7d", window: snapshot.sevenDay });
   }
-  for (const meter of snapshot.modelScopedMeters ?? []) {
-    rows.push({ kind: "live", label: meter.label, window: meterWindow(meter) });
-  }
   // Cards stay compact even when a provider exposes model-specific or
   // pay-as-you-go meters: the first three windows are shown and any remainder
   // folds behind a clickable line (mirrors RateLimitCardView.compactMeterLimit,

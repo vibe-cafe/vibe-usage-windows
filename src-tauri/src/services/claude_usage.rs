@@ -695,7 +695,7 @@ fn parse_payload(root: &Value, now: f64) -> Option<ProviderRateLimit> {
     Some(ProviderRateLimit {
         provider: RateLimitProvider::ClaudeCode,
         meters: Vec::new(),
-        model_scoped_meters: weekly_meters(limits.get("limits")),
+        model_scoped_meters: weekly_meters(limits.get("limits"), now),
         claude_account: None,
         five_hour,
         seven_day,
@@ -772,7 +772,7 @@ fn cached_snapshot_from(path: &Path, now: f64) -> Option<ProviderRateLimit> {
     Some(ProviderRateLimit {
         provider: RateLimitProvider::ClaudeCode,
         meters: Vec::new(),
-        model_scoped_meters: weekly_meters(limits.get("limits")),
+        model_scoped_meters: weekly_meters(limits.get("limits"), now),
         claude_account,
         five_hour,
         seven_day,
@@ -1013,7 +1013,7 @@ mod tests {
         let now = 1_800_000_000.0;
         let limits = json!({
             "seven_day": {"utilization": 47},
-            "limits": [{"group":"weekly", "scope":{"model":{"display_name":"Fable"}}, "percent":12}],
+            "limits": [{"group":"weekly", "scope":{"model":{"display_name":"Fable"}}, "percent":12, "resets_at":now + 60.0}],
             "model_scoped": [{"display_name":"Fable", "utilization":99}]
         });
         let live = snapshot_from_payload(&json!({"rate_limits":limits}), now).unwrap();
@@ -1035,6 +1035,10 @@ mod tests {
         assert_eq!(paused.claude_account, AccountScope::new(Some("a@example.invalid"), None));
         assert!(paused.five_hour.is_none());
         assert_eq!(paused.seven_day.unwrap().utilization, 47.0);
+
+        let after_reset = cached_snapshot_from(&file, now + 60.0).unwrap();
+        assert_eq!(after_reset.model_scoped_meters, Some(vec![]));
+        assert_eq!(after_reset.seven_day.unwrap().utilization, 47.0);
 
         config["cachedUsageUtilization"].as_object_mut().unwrap().remove("accountUuid");
         std::fs::write(&file, config.to_string()).unwrap();

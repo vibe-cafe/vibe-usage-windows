@@ -6,7 +6,7 @@ use serde_json::Value;
 use std::hash::{BuildHasher, RandomState};
 use std::sync::OnceLock;
 
-pub fn weekly_meters(raw: Option<&Value>) -> Option<Vec<RateLimitMeter>> {
+pub fn weekly_meters(raw: Option<&Value>, now: f64) -> Option<Vec<RateLimitMeter>> {
     let raw = raw?;
     let rows = raw.as_array().into_iter().flatten().filter_map(|row| {
         if row.get("group")?.as_str()? != "weekly" {
@@ -19,6 +19,9 @@ pub fn weekly_meters(raw: Option<&Value>) -> Option<Vec<RateLimitMeter>> {
         let resets_at = row
             .get("resets_at")
             .and_then(|v| v.as_f64().or_else(|| parse_iso8601_epoch(v.as_str()?)));
+        if resets_at.is_some_and(|at| at <= now) {
+            return None;
+        }
         Some(RateLimitMeter {
             id: name.into(),
             label: name.into(),
@@ -106,14 +109,17 @@ mod tests {
 
     #[test]
     fn weekly_rows_use_the_reported_name_percent_and_optional_reset() {
+        let now = 1_785_297_599.0;
         let raw = json!([
+            {"group":"weekly", "scope":{"model":{"display_name":"Past"}}, "percent":98, "resets_at":now - 1.0},
+            {"group":"weekly", "scope":{"model":{"display_name":"Due"}}, "percent":99, "resets_at":now},
             {"group":"weekly", "scope":{"model":{"display_name":" Fable "}}, "percent":25.5, "resets_at":"2026-07-29T04:00:00Z"},
             {"group":"weekly", "scope":{"model":{"display_name":"Second"}}, "percent":0, "resets_at":1785297600},
             {"group":"weekly", "scope":{"model":{"display_name":"Undated"}}, "percent":12, "resets_at":null},
             {"group":"weekly", "percent":31},
             {"group":"daily", "scope":{"model":{"display_name":"Other"}}, "percent":42}
         ]);
-        let meters = weekly_meters(Some(&raw)).unwrap();
+        let meters = weekly_meters(Some(&raw), now).unwrap();
         let rows: Vec<_> = meters
             .iter()
             .map(|m| (m.label.as_str(), m.utilization, m.resets_at))
@@ -127,8 +133,8 @@ mod tests {
             ]
         );
         assert!(meters.iter().all(|m| m.window_duration == Some(604_800.0)));
-        assert_eq!(weekly_meters(Some(&json!([]))), Some(vec![]));
-        assert_eq!(weekly_meters(None), None);
+        assert_eq!(weekly_meters(Some(&json!([])), now), Some(vec![]));
+        assert_eq!(weekly_meters(None, now), None);
     }
 
     #[test]
@@ -139,10 +145,11 @@ mod tests {
         live.claude_account = account;
         live.plan_label = Some("Max".into());
         live.data_as_of = Some(100.0);
-        live.model_scoped_meters = weekly_meters(Some(&json!([
+        let limits = json!([
             {"group":"weekly","scope":{"model":{"display_name":"Fable"}},"percent":30,"resets_at":200},
             {"group":"weekly","scope":{"model":{"display_name":"Undated"}},"percent":10}
-        ])));
+        ]);
+        live.model_scoped_meters = weekly_meters(Some(&limits), 100.0);
         let mut missing = live.clone();
         missing.model_scoped_meters = None;
         let mut history = None;
@@ -182,9 +189,10 @@ mod tests {
         live.claude_account = AccountScope::new(Some("a@example.invalid"), None);
         live.data_as_of = Some(100.0);
         let mut missing = live.clone();
-        live.model_scoped_meters = weekly_meters(Some(&json!([
+        let limits = json!([
             {"group":"weekly","scope":{"model":{"display_name":"Fable"}},"percent":30,"resets_at":200}
-        ])));
+        ]);
+        live.model_scoped_meters = weekly_meters(Some(&limits), 100.0);
         LiveModelHistory::reconcile(&mut last, &mut live, 100.0);
         let mut cached = live.clone();
         cached.source = Some(RateLimitSource::Cache);

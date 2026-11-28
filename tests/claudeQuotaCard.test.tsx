@@ -13,17 +13,20 @@ function card(fields: Partial<ProviderRateLimit>) {
   );
 }
 
-it("shows the reported weekly model after the general week, including zero usage", () => {
+const fable = { id: "Fable", label: "Fable", utilization: 12, windowDuration: 604800 };
+
+it("shows only the general windows on the classic Claude card", () => {
   const html = card({
+    fiveHour: { utilization: 19 },
     sevenDay: { utilization: 47 },
-    modelScopedMeters: [{ id: "Fable", label: "Fable", utilization: 0, windowDuration: 604800 }],
+    modelScopedMeters: [fable],
   });
-  expect(html).toMatch(/>7d<.*>47%<.*>Fable<.*>0%</);
-  expect(html).not.toContain(">5h<");
+  expect(html).toMatch(/>5h<.*>19%<.*>7d<.*>47%</);
+  expect(html).not.toMatch(/Fable|>12%<|另有/);
 });
 
 it("a weekly-only Pro account has exactly its general week", () => {
-  const html = card({ planLabel: "Pro", sevenDay: { utilization: 47 } });
+  const html = card({ planLabel: "Pro", sevenDay: { utilization: 47 }, modelScopedMeters: [fable] });
   expect(html).toMatch(/>7d<.*>47%</);
   expect(html).not.toMatch(/>5h<|Fable|另有/);
 });
