@@ -77,7 +77,7 @@ public static class DemoScenes
         _ => Provider.Antigravity,
     };
 
-    public static readonly IReadOnlyList<DemoScene> All =
+    public static readonly DemoScene[] All =
     [
         // 订阅配额 (Mac #109), one scene per drawing of 131–133.
         new("131a", "概览：4 个订阅，两家要留意"),

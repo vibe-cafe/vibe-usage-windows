@@ -86,7 +86,7 @@ public class DemoSceneTests
 
     [Fact]
     public void EverySceneHasItsOwnId() =>
-        Assert.Equal(DemoScenes.All.Count, DemoScenes.All.Select(s => s.Id).Distinct().Count());
+        Assert.Equal(DemoScenes.All.Length, DemoScenes.All.Select(s => s.Id).Distinct().Count());
 
     [Fact]
     public async Task EverySceneReadsThroughTheContract()

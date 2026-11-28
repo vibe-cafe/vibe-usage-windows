@@ -59,7 +59,7 @@
 | Cursor 单独登录（设置里 Cursor 一行：未登录 + 登录 / 等待（含邮箱确认提示）/ 邮箱 + 退出 / 已失效 + 重新登录（旁边次要的退出），不带说明文字；Vibe Usage 自己的钥匙串条目；每次启动 CLI 用 `--cursor-login-stdin` 递凭据；到期前 7 天 `login cursor --refresh`；卡片 `signIn` 两个空态点开设置。2026-11-25 维护者批准，macOS 由同期 PR 实现） | `services/cursor_login.rs`（登录、续期、被拒后续期一次、失效、退出、检查 CLI 支不支持）+ `services/credential_store.rs`（Credential Manager 读写，和 ZCode 共用；条目 `ai.vibecafe.vibe-usage.windows/cursor/login`，超过单条 2560 字节时分条）+ `lib/cursorLogin.ts`（文案与 macOS 逐字一致）+ `RateLimitCard.tsx`（`signIn` 空态，整张卡片打开设置的 Cursor 一行）。见 `docs/SUBSCRIPTION_QUOTAS.md`「Cursor 探测约束」 |
 | `RuntimeDetector` | `crates/core/runtime.rs`（Windows 路径 + 捆绑 node 兜底） |
 | `CodexRateLimitReader` | `crates/core/rate_limit/codex.rs` |
-| Claude 模型周额度（macOS #118 的 `modelScopedMeters`） | Windows 的 Rust 层从 Claude Code 实时回复和缓存解析 Fable 等模型周额度。Windows 现有卡片与 macOS 经典卡片一致，只显示账号提供的通用窗口（`5h`、`7d`），只有 `7d` 时就显示一行。macOS 仅在新版面板显示 Fable，Windows 原生版的展示另行设计。 |
+| Claude 模型周额度（macOS #118 的 `modelScopedMeters`） | Windows 的 Rust 层从 Claude Code 实时回复和缓存解析 Fable 等模型周额度。Windows 现有卡片与 macOS 经典卡片一致，只显示账号提供的通用窗口（`5h`、`7d`），只有 `7d` 时就显示一行。macOS 仅在新版面板显示 Fable，Windows 原生版照 Mac 新版显示（`native/src/VibeUsage.App/Panel/QuotaCard.cs`，#95）。 |
 | `ClaudeUsageProbe`（Claude Code stdio `get_usage` 探测）+ `ClaudeUsageCache` | `src-tauri/src/services/claude_usage.rs`（探测参数与请求体与 macOS 逐项一致，见 `docs/SUBSCRIPTION_QUOTAS.md`「Claude 探测约束」）+ `crates/core/claude_code.rs`（候选程序：与 `discoverBinaries` 一样查 PATH，npm 的 `claude.cmd` 解析到它调用的 `claude.exe` / `cli.js`，不经 cmd.exe；macOS 最后还会试 Claude Desktop 自带的 Claude Code，Windows 尚无此项）+ `crates/core/rate_limit/claude_desktop.rs`（Desktop 记录；macOS 也读桌面端的 `plan-usage-history.json`，Windows 另要处理多处安装位置：`%APPDATA%\Claude`、MSIX 包的 `Packages\Claude_<后缀>\LocalCache\Roaming\Claude` 和 2026-11 起的 `%LOCALAPPDATA%\Claude-Data\claude_<后缀>`，同一包后缀的新旧目录算一份安装，见 `docs/SUBSCRIPTION_QUOTAS.md`） |
 | 旧 `StatuslineHook` | `crates/core/statusline_hook.rs` 仅用于安全退休本应用可证明归属的旧 hook |
 | 设置「关于」→「诊断信息」：「复制诊断信息」最小本机摘要 + App 本机保留最近 10 次同步摘要（一键诊断 1b；维护者 2026-11-09 在架构审批门批准方案修订二：「可以开工，你派活吧。 1、2、3我都同意。」） | `services/diagnostics.rs`（白名单结构化字段）+ `services/cli_doctor.rs`（并入 CLI 的 `doctor --json`，方案 2′）+ `services/sync_history.rs`（`sync-history.json`）+ `lib/diagnostics.ts`（排版与兜底过滤）；字段、脱敏和存放位置见 `docs/DIAGNOSTICS.md`。macOS 同一功能由 vibe-usage-app 按同一方案实现（并入 `doctor --json` 那一步 macOS 尚未做） |
@@ -120,14 +120,15 @@ Windows 和 macOS 共用 `cli-bootstrap.mjs`。每次先查 npm `latest`，命�
 
 ## 原生外壳（开发中，#92）
 
-`native/src/VibeUsage.App` 是 WinUI 3 外壳，长相照 Mac 新版面板，操作习惯照 Windows。外框按 `vibe-usage-app@7645d44` 核对；卡片内容在 #95、#96 照 Mac 补齐，之前先用假后端和展示库的数据画占位。
+`native/src/VibeUsage.App` 是 WinUI 3 外壳，长相照 Mac 新版面板，操作习惯照 Windows。外框和订阅配额卡（#95）按 `vibe-usage-app@7645d44` 核对；近期消耗和展开详情在 #96 照 Mac 补齐，之前先用假后端和展示库的数据画占位。
 
 | Mac 新版 | 原生外壳 |
 |---|---|
 | `ModernTheme`（配色、字号、卡片表面） | `Panel/Theme.cs`：数值照抄，点数换成 DIP；Schibsted Grotesk 和 JetBrains Mono 随包，中文回退到微软雅黑；面板文字不随系统「文本大小」放大 |
 | `ModernPanelView`（顶栏和概览行固定、中间滚动、底栏固定，高度跟内容） | `Panel/PanelWindow.cs`：同样的结构，滚动条浮在卡片上不占宽度；高度上限是工作区减两边 12 DIP |
 | `ModernHeaderBar`、`ModernSubscriptionRow`、`ModernFooterBar`、`ModernSyncLabel` | `Panel/PanelContent.cs` 的 `Header`、`SubscriptionRow`、`Footer`，同步文字由 `Panel/SyncLabel.cs` 按 Mac 规则生成 |
-| `ModernCard` | `CardFrame`：20 DIP 标题行、正文在下方 8 DIP，卡片表面照 `ModernCardBackground` |
+| `ModernCard` | `CardFrame`：20 DIP 标题行（右边可放一个按钮）、正文在下方 8 DIP，卡片表面照 `ModernCardBackground` |
+| `ModernQuotaCard`（概览、一家、空态）、`ModernQuotaGauges`（概览条、双环、圆钮面、额度提示）、`ModernSubscriptionButtons`（圆钮、拖动排序）、`ModernRefreshQuotasButton` | `Panel/QuotaCard.cs`、`Panel/QuotaGauges.cs`：尺寸、行距、字号和画法照抄；排序、告警、评语、中心取值、各状态文案全部取自展示库 `QuotaPanelDisplay`，界面层不另算。拖动排序写设置的 `quotaProductOrder`。CI 的 `--test-demo=<场景编号>` 用 Mac `PanelSnapshotTests` 的同一批场景和样例数（`State/DemoScenes.cs`），截图可以和 Mac 离屏渲染并排对照 |
 | `AppState.panelWillOpen` | 每次真正打开时 `UsagePanelState.PanelDidOpen()`：回到概览、费用、收起；预热不算打开，也不触发读取 |
 | `MenuBarController`（菜单栏面板的开合） | `Shell/FlyoutController.cs`、`Shell/TrayIcon.cs`，行为照 Windows，见下 |
 
@@ -138,6 +139,11 @@ Windows 和 macOS 共用 `cli-bootstrap.mjs`。每次先查 npm `latest`，命�
 3. 圆角用 Windows 11 的系统圆角（约 8 像素），Windows 10 是方角加细边；窗口外边照 Mac 面板那道浅边（`#383A3D`）。
 4. 右键托盘图标是系统原生菜单：打开面板、立即同步、设置、退出。菜单贴着任务栏内侧，关掉后前台还给原来的窗口；用键盘（Win+B 后按菜单键或 Shift+F10）打开菜单再选「打开面板」时，面板拿到键盘，Esc 可收起。
 5. 设置窗口是普通 Windows 窗口（在任务栏和 Alt+Tab 里），关掉只是隐藏。
+6. 订阅配额卡的「刷新额度」和「重试」在一家的详情里也读全部订阅：后端目前只有「刷新全部」，「只刷一家」改变请求，按审批门另批（#95），批下来之前不改联网行为。
+7. 双环内圈和圆钮外圈是渐变弧，XAML 没有锥形渐变，用约 2° 一段、按底下的表面预先混合好的不透明小段拼成，看不出接缝；圆钮选中时弧端的光晕用径向渐变代替模糊。
+8. 额度行可以用键盘聚焦（讲述人读作文本，例如「7d 剩余 79%，够用到重置，4天后重置」），聚焦时也挂出提示；Mac 只有悬停。圆钮和齿轮的提示是 Windows 自己的提示框。
+9. Claude 读的是桌面端记录时，来源说明下多一行「记录时间」（Windows 原有规则）；组织策略关掉 Claude Code 非必要流量时，Windows 照常显示桌面端记录、不写策略原因，因为 Windows 后端只在没有桌面端记录时报这个原因。
+10. Mac 的 Claude「额外」行来自按量付费的花费，Windows 后端没有这个字段；CI 的 132k / 132l 场景用按需额度（`on-demand`）的数据形状画出同一行。
 
 外壳自己不联网：工程用禁用接口清单（`BannedSymbols.txt`）挡住 HTTP、套接字、网页控件、远程图片和启动外部程序，打开网页交给后端的 `open_external`。
 

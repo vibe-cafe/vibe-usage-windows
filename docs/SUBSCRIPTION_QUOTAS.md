@@ -25,7 +25,7 @@ Codex 付费套餐（Plus / Pro / Prolite / Business / Business ProLite）没有
 - `get_usage` 请求必须带 `skip_behaviors: true`（2026-11-06 经维护者按架构审批门批准）。不带时，Claude Code 会先扫描最近 7 天的本地对话记录，为 `/usage` 生成消耗分析，扫完才回答。卡片不使用这部分，而重度用户的这次扫描可能超过单个程序 8 秒的预算（#25）。配额与套餐字段在两种情况下来自同一路径。
 - 套餐名照 `subscription_type` 显示，首字母大写。2026-10-30 起 Max 20x 改名 Ultra，但 Claude Code 对这类账号仍报 `max`，所以显示 Max；不按「没有 5 小时窗口」推断 Ultra，因为未验证的 Ultra 账号仍有 5 小时窗口。
 - Rust 从 Claude Code 实时回复的 `rate_limits.limits` 和缓存的 `cachedUsageUtilization.utilization.limits` 解析 Fable 等模型周额度。只取 `group == "weekly"` 且有模型名的行，名称和已用百分比分别来自 `scope.model.display_name` 和 `percent`。周期为 7 天。`resets_at` 支持 Unix 秒和 ISO 时刻，读取时已到或已过重置时间就跳过该行，缺少重置时间则保留。
-- Windows 现有 Claude 卡片与 macOS 经典卡片一致，只渲染通用窗口，只有 `7d` 时就显示一行。Fable 在 macOS 仅由新版面板展示，Windows 原生版的展示另行设计。
+- Windows 现有 Claude 卡片与 macOS 经典卡片一致，只渲染通用窗口，只有 `7d` 时就显示一行。Fable 在 macOS 仅由新版面板展示，Windows 原生版照 Mac 新版展示（#95）。
 - 返回的模型列表以本次为准，空列表会清空旧行。只有整个 `limits` 字段缺失、账号可核对且模型尚未到重置时间，才沿用上次实时读数。账号按既有回复中的邮箱与组织名在进程内比对，缓存参与比对时还须匹配缓存和当前账号 UUID。读到套餐变更或关闭 Claude 配额时，清除之前的模型读数。
 - 窗口为 `null` 视为「没有该窗口」，不是坏数据。实时回答、`~/.claude.json` 缓存、Claude Desktop 记录（`crates/core/src/rate_limit/claude_desktop.rs`）三条路径都只跳过该窗口，保留其余窗口。Claude Desktop 记录里非空但不是数字的值仍判整条无效；实时回答和缓存遇到不合法的窗口只丢掉该窗口。
 - Claude Desktop 记录 `plan-usage-history.json` 在三处查找：普通安装的 `%APPDATA%\Claude`；MSIX 包旧版的 `%LOCALAPPDATA%\Packages\Claude_<包后缀>\LocalCache\Roaming\Claude`；MSIX 包 2026-11 更新后写入的 `%LOCALAPPDATA%\Claude-Data\claude_<包后缀>`（记录直接在这一层，#27）。`Claude_` / `claude_` 前缀不区分大小写，后缀只接受字母和数字。判断「装了多份」按安装而不是按目录：同一个包后缀的新旧两个目录算同一份安装，两处都有记录时取修改时间较新的一份（同样新时取新目录）；只有包后缀不同、或普通安装与 MSIX 包同时有记录，才算多份安装、不猜账号。比较前先解析链接（`canonicalize`，失败时用原路径），用户把旧目录链接到新目录时同一个文件只算一次。

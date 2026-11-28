@@ -35,13 +35,14 @@ Windows 按总票 #85 决定 1 只提供新版，筛选和分布的维度为终�
 
 ## 原生外壳
 
-`src/VibeUsage.App` 是 WinUI 3 托盘程序（Windows App SDK、.NET 10），自包含、免安装、完整裁剪（#86 的结论，不用预编译成本机代码），只出 x64。主程序名 `vibe-usage-app.exe`。目前接的是内存里的假后端（`State/DemoBackend.cs`，Mac 设计稿的样例数），不联网、不读写凭据和用户数据；#94 换成真后端。
+`src/VibeUsage.App` 是 WinUI 3 托盘程序（Windows App SDK、.NET 10），自包含、免安装、完整裁剪（#86 的结论，不用预编译成本机代码），只出 x64。主程序名 `vibe-usage-app.exe`。目前接的是内存里的假后端（`State/DemoBackend.cs`，数据是 Mac 面板离屏渲染的样例数），不联网、不读写凭据和用户数据；「刷新额度」只是转两秒再回到同一组数，拖动圆钮的顺序存在内存里。#94 换成真后端。
 
 外壳只能在 Windows 上编译，改动靠 GitHub Actions 的 `Native app` 工作流（`.github/workflows/native-app.yml`，Windows 2025 机器）验证：
 
 1. 跑 `tests/VibeUsage.App.Tests`（外壳的纯逻辑：打开和收起的规则、托盘重试、定位、点击竞态、启动参数、同步文字、图形路径、假数据），这一步在 macOS 上也能跑：`dotnet test native/tests/VibeUsage.App.Tests -c Release`（SDK 不在 PATH 时照上文的写法）。
 2. `dotnet publish native/src/VibeUsage.App/VibeUsage.App.csproj -c Release -r win-x64 -p:Platform=x64`，出现裁剪警告或禁用接口警告就失败。
 3. 另一台机器下载产物，`ci/screenshot.ps1` 用 PrintWindow 存原尺寸面板截图，`ci/tray-smoke.ps1` 真实点击托盘图标，从 App 自己的日志判每一项；切到 150% 后（`ci/dpi-icon.ps1` 同时检查托盘图标重载）再各跑一轮。截图、日志和逐项结果在产物 `native-ui-results` 里。
+4. 再两台机器分别在 100% 和 150% 下用 `ci/quota-screens.ps1` 给订阅配额卡的每个场景（`src/VibeUsage.App/State/DemoScenes.cs`：Mac `PanelSnapshotTests` 的 131–133 和特殊状态表用同一编号，`win-*` 是 Windows 才有的状态和 `docs/SUBSCRIPTION_QUOTAS.md`「空态判定」的每一行）存原尺寸截图；100% 那台再用 `ci/quota-smoke.ps1` 以真实指针和键盘操作圆钮、悬停提示、额度行提示、刷新额度、拖动排序和「另有 N 项」，从日志和 UI 自动化（`ci/ui-elements.ps1`，即讲述人读到的名字）判每一项。产物是 `native-quota-100`、`native-quota-150`。
 
 这些脚本会往运行机注入模拟的鼠标键盘、改主题和缩放，只在 Actions 上跑，不要在真机上运行。
 
@@ -53,4 +54,4 @@ Windows 按总票 #85 决定 1 只提供新版，筛选和分布的维度为终�
 - 不用靠反射的数据绑定和运行时加载的 XAML 字符串；界面在代码里搭，JSON 走源码生成。
 - 日志只记窗口类名，不记任何窗口标题、输入或设置值。默认在 `%LOCALAPPDATA%\ai.vibecafe.vibe-usage.windows\logs\shell.log`，超过 1 MB 时启动换到 `shell.old.log`。
 
-启动参数：`--autostart` 是开机自启登记带的参数，只进托盘；已在运行时再收到它就直接退出，不弹面板。其余以 `--test-` 开头的参数只给 CI 用：`--test-log-dir=`、`--test-pin`（不自动收起）、`--test-expand`、`--test-scroll-end`、`--test-demo=single`、`--test-rect-file=`、`--test-icon-file=`、`--test-tray-add-failures=`。
+启动参数：`--autostart` 是开机自启登记带的参数，只进托盘；已在运行时再收到它就直接退出，不弹面板。其余以 `--test-` 开头的参数只给 CI 用：`--test-log-dir=`、`--test-pin`（不自动收起）、`--test-expand`、`--test-scroll-end`、`--test-demo=<场景编号>`（假后端的数据和第一次打开时的选中、悬停、展开，见 `State/DemoScenes.cs`；`single` 即 132g，不带时是 131a）、`--test-rect-file=`、`--test-icon-file=`、`--test-tray-add-failures=`。
