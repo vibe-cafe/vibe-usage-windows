@@ -69,7 +69,9 @@ $names = @('^Claude Max · 偏快$', '^Codex Plus · 快用完$', '^Cursor Pro �
     '^Codex 超额 17%$', '^Claude 超额 8%$', '^Cursor 进度正常$', '^Grok 余量 17%$')
 $missing = @($names | Where-Object { -not (Find $ui $_) })
 Add-Result "Q1 讲述人名字：圆钮（名字 · 套餐 · 状态）、概览行（名字 + 评语）、刷新额度、齿轮都在，缺 $($missing.Count) 个" ($missing.Count -eq 0) $missing
-$keyboard = @($ui | Where-Object { $_.Name -match '^(Claude Max|Codex Plus|Cursor Pro|Grok) · |^刷新额度$|超额|进度正常|余量' -and -not $_.Focusable })
+$keyboard = @($ui | Where-Object { $_.Type -eq 'Button' -and $_.Name -match '^(Claude Max|Codex Plus|Cursor Pro|Grok) · |^刷新额度$|超额|进度正常|余量' -and -not $_.Focusable })
+$rowButtons = @($ui | Where-Object { $_.Type -eq 'Button' -and $_.Name -match '超额|进度正常|余量' })
+if ($rowButtons.Count -ne 4) { $keyboard += "概览行按钮 $($rowButtons.Count) 个，应为 4" }
 Add-Result 'Q2 圆钮、概览行、刷新额度都能用键盘聚焦' ($keyboard.Count -eq 0) ($keyboard | ForEach-Object { $_.Name })
 
 $codex = Find $ui '^Codex Plus · '

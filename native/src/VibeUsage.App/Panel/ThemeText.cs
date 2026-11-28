@@ -37,12 +37,24 @@ internal static partial class Theme
     {
         tb.Measure(new Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity));
         double line = LineHeight(size, face);
-        if (tb.DesiredSize.Width <= width + 0.5)
+        double natural = tb.DesiredSize.Width;
+        if (natural <= width + 0.5)
         {
             var box = new Grid { Height = line, HorizontalAlignment = HorizontalAlignment.Left };
             var at = AtBaseline(tb, Ascent(size, face));
             box.Children.Add(at);
             return box;
+        }
+        if (natural <= width + OneLineOverhang)
+        {
+            // Microsoft YaHei sets a line a few DIP wider than PingFang: keep the
+            // Mac's single line and let it reach into the card's padding. In a
+            // canvas, so layout does not clip it to the column.
+            var line1 = new Grid { Width = Math.Ceiling(natural) + 1, Height = line };
+            line1.Children.Add(AtBaseline(tb, Ascent(size, face)));
+            var host = new Canvas { Width = width, Height = line, HorizontalAlignment = HorizontalAlignment.Left };
+            host.Children.Add(line1);
+            return host;
         }
         tb.TextWrapping = TextWrapping.Wrap;
         tb.Width = width;
@@ -53,6 +65,9 @@ internal static partial class Theme
         tb.HorizontalAlignment = HorizontalAlignment.Left;
         return tb;
     }
+
+    /// <summary>How far past its column a title may run to stay on one line (font differences, not longer text).</summary>
+    public const double OneLineOverhang = 6;
 
     /// <summary>Positions an element at (left, top) in a Grid cell, sized by its content.</summary>
     public static T At<T>(T e, double left, double top) where T : FrameworkElement

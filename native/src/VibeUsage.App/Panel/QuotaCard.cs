@@ -59,18 +59,18 @@ internal sealed partial class PanelWindow
     {
         bool spinning = quota.IsRefreshing;
         var box = new Grid { Width = 14, Height = 14, Background = Theme.Transparent };
-        FontIcon? icon = null;
+        Canvas? icon = null;
         if (spinning)
         {
             box.Children.Add(Icons.Spinner(13));
         }
         else
         {
-            icon = Icons.Fluent(QuotaIcons.Sync, 11.5, Theme.Secondary);
+            icon = QuotaIcons.Refresh(Theme.Secondary);
             box.Children.Add(icon);
         }
         var b = Bare(box, "refresh", "刷新额度", () => model.RefreshQuotas(quota),
-            icon == null ? null : Lights(Theme.Secondary, brush => icon.Foreground = brush), "刷新额度");
+            icon == null ? null : Lights(Theme.Secondary, brush => QuotaIcons.Paint(icon, brush)), "刷新额度");
         b.HorizontalAlignment = HorizontalAlignment.Right;
         b.IsEnabled = !spinning;
         return b;
@@ -155,16 +155,8 @@ internal sealed partial class PanelWindow
         const double width = Theme.RightColumnWidth;
         var provider = row.Provider;
         var g = new Grid { Width = width, Height = pitch, Background = Theme.Transparent };
-        var band = new Border
-        {
-            CornerRadius = new CornerRadius(7),
-            Background = Theme.Solid(Theme.TextC(0.06)),
-            Margin = new Thickness(-8, 0, -8, 0),
-            Height = pitch - 1,
-            VerticalAlignment = VerticalAlignment.Top,
-            Opacity = hoveredOverviewRow == provider ? 1 : 0,
-        };
-        g.Children.Add(band);
+        var band = HoverBand(width, pitch - 1, 7, 0.06, hoveredOverviewRow == provider);
+        g.Children.Add(band.Host);
 
         bool skeleton = row.ShowsSkeleton;
         bool nonSubscription = row.ReadState == ReadState.NonSubscriptionLogin;
@@ -175,7 +167,7 @@ internal sealed partial class PanelWindow
 
         // The name line: 18 DIP, 1.5 DIP low, its capitals on the big number's top line.
         double baseline = 1 + 1.5 + Theme.BaselineIn(18, (13, Face.Text), (13, Face.Mono), (11, Face.Mono));
-        g.Children.Add(Theme.At(Icons.Mark(provider, 14, Theme.Strong), 0, baseline - 4.5 - 7));
+        g.Children.Add(Theme.At(QuotaIcons.Glyph(provider, 14, Theme.Strong), 0, baseline - 4.5 - 7));
         var name = Theme.T(provider.OverviewName(), 13, Face.Text, Wt.Medium, Theme.Text);
         g.Children.Add(Theme.At(Theme.AtBaseline(name, baseline), 20, 0));
 
@@ -234,8 +226,26 @@ internal sealed partial class PanelWindow
         {
             if (on) hoveredOverviewRow = provider;
             else if (hoveredOverviewRow == provider) hoveredOverviewRow = null;
-            band.Opacity = on ? 1 : 0;
+            band.Band.Opacity = on ? 1 : 0;
         });
+    }
+
+    /// <summary>
+    /// The highlight under a hovered row, reaching 8 DIP past it on both
+    /// sides. It sits in a canvas: a negative margin would be clipped to the
+    /// row by layout.
+    /// </summary>
+    private static (Canvas Host, Border Band) HoverBand(double width, double height, double radius, double alpha, bool on)
+    {
+        var band = new Border
+        {
+            Width = width + 16, Height = height, CornerRadius = new CornerRadius(radius),
+            Background = Theme.Solid(Theme.TextC(alpha)), Opacity = on ? 1 : 0,
+        };
+        Canvas.SetLeft(band, -8);
+        var host = new Canvas { IsHitTestVisible = false, HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top };
+        host.Children.Add(band);
+        return (host, band);
     }
 
     /// <summary>「5h 12%」: label 11, number 13 medium, the percent sign dimmer unless the number is coloured (Mac ModernMeterChip).</summary>
@@ -277,7 +287,7 @@ internal sealed partial class PanelWindow
         foreach (var p in rest.Providers)
         {
             var holder = new Grid { Width = 14, Height = 14, Background = Theme.Transparent };
-            holder.Children.Add(Icons.Mark(p, 14, Theme.Tertiary));
+            holder.Children.Add(QuotaIcons.Glyph(p, 14, Theme.Tertiary));
             ToolTipService.SetToolTip(holder, p.DisplayName());
             marks.Children.Add(holder);
         }
@@ -357,7 +367,7 @@ internal sealed partial class PanelWindow
         var g = new Grid { Height = 32 };
         bool credits = d.ResetCreditsCount is > 0;
         double baseline = 1.5 + Theme.BaselineFor(22, credits ? 13 : Theme.Ascent(13, Face.Text), credits ? 5 : Theme.Descent(13, Face.Text));
-        g.Children.Add(Theme.At(Icons.Mark(d.Provider, 15, Theme.Strong), 0, baseline - 4.5 - 7.5));
+        g.Children.Add(Theme.At(QuotaIcons.Glyph(d.Provider, 15, Theme.Strong), 0, baseline - 4.5 - 7.5));
         var title = Theme.Block(Theme.R(d.Provider.DisplayName(), 13, Face.Text, Wt.SemiBold, Theme.Text, -0.13));
         if (d.PlanLabel is { } plan)
         {
@@ -401,12 +411,8 @@ internal sealed partial class PanelWindow
     {
         const double width = Theme.RightColumnWidth;
         var g = new Grid { Height = 32, Width = width, Background = Theme.Transparent };
-        var band = new Border
-        {
-            CornerRadius = new CornerRadius(6), Background = Theme.Solid(Theme.TextC(0.05)),
-            Margin = new Thickness(-8, 0, -8, 0), Opacity = hoveredDetailRow == m.Id ? 1 : 0,
-        };
-        g.Children.Add(band);
+        var (bandHost, band) = HoverBand(width, 32, 6, 0.05, hoveredDetailRow == m.Id);
+        g.Children.Add(bandHost);
         g.Children.Add(Theme.RuleLine());
         double baseline = 1 + Theme.BaselineIn(31, (13, Face.Mono), (11, Face.Mono), (11, Face.Text));
         var label = Theme.T(m.Label, 11, Face.Mono, Wt.Regular, Theme.Secondary);
@@ -430,7 +436,7 @@ internal sealed partial class PanelWindow
                 var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top };
                 var icon = QuotaIcons.ArrowClockwise(Theme.Secondary);
                 icon.VerticalAlignment = VerticalAlignment.Top;
-                icon.Margin = new Thickness(0, baseline - 8.6, 0, 0);
+                icon.Margin = new Thickness(0, baseline - 10.35, 0, 0);
                 row.Children.Add(icon);
                 row.Children.Add(Theme.AtBaseline(resetText, baseline));
                 g.Children.Add(row);
@@ -862,9 +868,6 @@ internal sealed partial class InfoRow : UserControl
 /// <summary>The card's small marks, after the Mac's SF Symbols at the same sizes.</summary>
 internal static class QuotaIcons
 {
-    /// <summary>Segoe Fluent 「Sync」, standing in for SF "arrow.2.circlepath" (the gear and power icons are Fluent glyphs too).</summary>
-    public const string Sync = "\uE895";
-
     private static Canvas Box(double w, double h, params UIElement[] children)
     {
         var c = new Canvas { Width = w, Height = h, VerticalAlignment = VerticalAlignment.Center, IsHitTestVisible = false };
@@ -879,18 +882,77 @@ internal static class QuotaIcons
         return Box(w, h, Geo.Stroke(Geo.Geometry(Geo.Poly(false, 0.4, 0.6, w - 0.4, h / 2, 0.4, h - 0.6)), brush, 1.25));
     }
 
-    /// <summary>SF "arrow.clockwise" at 10 pt medium: an open circle, the arrowhead at the top pointing on.</summary>
+    /// <summary>
+    /// SF "arrow.clockwise" at 10 pt medium, in its 10.45 × 12 layout box: a
+    /// circle open at the upper right, an open arrowhead at 12 o'clock
+    /// pointing on (measured on the symbol drawn at 10×).
+    /// </summary>
     public static Canvas ArrowClockwise(Brush brush)
     {
-        const double size = 9.6, cx = 4.8, cy = 5.2, r = 3.7;
-        var arc = Geo.Stroke(Geo.Arc(cx, cy, r, 40, 352), brush, 1.15, PenLineCap.Round);
-        var tip = Geo.Polar(cx, cy, r, 352);
-        var head = new Path
+        const double cx = 5.2, cy = 7.4, r = 3.7, w = 1.1;
+        var arc = Geo.Stroke(Geo.Arc(cx, cy, r, 95, 360), brush, w);
+        double tx = cx + 2.1, ty = cy - r;
+        var head = Geo.Stroke(Geo.Geometry(Geo.Poly(false, tx - 2.3, ty - 2.3, tx, ty, tx - 2.3, ty + 2.3)), brush, w);
+        return Box(10.45, 12, arc, head);
+    }
+
+    /// <summary>
+    /// SF "arrow.2.circlepath" at 10.5 pt medium in a 14 × 14 frame: two
+    /// arcs chasing round, each ending in a solid head (measured on the
+    /// symbol drawn at 10×).
+    /// </summary>
+    public static Canvas Refresh(Brush brush)
+    {
+        const double cx = 7, cy = 7.1, r = 4.55, w = 1.1;
+        var c = Box(14, 14,
+            Geo.Stroke(Geo.Arc(cx, cy, r, 311, 440), brush, w),
+            Geo.Stroke(Geo.Arc(cx, cy, r, 131, 260), brush, w),
+            Head(cx, cy, r, 80, brush),
+            Head(cx, cy, r, 260, brush));
+        return c;
+    }
+
+    /// <summary>A solid arrowhead whose base sits across the circle at <paramref name="deg"/>, pointing clockwise.</summary>
+    private static Path Head(double cx, double cy, double r, double deg, Brush brush)
+    {
+        double a = deg * Math.PI / 180;
+        var b = Geo.Polar(cx, cy, r, deg);
+        double tx = Math.Cos(a), ty = Math.Sin(a), nx = Math.Sin(a), ny = -Math.Cos(a);
+        const double half = 1.6, length = 2.1;
+        return new Path
         {
-            Data = Geo.Geometry(Geo.Poly(true, tip.X + 1.9, tip.Y, tip.X - 0.9, tip.Y - 2.1, tip.X - 0.9, tip.Y + 2.1)),
+            Data = Geo.Geometry(Geo.Poly(true, b.X + nx * half, b.Y + ny * half, b.X + tx * length, b.Y + ty * length, b.X - nx * half, b.Y - ny * half)),
             Fill = brush,
         };
-        return Box(size, size, arc, head);
+    }
+
+    /// <summary>Recolours a drawn icon (hover).</summary>
+    public static void Paint(Canvas icon, Brush brush)
+    {
+        foreach (var p in icon.Children.OfType<Path>())
+        {
+            if (p.Fill != null) p.Fill = brush;
+            if (p.Stroke != null) p.Stroke = brush;
+        }
+    }
+
+    /// <summary>
+    /// A provider mark as the new panel draws it (Mac <c>ProviderGlyph</c>):
+    /// <paramref name="size"/> × the mark's fill ratio, centred in a
+    /// size × size box. (The classic card's icon is a further 18/22 smaller.)
+    /// </summary>
+    public static FrameworkElement Glyph(Provider provider, double size, Brush brush)
+    {
+        double drawn = size * ProviderMarks.DrawnSize(provider, 22) / 18;
+        var holder = new Grid { Width = size, Height = size, IsHitTestVisible = false };
+        var inner = new Canvas { Width = 24, Height = 24 };
+        inner.Children.Add(new Path { Data = Geo.FromMarkup(ProviderMarks.Markup(provider)), Fill = brush });
+        holder.Children.Add(new Viewbox
+        {
+            Width = drawn, Height = drawn, Child = inner,
+            HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
+        });
+        return holder;
     }
 
     /// <summary>SF "exclamationmark.circle" at 11 pt medium, in its 13 × 13 frame.</summary>
