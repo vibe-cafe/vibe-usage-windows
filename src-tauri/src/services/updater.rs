@@ -6,10 +6,13 @@
 use crate::state::{AppCtx, UpdateInfo};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
+use tokio::io::AsyncWriteExt;
+use tokio::time::timeout;
 
 pub const UPDATE_MANIFEST_URL: &str =
     "https://github.com/vibe-cafe/vibe-usage-windows/releases/latest/download/latest.json";
@@ -166,27 +169,8 @@ pub async fn install(app: &AppHandle) -> Result<(), String> {
         let ctx = app.state::<AppCtx>();
         ctx.http.clone()
     };
-    let bytes = http
-        .get(&info.url)
-        .timeout(std::time::Duration::from_secs(600))
-        .send()
-        .await
-        .map_err(|e| format!("下载失败：{e}"))?
-        .error_for_status()
-        .map_err(|e| format!("下载失败：{e}"))?
-        .bytes()
-        .await
-        .map_err(|e| format!("下载失败：{e}"))?;
-
-    if let Some(expected) = &info.sha256 {
-        let actual = hex::encode(Sha256::digest(&bytes));
-        if !actual.eq_ignore_ascii_case(expected) {
-            return Err("安装包校验失败 (SHA-256 不匹配)".into());
-        }
-    }
-
-    let installer = std::env::temp_dir().join(format!("VibeUsage-{}-Setup.exe", info.version));
-    std::fs::write(&installer, &bytes).map_err(|e| format!("写入安装包失败：{e}"))?;
+    let installer =
+        download_installer(&http, &info, &std::env::temp_dir(), Duration::from_secs(60)).await?;
 
     // Same order as tauri-plugin-updater: start the installer, then quit. The
     // passive installer closes this app itself if it is still shutting down.
@@ -197,6 +181,64 @@ pub async fn install(app: &AppHandle) -> Result<(), String> {
     app.exit(0);
     Ok(())
 }
+
+async fn download_installer(
+    http: &reqwest::Client,
+    info: &UpdateInfo,
+    directory: &Path,
+    idle_timeout: Duration,
+) -> Result<PathBuf, String> {
+    let expected = info
+        .sha256
+        .as_deref()
+        .filter(|hash| !hash.is_empty())
+        .ok_or("更新清单缺少 SHA-256")?;
+    let stalled = |_| format!("下载无进展（{} 秒未收到数据）", idle_timeout.as_secs());
+    let network_error = |e| format!("下载失败：{e}");
+    let write_error = |e| format!("写入安装包失败：{e}");
+
+    // Bound the wait for headers as well as each body read. A request-wide
+    // timeout would cut off a slow download even while data is arriving.
+    let mut response = timeout(idle_timeout, http.get(&info.url).send())
+        .await
+        .map_err(stalled)?
+        .map_err(network_error)?
+        .error_for_status()
+        .map_err(network_error)?;
+
+    let partial = tempfile::Builder::new()
+        .prefix("VibeUsage-")
+        .suffix(".part")
+        .tempfile_in(directory)
+        .map_err(write_error)?;
+    let (file, partial_path) = partial.into_parts();
+    let mut file = tokio::fs::File::from_std(file);
+    let mut hasher = Sha256::new();
+    while let Some(chunk) = timeout(idle_timeout, response.chunk())
+        .await
+        .map_err(stalled)?
+        .map_err(network_error)?
+    {
+        file.write_all(&chunk).await.map_err(write_error)?;
+        hasher.update(&chunk);
+    }
+    file.flush().await.map_err(write_error)?;
+    drop(file);
+    if !hex::encode(hasher.finalize()).eq_ignore_ascii_case(expected) {
+        return Err("安装包校验失败 (SHA-256 不匹配)".into());
+    }
+
+    // TempPath removes the partial on error. Only a verified file gets the
+    // launchable name, including when a previous attempt left an installer.
+    let installer = directory.join(format!("VibeUsage-{}-Setup.exe", info.version));
+    partial_path
+        .persist(&installer)
+        .map_err(|e| write_error(e.error))?;
+    Ok(installer)
+}
+
+#[cfg(test)]
+mod download_tests;
 
 #[cfg(test)]
 mod installer_tests {
