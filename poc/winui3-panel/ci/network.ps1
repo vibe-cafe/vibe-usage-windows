@@ -49,6 +49,14 @@ New-Item -Path $transcriptKey -Force | Out-Null
 Set-ItemProperty -Path $transcriptKey -Name EnableEventTranscript -Value 1 -Type DWord
 $policyKey = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection'
 New-Item -Path $policyKey -Force | Out-Null
+# The runner image ships DiagTrack disabled; turn it on so the system diagnostic channel can be observed.
+Set-Service DiagTrack -StartupType Automatic -ErrorAction SilentlyContinue
+Start-Service DiagTrack -ErrorAction SilentlyContinue
+Write-Host "DiagTrack: $((Get-Service DiagTrack -ErrorAction SilentlyContinue).Status)"
+# Positive controls: curl must show up in the audit and DNS logs, and a curl copy under a block rule as blocked.
+$curl = "$env:SystemRoot\System32\curl.exe"
+$curlBlocked = Join-Path $env:RUNNER_TEMP 'curl-blocked.exe'
+Copy-Item $curl $curlBlocked -Force
 
 function Get-DiagTrack {
     $svc = Get-CimInstance Win32_Service -Filter "Name='DiagTrack'" -ErrorAction SilentlyContinue
@@ -98,6 +106,10 @@ function Invoke-Phase([string]$name, [bool]$offline, [int]$telemetry) {
     $appPid = $proc.Id
     Write-Host "started pid $appPid"
 
+    # Controls, a minute in.
+    $controlStarted = $false
+    $controlIds = New-Object System.Collections.Generic.List[int]
+    $controlRule = $null
     $samples = New-Object System.Collections.Generic.List[object]
     $diagConns = New-Object System.Collections.Generic.List[object]
     $deadline = (Get-Date).AddSeconds($seconds + 90)
@@ -122,6 +134,16 @@ function Invoke-Phase([string]$name, [bool]$offline, [int]$telemetry) {
                 }
         }
         if (-not $shot -and ((Get-Date) - $t0).TotalSeconds -gt 25) { Save-Shot (Join-Path $dir 'screen.png'); $shot = $true }
+        if (-not $controlStarted -and ((Get-Date) - $t0).TotalSeconds -gt 60) {
+            $controlStarted = $true
+            $c1 = Start-Process $curl -ArgumentList @('-s', '-o', 'NUL', '--max-time', '10', 'https://www.example.com/') -PassThru -WindowStyle Hidden
+            $controlIds.Add($c1.Id)
+            if ($offline) {
+                $controlRule = New-NetFirewallRule -DisplayName "poc-block-control-$name" -Direction Outbound -Program $curlBlocked -Action Block
+                $c2 = Start-Process $curlBlocked -ArgumentList @('-s', '-o', 'NUL', '--max-time', '10', 'https://www.example.org/') -PassThru -WindowStyle Hidden
+                $controlIds.Add($c2.Id)
+            }
+        }
         Start-Sleep -Seconds 3
     }
     if (-not $proc.HasExited) { Write-Host 'did not quit on its own; stopping'; Stop-Process -Id $appPid -Force }
@@ -141,6 +163,11 @@ function Invoke-Phase([string]$name, [bool]$offline, [int]$telemetry) {
         Where-Object { $treeSeen.Contains([int]$_.ProcessId) } | ForEach-Object {
             [pscustomobject]@{ time = $_.TimeCreated.ToString('HH:mm:ss'); id = $_.Id; pid = $_.ProcessId; message = ($_.Message -split "`n")[0] }
         })
+    $controlWfp = @(Get-WinEvent -FilterHashtable @{ LogName = 'Security'; Id = 5156, 5157; StartTime = $t0; EndTime = $t1 } -ErrorAction SilentlyContinue |
+        Where-Object { $_.Message -match 'curl' })
+    $controlDns = @(Get-WinEvent -FilterHashtable @{ LogName = 'Microsoft-Windows-DNS-Client/Operational'; StartTime = $t0; EndTime = $t1 } -ErrorAction SilentlyContinue |
+        Where-Object { $controlIds.Contains([int]$_.ProcessId) })
+    if ($controlRule) { Remove-NetFirewallRule -DisplayName "poc-block-control-$name" }
     $cacheAfter = @(Get-DnsClientCache -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Entry -Unique)
     $newNames = @($cacheAfter | Where-Object { $_ -notin $cacheBefore })
 
@@ -166,6 +193,9 @@ function Invoke-Phase([string]$name, [bool]$offline, [int]$telemetry) {
         wfpDestinations = @($wfp | Where-Object { $_.direction -match '14593|Outbound' -or $_.direction -eq '%%14593' } | Select-Object -ExpandProperty dest -Unique)
         dnsQueriesByProcess = $dns.Count
         dnsCacheNewNamesDuringPhase = $newNames.Count
+        controlCurlAllowedEvents = @($controlWfp | Where-Object { $_.Id -eq 5156 -and $_.Message -match 'curl\.exe' -and $_.Message -notmatch 'curl-blocked' }).Count
+        controlCurlBlockedEvents = @($controlWfp | Where-Object { $_.Id -eq 5157 -and $_.Message -match 'curl-blocked' }).Count
+        controlDnsEvents = $controlDns.Count
         diagTrack = $diag
         diagTrackRemoteDistinct = @($diagConns | Select-Object -ExpandProperty remote -Unique)
     }

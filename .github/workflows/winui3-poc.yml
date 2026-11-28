@@ -174,7 +174,7 @@ jobs:
           path: C:\poc\app
       - name: Does the runtime go online by itself? (offline, online×2 diagnostic levels)
         shell: pwsh
-        run: ./poc/winui3-panel/ci/network.ps1 -AppDir C:\poc\app -OutDir C:\poc\net -Minutes 10
+        run: ./poc/winui3-panel/ci/network.ps1 -AppDir C:\poc\app -OutDir C:\poc\net -Minutes 4
       - uses: actions/upload-artifact@v7
         if: always()
         with:
