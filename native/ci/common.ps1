@@ -22,6 +22,8 @@ public static class VuNative {
     [DllImport("user32.dll")] public static extern void mouse_event(uint flags, int dx, int dy, int data, UIntPtr extra);
     [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindowW(string cls, string name);
+    [DllImport("user32.dll")] public static extern bool PostMessageW(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+    [DllImport("user32.dll")] public static extern bool AllowSetForegroundWindow(uint processId);
     [DllImport("user32.dll")] public static extern IntPtr SendMessageTimeoutW(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam, uint flags, uint timeout, out IntPtr result);
     [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "SendMessageTimeoutW")]
     public static extern IntPtr SendMessageTimeoutString(IntPtr hWnd, uint msg, UIntPtr wParam, string lParam, uint flags, uint timeout, out UIntPtr result);
@@ -44,16 +46,20 @@ function Pump([int]$Ms) {
     }
 }
 
-# A bare SetCursorPos produces no pointer input for WinUI; nudge with real
-# mouse-move input so hover reaches the window under the cursor.
+# A bare SetCursorPos produces no pointer input for WinUI: move with real
+# (absolute) mouse input so hover reaches the window under the cursor.
 function Move-Cursor([int]$X, [int]$Y) {
-    [VuNative]::SetCursorPos($X, $Y) | Out-Null
-    [VuNative]::mouse_event(0x0001, 1, 0, 0, [UIntPtr]::Zero)
-    Start-Sleep -Milliseconds 20
-    [VuNative]::mouse_event(0x0001, -1, 0, 0, [UIntPtr]::Zero)
-    Start-Sleep -Milliseconds 20
+    $v = [System.Windows.Forms.SystemInformation]::VirtualScreen
+    $nx = [int][Math]::Round(($X - $v.Left) * 65535.0 / ($v.Width - 1))
+    $ny = [int][Math]::Round(($Y - $v.Top) * 65535.0 / ($v.Height - 1))
+    # MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK
+    [VuNative]::mouse_event(0xC001, $nx, $ny, 0, [UIntPtr]::Zero)
+    Start-Sleep -Milliseconds 30
     [VuNative]::SetCursorPos($X, $Y) | Out-Null
 }
+
+# PowerShell turns $null into "" for string parameters; FindWindow needs a real null title.
+function Find-Window([string]$Class) { return [VuNative]::FindWindowW($Class, [NullString]::Value) }
 
 function Click([int]$X, [int]$Y, [switch]$Right, [int]$HoldMs = 60) {
     Move-Cursor $X $Y

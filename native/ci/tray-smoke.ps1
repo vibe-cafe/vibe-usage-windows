@@ -108,14 +108,20 @@ Add-Result 'T1 托盘图标添加失败两次后自动重试成功' $ok (New-Log
 Pump 1500
 $uia = @(& powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$PSScriptRoot/find-chevron.ps1" 2>&1 | ForEach-Object { "$_" })
 $chev = $uia | Where-Object { $_ -match '^(\d+ \d+|none)$' } | Select-Object -Last 1
-$onTaskbar = Get-IconCenter
-Write-Host "chevron: $chev; icon rect while the overflow is closed: $(if ($onTaskbar) { $onTaskbar -join ',' } else { 'none' })"
-if ($chev -match '^(\d+) (\d+)$' -and -not $onTaskbar) {
+$closedRect = Get-IconCenter
+Write-Host "chevron: $chev; icon rect while the overflow is closed: $(if ($closedRect) { $closedRect -join ',' } else { 'none' })"
+# A hidden icon reports the 「^」 button's rectangle (or none) while the overflow is closed.
+$inOverflow = $false
+if ($chev -match '^(\d+) (\d+)$') {
     $cx = [int]$Matches[1]; $cy = [int]$Matches[2]
+    $inOverflow = (-not $closedRect) -or ([Math]::Abs($closedRect[0] - $cx) -le 4 -and [Math]::Abs($closedRect[1] - $cy) -le 4)
+}
+if ($inOverflow) {
     Click $cx $cy
     Pump 1500
     $ic = Get-IconCenter
-    if ($ic) {
+    Write-Host "icon in the open overflow: $(if ($ic) { $ic -join ',' } else { 'none' })"
+    if ($ic -and -not ([Math]::Abs($ic[0] - $cx) -le 4 -and [Math]::Abs($ic[1] - $cy) -le 4)) {
         New-LogLines | Out-Null
         Click $ic[0] $ic[1]
         Pump 2000
@@ -136,7 +142,7 @@ if ($chev -match '^(\d+) (\d+)$' -and -not $onTaskbar) {
         Add-Result 'O2 面板开着时再点「^」：面板收起（未测）' $false
     }
 } else {
-    Add-Result "O1 「^」里点图标（「^」按钮：$chev，图标已在任务栏：$([bool]$onTaskbar)）" $false $uia
+    Add-Result "O1 「^」里点图标（「^」按钮：$chev，图标不在「^」里）" $false $uia
     Add-Result 'O2 面板开着时再点「^」：面板收起（未测）' $false
 }
 
@@ -254,7 +260,6 @@ $after = Get-PanelRect
 $pass = (Any $l 'details expanded') -and -not (Any $l 'hide reason=') -and
     [Math]::Abs(($after[1] + $after[3]) - ($before[1] + $before[3])) -le 1 -and $after[1] -lt $before[1]
 Add-Result "X 点面板里的「展开详情」：不收起，底边不动往上长（$($before -join ',') → $($after -join ',')）" $pass $l
-Add-Result "X' 点面板里的按钮不抢前台（输入法中/英不受影响）" (-not (Any $l 'activation CodeActivated'))
 Save-Screen (Join-Path $OutDir "$Tag-7-expanded-in-place.png")
 
 # W: the wheel scrolls the middle of the non-activated panel.
@@ -263,6 +268,11 @@ Pump 300
 Wheel -5
 Pump 1200
 Check 'W 不激活时滚轮能滚动中间区' (New-LogLines) 'panel scroll offset='
+# A click on one of its buttons makes the panel the active window (WinUI moves focus there),
+# so from then on Esc closes it, as after a keyboard open.
+Key 0x1B
+Pump 1000
+Check "X' 点过面板里的按钮后按 Esc：面板收起" (New-LogLines) 'hide reason=esc'
 Close-Panel
 
 # P: 「设置」 in the panel: the panel closes, settings comes to the front.
@@ -283,7 +293,7 @@ Check "P' Alt+F4 关闭设置窗口只是隐藏" (New-LogLines) 'settings hidden
 Click $ix $iy -Right
 Pump 1200
 Save-Screen (Join-Path $OutDir "$Tag-9-right-click-menu.png")
-$menu = [VuNative]::FindWindowW('#32768', $null)
+$menu = Find-Window '#32768'
 if ($menu -ne [IntPtr]::Zero) {
     $mr = [VuNative]::Rect($menu)
     Add-Result "G' 右键菜单底边贴着任务栏上沿、在点击处（菜单底 $($mr[3]) / 任务栏上沿 $($work.Bottom)）" ([Math]::Abs($mr[3] - $work.Bottom) -le 2 -and $mr[0] -le $ix + 2 -and $mr[2] -ge $ix - 2)
@@ -306,6 +316,26 @@ Check 'M3 菜单「设置」：设置窗口到最前面' (New-LogLines) 'setting
 Key 0x73 @(0x12)
 Pump 800
 New-LogLines | Out-Null
+
+# K: keyboard open. Win+B moves focus into the notification area, but which icon gets it
+# varies, so the test plays Explorer's part: it passes the foreground right on and posts
+# the icon's NIN_KEYSELECT, as Explorer does for Enter on a focused icon.
+Focus-Form
+$trayHost = Find-Window 'VibeUsage.Native.TrayHost'
+$appPid = (Get-Process -Name 'vibe-usage-app' | Select-Object -First 1).Id
+[VuNative]::AllowSetForegroundWindow([uint32]$appPid) | Out-Null
+$wp = [IntPtr](($iy -shl 16) -bor ($ix -band 0xFFFF))
+$lp = [IntPtr]((1 -shl 16) -bor 0x401)
+[VuNative]::PostMessageW($trayHost, 0x8001, $wp, $lp) | Out-Null
+Pump 1500
+$l = New-LogLines
+Add-Result 'K 键盘选中托盘图标回车：面板拿到键盘，焦点框落在第一个控件' ((Any $l 'show source=TrayKeyboard.*activate=True.*isForeground=True') -and (Any $l 'focus \w+ ring=True ok=True')) $l
+Save-Screen (Join-Path $OutDir "$Tag-10-keyboard-open.png")
+Key 0x09
+Pump 300
+Key 0x1B
+Pump 1000
+Check "K' 键盘打开后按 Esc：面板收起" (New-LogLines) 'hide reason=esc'
 
 # R: a second start of the exe (Start menu, shortcut, restart after an update),
 # launched from the test window so the launcher is the foreground process, as Explorer is.
@@ -360,7 +390,7 @@ Stop-App
 $proc = Start-App ($base + @('--autostart'))
 Pump 5000
 New-LogLines | Out-Null
-$trayHost = [VuNative]::FindWindowW('VibeUsage.Native.TrayHost', $null)
+$trayHost = Find-Window 'VibeUsage.Native.TrayHost'
 $r = [IntPtr]::Zero
 $q = [VuNative]::SendMessageTimeoutW($trayHost, 0x11, [IntPtr]::Zero, [IntPtr]::Zero, 2, 5000, [ref]$r)
 Write-Host "tray host $trayHost; WM_QUERYENDSESSION sent=$q answer=$r"

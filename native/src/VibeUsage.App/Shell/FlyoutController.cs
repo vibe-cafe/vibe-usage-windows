@@ -81,16 +81,24 @@ internal sealed partial class FlyoutController : IDisposable
     }
 
     /// <summary>
-    /// Shows the window once while cloaked (invisible) and without activation,
-    /// so XAML builds and lays out the content before the first real open and
-    /// the first click doesn't flash an empty frame. No backend reads here.
+    /// Shows the window once while cloaked (invisible), so XAML builds and lays
+    /// out the content before the first real open and the first click doesn't
+    /// flash an empty frame. No backend reads here.
+    ///
+    /// With <paramref name="openAfterwards"/> (a start by the user) the cloaked
+    /// window is shown activated: Windows lets a process the user just started
+    /// take the foreground with its first window, and showing a window without
+    /// activation first would use that up. Once laid out it is placed and
+    /// uncloaked as the <see cref="OpenSource.Startup"/> open. With --autostart
+    /// it is shown without activation and hidden again.
     /// </summary>
-    public void WarmUp(Action? done)
+    public void WarmUp(bool openAfterwards)
     {
         warmingUp = true;
         Win32.SetDwmInt(panel.Hwnd, Win32.DWMWA_CLOAK, 1);
         panel.AppWindow.MoveAndResize(ComputeRect(null).Rect);
-        panel.AppWindow.Show(false);
+        panel.AppWindow.Show(openAfterwards);
+        bool granted = openAfterwards && Win32.SetForegroundWindow(panel.Hwnd);
         warmUpTimer = panel.DispatcherQueue.CreateTimer();
         warmUpTimer.Interval = TimeSpan.FromMilliseconds(300);
         warmUpTimer.IsRepeating = false;
@@ -98,11 +106,17 @@ internal sealed partial class FlyoutController : IDisposable
         {
             warmUpTimer?.Stop();
             frame = panel.Frame() ?? frame;
-            panel.AppWindow.Hide();
-            Win32.SetDwmInt(panel.Hwnd, Win32.DWMWA_CLOAK, 0);
             warmingUp = false;
-            ShellLog.Write($"warm-up done frame={frame} contentDip={panel.MeasureDesiredHeightDip()}");
-            done?.Invoke();
+            ShellLog.Write($"warm-up done frame={frame} contentDip={panel.MeasureDesiredHeightDip()} startupForeground={granted}");
+            if (openAfterwards)
+            {
+                Show(null, OpenSource.Startup, alreadyShown: true);
+            }
+            else
+            {
+                panel.AppWindow.Hide();
+                Win32.SetDwmInt(panel.Hwnd, Win32.DWMWA_CLOAK, 0);
+            }
             if (pendingShow is { } p)
             {
                 pendingShow = null;
@@ -145,7 +159,8 @@ internal sealed partial class FlyoutController : IDisposable
 
     // -- show / hide ----------------------------------------------------------------------
 
-    public void Show(Win32.POINT? at, OpenSource source)
+    /// <param name="alreadyShown">The startup warm-up already showed (cloaked) and activated the window.</param>
+    public void Show(Win32.POINT? at, OpenSource source, bool alreadyShown = false)
     {
         if (warmingUp)
         {
@@ -175,8 +190,9 @@ internal sealed partial class FlyoutController : IDisposable
             ApplyRect(target.Rect);
         }
 
-        panel.AppWindow.Show(activate);
-        bool granted = activate && Win32.SetForegroundWindow(panel.Hwnd);
+        if (alreadyShown) Win32.SetDwmInt(panel.Hwnd, Win32.DWMWA_CLOAK, 0);
+        else panel.AppWindow.Show(activate);
+        bool granted = activate && (Win32.GetForegroundWindow() == panel.Hwnd || Win32.SetForegroundWindow(panel.Hwnd));
         visible = true;
         shownAt = Now;
         shownAtTick = unchecked((uint)Environment.TickCount);

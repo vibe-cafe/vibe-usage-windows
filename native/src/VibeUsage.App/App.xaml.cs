@@ -94,10 +94,8 @@ public partial class ShellApp : Application
         if (options.IconFile is string file) StartIconFile(file, dispatcher);
 
         // Started by the user: open the panel so they see where the app went.
-        flyout.WarmUp(() =>
-        {
-            if (!options.Autostart) flyout.Show(null, OpenSource.Startup);
-        });
+        // --autostart (the sign-in entry) stays in the tray.
+        flyout.WarmUp(openAfterwards: !options.Autostart);
     }
 
     private void OnTrayContextMenu(Win32.POINT anchor)
