@@ -34,7 +34,7 @@ internal enum ShowSource { Mouse, Keyboard, Menu, External, Startup }
 ///    taskbar or the overflow ("^") flyout is the tail of the very click that
 ///    opened the panel (the overflow closes itself), so it doesn't close it.
 /// </summary>
-internal sealed class FlyoutController : IDisposable
+internal sealed partial class FlyoutController : IDisposable
 {
     private const double MarginDip = 12;
     private const long OpeningGraceMs = 400;

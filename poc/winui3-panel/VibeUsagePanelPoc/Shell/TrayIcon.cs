@@ -20,7 +20,7 @@ namespace VibeUsage.PanelPoc.Shell;
 /// a keyboard-focused icon (Win+B) as NIN_KEYSELECT, a right click or the
 /// menu key as WM_CONTEXTMENU; wParam carries the icon's anchor point.
 /// </summary>
-internal sealed class TrayIcon : IDisposable
+internal sealed partial class TrayIcon : IDisposable
 {
     public const string HostClassName = "VibeUsagePanelPoc.TrayHost";
     public const uint WM_TRAY = Win32.WM_APP + 1;

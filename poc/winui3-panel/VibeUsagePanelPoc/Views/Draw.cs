@@ -24,7 +24,7 @@ public readonly record struct Gauge(double Remaining, double? Expected, Tone Ton
 }
 
 /// <summary>Geometry helpers. Angles are degrees clockwise from 12 o'clock, like the Mac code's rotations.</summary>
-internal static class Geo
+internal static partial class Geo
 {
     public static Point Polar(double cx, double cy, double r, double deg)
     {
@@ -98,7 +98,7 @@ internal static class Geo
     }
 }
 
-internal static class Icons
+internal static partial class Icons
 {
     private static Canvas Box(double w, double h, params UIElement[] children)
     {
@@ -190,7 +190,7 @@ internal static class Icons
     }
 }
 
-internal static class Gauges
+internal static partial class Gauges
 {
     public static Color? Accent(Tone t) => t switch { Tone.Amber => Mt.Amber, Tone.Red => Mt.Red, _ => null };
 

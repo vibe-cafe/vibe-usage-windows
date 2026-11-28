@@ -65,6 +65,12 @@ internal sealed class PocOptions
 
     public string? LogDir { get; private set; }
 
+    /// <summary>Measurements: also open the settings window once the panel is up.</summary>
+    public bool OpenSettings { get; private set; }
+
+    /// <summary>Measurements: quit through the normal exit path after this many seconds.</summary>
+    public int QuitAfterSeconds { get; private set; }
+
     /// <summary>CI click test: keep writing the tray icon's rectangle here for a few seconds.</summary>
     public string? IconFile { get; private set; }
 
@@ -82,6 +88,8 @@ internal sealed class PocOptions
             else if (a.StartsWith("--only=", StringComparison.Ordinal)) o.Only = a[7..];
             else if (a.StartsWith("--rect-file=", StringComparison.Ordinal)) o.RectFile = a[12..];
             else if (a.StartsWith("--log-dir=", StringComparison.Ordinal)) o.LogDir = a[10..];
+            else if (a == "--open-settings") o.OpenSettings = true;
+            else if (a.StartsWith("--quit-after=", StringComparison.Ordinal) && int.TryParse(a[13..], out var q)) o.QuitAfterSeconds = q;
             else if (a.StartsWith("--icon-file=", StringComparison.Ordinal)) o.IconFile = a[12..];
         }
         return o;

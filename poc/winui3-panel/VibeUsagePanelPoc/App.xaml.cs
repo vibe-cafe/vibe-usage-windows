@@ -104,8 +104,19 @@ public partial class App : Application
         _flyout.WarmUp(() =>
         {
             if (openNow) _flyout.Show(null, ShowSource.Startup);
+            if (_options.OpenSettings) OpenSettings();
+            if (_options.QuitAfterSeconds > 0)
+            {
+                _quitTimer = Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread().CreateTimer();
+                _quitTimer.Interval = TimeSpan.FromSeconds(_options.QuitAfterSeconds);
+                _quitTimer.IsRepeating = false;
+                _quitTimer.Tick += (_, _) => Quit();
+                _quitTimer.Start();
+            }
         });
     }
+
+    private Microsoft.UI.Dispatching.DispatcherQueueTimer? _quitTimer;
 
     private Microsoft.UI.Dispatching.DispatcherQueueTimer? _iconTimer;
 

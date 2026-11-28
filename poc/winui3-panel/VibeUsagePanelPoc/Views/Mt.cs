@@ -18,7 +18,7 @@ public enum Wt { Light, Regular, Medium, SemiBold }
 /// constants next to each view), values copied as they are: points become
 /// DIPs. Dark only, like the Mac panel today.
 /// </summary>
-internal static class Mt
+internal static partial class Mt
 {
     // -- metrics (ModernTheme) ------------------------------------------------------------
     public const double PanelWidth = 520;

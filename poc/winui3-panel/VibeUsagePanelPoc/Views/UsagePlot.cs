@@ -16,7 +16,7 @@ namespace VibeUsage.PanelPoc.Views;
 /// a monotone cubic through the points with a gradient under it, the end dot,
 /// two ticks, the axis below. Hovering snaps to the nearest point.
 /// </summary>
-internal static class UsagePlot
+internal static partial class UsagePlot
 {
     public const double AxisHeight = 18;
     public const double Spacing = 2;

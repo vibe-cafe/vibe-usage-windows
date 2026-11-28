@@ -106,3 +106,78 @@ jobs:
           path: C:\poc\shots\
           retention-days: 30
 
+
+  # Issue #86 measurements (heavy): run on a manual trigger or a commit whose
+  # message contains 「[实测]」.
+  size:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[实测]')
+    runs-on: windows-2025
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: base
+            props: ""
+          - variant: r2r
+            props: "-p:PublishReadyToRun=true"
+          - variant: trim-partial
+            props: "-p:PublishTrimmed=true -p:TrimMode=partial"
+          - variant: trim-full
+            props: "-p:PublishTrimmed=true -p:TrimMode=full"
+          - variant: trim-full-r2r
+            props: "-p:PublishTrimmed=true -p:TrimMode=full -p:PublishReadyToRun=true"
+          - variant: aot
+            props: "-p:PublishAot=true"
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: "10.0.x"
+      - name: Current Tauri installer (node.exe and main exe for the estimate)
+        shell: pwsh
+        run: |
+          gh release download --repo ${{ github.repository }} --pattern '*Setup.exe' --dir tauri-dl
+          Get-ChildItem tauri-dl | ForEach-Object { "{0} {1:N1} MB" -f $_.Name, ($_.Length / 1MB) }
+          7z x (Get-ChildItem tauri-dl\*.exe | Select-Object -First 1).FullName -otauri -y | Out-Null
+          Get-ChildItem tauri -Recurse -File | Sort-Object Length -Descending | Select-Object -First 8 |
+            ForEach-Object { "{0,8:N1} MB  {1}" -f ($_.Length / 1MB), $_.FullName.Substring((Resolve-Path tauri).Path.Length + 1) }
+      - name: Publish (${{ matrix.variant }})
+        id: publish
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          dotnet publish poc/winui3-panel/VibeUsagePanelPoc/VibeUsagePanelPoc.csproj -c Release -r win-x64 -p:Platform=x64 ${{ matrix.props }} -o out/app 2>&1 | Tee-Object -FilePath publish.log
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+      - name: Measure, package, smoke test, Defender scan
+        if: always()
+        shell: pwsh
+        run: ./poc/winui3-panel/ci/size.ps1 -Variant ${{ matrix.variant }} -AppDir out/app -OutDir out/result -PublishLog publish.log -TauriDir tauri
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: size-${{ matrix.variant }}
+          path: out/result/
+          retention-days: 30
+
+  network:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[实测]')
+    needs: build
+    runs-on: windows-2025
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: VibeUsagePanelPoc-x64
+          path: C:\poc\app
+      - name: Does the runtime go online by itself? (offline, online×2 diagnostic levels)
+        shell: pwsh
+        run: ./poc/winui3-panel/ci/network.ps1 -AppDir C:\poc\app -OutDir C:\poc\net -Minutes 10
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: network-results
+          path: C:\poc\net\
+          retention-days: 30

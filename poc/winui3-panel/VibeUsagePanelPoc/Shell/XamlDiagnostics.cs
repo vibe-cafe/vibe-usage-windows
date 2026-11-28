@@ -9,7 +9,7 @@ namespace VibeUsage.PanelPoc.Shell;
 /// panel can't be built, this resolves every resource it relies on and loads
 /// each construct on its own, so the log names the culprit.
 /// </summary>
-internal static class XamlDiagnostics
+internal static partial class XamlDiagnostics
 {
     private const string Ns =
         "xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" " +
