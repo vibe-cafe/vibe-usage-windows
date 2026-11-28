@@ -40,7 +40,7 @@ $ProxyPort = 18888
 $HttpsHosts = @('chatgpt.com', 'github.com', 'registry.npmjs.org')
 $Ours = @('vibe-usage-app.exe', 'node.exe')
 # What the fake service returns for today (fake_vibecafe.py), as the panel shows it.
-$ExpectedCost = '12.34'
+$ExpectedCost = '$ 12.34'
 $ExpectedTokens = '4.2M'
 
 # ConvertFrom-Json may already have turned the ISO stamp into a DateTime.
@@ -115,8 +115,8 @@ function Get-DirectConnections([datetime]$Since) {
         [pscustomobject]@{ event = $_.Id; app = Split-Path "$($_.Properties[1].Value)" -Leaf; dest = "$($_.Properties[5].Value)"; port = "$($_.Properties[6].Value)" }
     } | Where-Object { $_.dest -notin @('127.0.0.1', '::1') })
 }
-function Read-PanelTexts([int]$ProcessId) {
-    return @(& powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$PSScriptRoot/read-texts.ps1" -ProcessId $ProcessId 2>&1 | ForEach-Object { "$_" })
+function Read-PanelTexts([long]$WindowHandle) {
+    return @(& powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$PSScriptRoot/read-texts.ps1" -WindowHandle $WindowHandle 2>&1 | ForEach-Object { "$_" })
 }
 
 $form = New-Object System.Windows.Forms.Form
@@ -194,161 +194,182 @@ foreach ($name in 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY', 'http_pr
     Remove-Item "Env:$name" -ErrorAction SilentlyContinue
 }
 
-# A throwaway CA for the local HTTPS service, trusted machine-wide for this run only
-# (the backend's TLS uses the Windows store; Node keeps its own list and won't trust it).
-$openssl = (Get-Command openssl -ErrorAction SilentlyContinue).Source
-if (-not $openssl) { $openssl = 'C:\Program Files\Git\usr\bin\openssl.exe' }
-$env:MSYS_NO_PATHCONV = '1'
-& $openssl req -x509 -new -nodes -newkey rsa:2048 -keyout "$Certs\ca.key" -out "$Certs\ca.crt" -days 2 -subj '/CN=Vibe Usage chain test CA' `
-    -addext 'basicConstraints=critical,CA:TRUE' -addext 'keyUsage=critical,keyCertSign,cRLSign' 2>&1 | Out-Null
-if (-not (Test-Path "$Certs\ca.crt")) { throw 'no test CA certificate' }
-foreach ($h in $HttpsHosts) {
-    & $openssl req -new -nodes -newkey rsa:2048 -keyout "$Certs\$h.key" -out "$Certs\$h.csr" -subj "/CN=$h" 2>&1 | Out-Null
-    "basicConstraints=CA:FALSE`nkeyUsage=critical,digitalSignature,keyEncipherment`nextendedKeyUsage=serverAuth`nsubjectAltName=DNS:$h`n" |
-        Set-Content "$Certs\$h.ext" -Encoding ascii
-    & $openssl x509 -req -in "$Certs\$h.csr" -CA "$Certs\ca.crt" -CAkey "$Certs\ca.key" -CAcreateserial -out "$Certs\$h.crt" -days 2 -sha256 -extfile "$Certs\$h.ext" 2>&1 | Out-Null
-    if (-not (Test-Path "$Certs\$h.crt")) { throw "no test certificate for $h" }
+$testCa = $null; $fake = $null; $https = $null; $proxy = $null
+try {
+    # A throwaway CA for the local HTTPS service, trusted machine-wide for this run only
+    # (the backend's TLS uses the Windows store; Node keeps its own list and won't trust it).
+    $openssl = (Get-Command openssl -ErrorAction SilentlyContinue).Source
+    if (-not $openssl) { $openssl = 'C:\Program Files\Git\usr\bin\openssl.exe' }
+    $env:MSYS_NO_PATHCONV = '1'
+    & $openssl req -x509 -new -nodes -newkey rsa:2048 -keyout "$Certs\ca.key" -out "$Certs\ca.crt" -days 2 -subj '/CN=Vibe Usage chain test CA' `
+        -addext 'basicConstraints=critical,CA:TRUE' -addext 'keyUsage=critical,keyCertSign,cRLSign' 2>&1 | Out-Null
+    if (-not (Test-Path "$Certs\ca.crt")) { throw 'no test CA certificate' }
+    foreach ($h in $HttpsHosts) {
+        & $openssl req -new -nodes -newkey rsa:2048 -keyout "$Certs\$h.key" -out "$Certs\$h.csr" -subj "/CN=$h" 2>&1 | Out-Null
+        "basicConstraints=CA:FALSE`nkeyUsage=critical,digitalSignature,keyEncipherment`nextendedKeyUsage=serverAuth`nsubjectAltName=DNS:$h`n" |
+            Set-Content "$Certs\$h.ext" -Encoding ascii
+        & $openssl x509 -req -in "$Certs\$h.csr" -CA "$Certs\ca.crt" -CAkey "$Certs\ca.key" -CAcreateserial -out "$Certs\$h.crt" -days 2 -sha256 -extfile "$Certs\$h.ext" 2>&1 | Out-Null
+        if (-not (Test-Path "$Certs\$h.crt")) { throw "no test certificate for $h" }
+    }
+    $testCa = Import-Certificate -FilePath "$Certs\ca.crt" -CertStoreLocation Cert:\LocalMachine\Root
+    Write-Host "test CA trusted: $($testCa.Thumbprint)"
+
+    # The made-up account: the backend reads ~/.vibe-usage/config.json (shared with the CLI).
+    $cfgDir = Join-Path $env:USERPROFILE '.vibe-usage'
+    New-Item -ItemType Directory -Force -Path $cfgDir | Out-Null
+    @{ apiKey = 'vu_chain_test_not_a_real_key'; apiUrl = "http://${FakeHost}:18080"; hostname = 'ci-runner' } |
+        ConvertTo-Json | Set-Content (Join-Path $cfgDir 'config.json') -Encoding utf8
+    @{ tokens = @{ access_token = 'fake-chain-test-token'; account_id = 'acct_chain_test' } } |
+        ConvertTo-Json | Set-Content (Join-Path $Codex 'auth.json') -Encoding utf8
+    $env:CODEX_HOME = $Codex
+    Set-TestHosts @()
+    $fake = Start-Process python -ArgumentList @("$PSScriptRoot\fake_vibecafe.py", '--port', '18080', '--log', $fakeLog) -PassThru -WindowStyle Hidden
+    $httpsArgs = @("$PSScriptRoot\tls_service.py", '--port', '443', '--log', $httpsLog, '--certs', $Certs) + ($HttpsHosts | ForEach-Object { '--host', $_ })
+    $https = Start-Process python -ArgumentList $httpsArgs -PassThru -WindowStyle Hidden
+    Pump 1500
+
+    # --- 1. sign-in start before the proxy is up, then 2. test two through the proxy, then 3. quit --
+    $logA = Join-Path $OutDir 'logs-boot'
+    $shellA = Join-Path $logA 'shell.log'
+    $rectA = Join-Path $OutDir 'panel-rect.txt'
+    $dataA = New-DataDir 'boot' 'auto'
+    Set-SystemProxy $true
+    $t0 = Get-Date
+    $app = Start-App @('--autostart', "--test-data-dir=$dataA", "--test-log-dir=$logA", "--test-rect-file=$rectA")
+    Use-Log $shellA
+    Watch-Wait 20000
+    $l = New-LogLines
+    Add-Result 'A0 外壳加载真后端 DLL 并以开机自启方式初始化' ((Any $l 'backend: native .*autostart=True') -and (Any $l 'status: linked=True')) $l
+
+    $proxy = Start-Process python -ArgumentList @("$PSScriptRoot\logging_proxy.py", '--port', "$ProxyPort", '--log', $proxyLog, '--hold', 'registry.npmjs.org', '--tunnel', 'chatgpt.com=443') -PassThru -WindowStyle Hidden
+    # "Proxy ready" is when the proxy itself logged that its port accepts connections.
+    $tProxy = $null
+    $deadline = (Get-Date).AddSeconds(15)
+    while ((Get-Date) -lt $deadline -and -not $tProxy) {
+        $ready = @(Read-Jsonl $proxyLog $t0 | Where-Object { $_.event -eq 'listening' })
+        if ($ready.Count) { $tProxy = (Get-Stamp $ready[0].t).ToLocalTime() } else { Watch-Wait 100 }
+    }
+    if (-not $tProxy) { throw 'the test proxy did not start listening' }
+    $deadline = (Get-Date).AddSeconds(30)
+    while ((Get-Date) -lt $deadline -and (Read-Jsonl $fakeLog $t0).Count -eq 0) { Watch-Wait 500 }
+    Watch-Wait 15000
+    # 1. Nothing the backend reports as a read or a sync, and no CLI sync child, before the proxy was up.
+    #    (A quota line without a result code is the cached state the backend reports while it waits.)
+    $events = @(Get-Content $shellA -Encoding utf8 | Where-Object {
+        $_ -match 'usage: (read failed|\d+ buckets)|sync: (syncing|error|success)|quotas: refreshing=False .*Codex=(ok|\w+/\w+)' })
+    $beforeProxy = @($events | Where-Object { (Get-LogStamp $_) -lt $tProxy })
+    $syncChildren = @($script:NodeSeen.Values | Where-Object { $_.sync })
+    $earlyChildren = @($syncChildren | Where-Object { $_.started -lt $tProxy })
+    Show-Rows '后端报告的读取和同步（开机自启这一轮）' $events
+    Show-Rows '这一轮出现过的托管 node' @($script:NodeSeen.Values)
+    $fakeA = Read-Jsonl $fakeLog $t0
+    $first = if ($fakeA.Count) { (Get-Stamp $fakeA[0].t).ToLocalTime() } else { $null }
+    Add-Result "A1 开机自启、代理没就绪的整段等待里：后端没有报告任何读取或同步（$($beforeProxy.Count) 条），没有启动同步子进程（$($earlyChildren.Count) 个）" ($beforeProxy.Count -eq 0 -and $earlyChildren.Count -eq 0)
+    Add-Result "A2 代理就绪后才开始：代理 $($tProxy.ToString('HH:mm:ss.fff')) 起，第一次读到用量 $(if ($first) { $first.ToString('HH:mm:ss.fff') } else { '无' })，同步子进程 $($syncChildren.Count) 个都在之后启动" ($first -and $first -ge $tProxy -and $syncChildren.Count -gt 0 -and $events.Count -gt 0)
+
+    $proxyA = Read-Jsonl $proxyLog $t0
+    $httpsA = Read-Jsonl $httpsLog $t0
+    Show-Rows '代理日志（开机自启这一轮）' $proxyA
+    Show-Rows '本机 HTTPS 服务日志（开机自启这一轮）' $httpsA
+    Show-Rows '假服务日志（开机自启这一轮）' $fakeA
+    $usageViaProxy = @($proxyA | Where-Object { $_.process -eq 'vibe-usage-app.exe' -and $_.host -eq $FakeHost -and $_.verdict -eq 'forwarded-to-fake' })
+    $usageAtFake = @($fakeA | Where-Object { $_.path -eq '/api/usage' })
+    Add-Result "T1 主进程读用量走代理：代理转发 $($usageViaProxy.Count) 次，假服务收到的 $($usageAtFake.Count) 次都来自代理进程" ($usageViaProxy.Count -gt 0 -and @($usageAtFake | Where-Object { $_.process -notmatch '^python' }).Count -eq 0)
+    $codexTunnel = @($proxyA | Where-Object { $_.process -eq 'vibe-usage-app.exe' -and $_.host -eq 'chatgpt.com' -and $_.verdict -eq 'tunnel-to-local-https' })
+    $codexReads = @($httpsA | Where-Object { $_.sni -eq 'chatgpt.com' -and $_.path -like '/backend-api/*' })
+    Add-Result "T2 带厂商账号的 Codex 额度请求走代理：主程序 CONNECT chatgpt.com $($codexTunnel.Count) 次，额度端点收到 $($codexReads.Count) 次，都经代理进程、带认证头和账号头" ($codexTunnel.Count -gt 0 -and $codexReads.Count -gt 0 -and @($codexReads | Where-Object { $_.process -notmatch '^python' -or -not $_.authorization -or -not $_.account }).Count -eq 0)
+    $cliViaProxy = @($proxyA | Where-Object { $_.process -eq 'node.exe' -and $_.host -eq 'registry.npmjs.org' })
+    Add-Result "T3 子进程 CLI（node.exe）走代理：$($cliViaProxy.Count) 次 CONNECT registry.npmjs.org" ($cliViaProxy.Count -gt 0)
+
+    # The panel with what the fake service returned (a start of the exe opens it).
+    Focus-Form
+    Start-App @("--test-data-dir=$dataA", "--test-log-dir=$logA") | Out-Null
+    Pump 4000
+    $l = New-LogLines
+    $n = Read-Numbers $rectA
+    if ($n) { Save-Window $n[0] @([int]$n[1], [int]$n[2], [int]$n[3], [int]$n[4]) (Join-Path $OutDir 'chain-panel.png') | Out-Null }
+    $texts = if ($n) { Read-PanelTexts $n[0] } else { @() }
+    Show-Rows '面板窗口里的文字（UI Automation）' $texts
+    $costShown = [bool]($texts | Where-Object { $_ -ceq $ExpectedCost })
+    $tokensShown = [bool]($texts | Where-Object { $_ -ceq $ExpectedTokens })
+    Add-Result "P1 面板打开并画出假服务的当日用量：金额 $ExpectedCost $(if ($costShown) { '在' } else { '不在' })，Token $ExpectedTokens $(if ($tokensShown) { '在' } else { '不在' })" ((Any $l 'show source=Relaunch') -and $costShown -and $tokensShown -and [bool]$n) $l
+    Key 0x1B
+    Pump 800
+
+    # Quit while a managed Node waits on the held registry connection.
+    if ((Get-ManagedNode).Count -eq 0) { Invoke-TrayMenu 2; Pump 4000 }
+    $nodes = Test-QuitThenDelete $app 'U1'
+    Add-Result "U1' 退出时确有托管 node 在跑（$nodes 个）" ($nodes -gt 0)
+    Show-Rows '外壳日志（退出）' (New-LogLines)
+    $proxyA = Read-Jsonl $proxyLog $t0
+    $httpsA = Read-Jsonl $httpsLog $t0
+    Test-Destinations 'T4 经代理这一轮' $t0 $proxyA $httpsA `
+        { param($r) ($r.host -eq $FakeHost -and $r.verdict -eq 'forwarded-to-fake') -or ($r.host -eq 'chatgpt.com' -and $r.process -eq 'vibe-usage-app.exe') -or
+            ($r.host -eq 'registry.npmjs.org' -and $r.process -eq 'node.exe') -or ($r.host -eq 'github.com' -and $r.process -eq 'vibe-usage-app.exe') } `
+        { param($r) $false }
+
+    # --- 2b. no proxy, 「没检测到代理时」= 暂停 -------------------------------------------------------
+    Set-SystemProxy $false
+    Set-TestHosts (@($FakeHost) + $HttpsHosts)
+    Install-App
+    $logB = Join-Path $OutDir 'logs-pause'
+    $dataB = New-DataDir 'pause' 'pause'
+    $t1 = Get-Date
+    $app = Start-App @("--test-data-dir=$dataB", "--test-log-dir=$logB")
+    Use-Log (Join-Path $logB 'shell.log')
+    Pump 25000
+    $l = New-LogLines
+    Show-Rows '外壳日志（暂停）' $l
+    Test-QuitThenDelete $app 'U2' | Out-Null
+    $fakeB = Read-Jsonl $fakeLog $t1
+    $httpsB = Read-Jsonl $httpsLog $t1
+    Show-Rows '假服务日志（暂停）' $fakeB
+    Show-Rows '本机 HTTPS 服务日志（暂停）' $httpsB
+    $vendorB = @($httpsB | Where-Object { $_.sni -eq 'chatgpt.com' })
+    Add-Result "T5 没有代理、设为暂停：chatgpt.com 收到 $($vendorB.Count) 次连接（应为 0：不发带账号的请求，也不发出口检测），额度标「没检测到代理」" ($vendorB.Count -eq 0 -and (Any $l 'Codex=\w+/proxyNotDetected'))
+    $usageDirect = @($fakeB | Where-Object { $_.path -eq '/api/usage' -and $_.process -eq 'vibe-usage-app.exe' })
+    Add-Result "T6 没有代理时，不带厂商账号的用量读取照常直连自家服务：$($usageDirect.Count) 次" ($usageDirect.Count -gt 0)
+    # The test proxy keeps listening with the system proxy switched off: anything still sent to it
+    # (a child holding on to an old proxy setting) would show here and fail.
+    $proxyB = Read-Jsonl $proxyLog $t1
+    Add-Result "T6″ 系统代理关闭后，App 和托管 node 发给测试代理的请求 $(@($proxyB | Where-Object { $_.process -in $Ours }).Count) 次（应为 0）" (@($proxyB | Where-Object { $_.process -in $Ours }).Count -eq 0)
+    Test-Destinations 'T6′ 暂停这一轮' $t1 $proxyB $httpsB { param($r) $false } `
+        { param($r) ($r.sni -eq 'github.com' -and $r.process -eq 'vibe-usage-app.exe' -and -not $r.authorization) -or ($r.sni -eq 'registry.npmjs.org' -and $r.process -eq 'node.exe') }
+
+    # --- 2c. no proxy, 自动: the egress check's answer has no country --------------------------------
+    Install-App
+    $logC = Join-Path $OutDir 'logs-auto'
+    $dataC = New-DataDir 'auto' 'auto'
+    $t2 = Get-Date
+    $app = Start-App @("--test-data-dir=$dataC", "--test-log-dir=$logC")
+    Use-Log (Join-Path $logC 'shell.log')
+    Pump 25000
+    $l = New-LogLines
+    Show-Rows '外壳日志（自动）' $l
+    Test-QuitThenDelete $app 'U3' | Out-Null
+    $httpsC = Read-Jsonl $httpsLog $t2
+    Show-Rows '本机 HTTPS 服务日志（自动）' $httpsC
+    $traces = @($httpsC | Where-Object { $_.sni -eq 'chatgpt.com' -and $_.path -eq '/cdn-cgi/trace' })
+    $anonymous = @($traces | Where-Object { -not $_.authorization -and -not $_.account -and -not $_.cookie })
+    $vendorC = @($httpsC | Where-Object { $_.sni -eq 'chatgpt.com' -and $_.path -ne '/cdn-cgi/trace' })
+    Add-Result "T7 没有代理、出口检测拿到没有国家码的答复：出口检测 $($traces.Count) 次（不带认证、账号头和 Cookie 的 $($anonymous.Count) 次），额度端点 $($vendorC.Count) 次（应为 0），额度标「无法确认网络出口」" ($traces.Count -eq 1 -and $anonymous.Count -eq 1 -and $vendorC.Count -eq 0 -and (Any $l 'Codex=\w+/egressUnconfirmed'))
+    $proxyC = Read-Jsonl $proxyLog $t2
+    Add-Result "T7″ 系统代理关闭后，App 和托管 node 发给测试代理的请求 $(@($proxyC | Where-Object { $_.process -in $Ours }).Count) 次（应为 0）" (@($proxyC | Where-Object { $_.process -in $Ours }).Count -eq 0)
+    Test-Destinations 'T7′ 自动这一轮' $t2 $proxyC $httpsC { param($r) $false } `
+        { param($r) ($r.sni -eq 'chatgpt.com' -and $r.path -eq '/cdn-cgi/trace' -and $r.process -eq 'vibe-usage-app.exe') -or
+            ($r.sni -eq 'github.com' -and $r.process -eq 'vibe-usage-app.exe' -and -not $r.authorization) -or ($r.sni -eq 'registry.npmjs.org' -and $r.process -eq 'node.exe') }
+
+} finally {
+    # --- clean up: the test CA and its private keys must not outlive the run ------------------
+    foreach ($p in $fake, $https, $proxy) { if ($p) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } }
+    Set-SystemProxy $false
+    Set-TestHosts @()
+    if ($testCa) { Remove-Item "Cert:\LocalMachine\Root\$($testCa.Thumbprint)" -ErrorAction SilentlyContinue }
+    Remove-Item $Certs -Recurse -Force -ErrorAction SilentlyContinue
+    $leftRoot = @(Get-ChildItem Cert:\LocalMachine\Root | Where-Object { ($testCa -and $_.Thumbprint -eq $testCa.Thumbprint) -or $_.Subject -match 'Vibe Usage chain test CA' })
+    $leftKeys = Test-Path $Certs
+    Add-Result "C1 清理：测试 CA 已从受信任的根证书删除（按指纹回查剩 $($leftRoot.Count) 张），私钥目录 $(if ($leftKeys) { '仍在' } else { '已删除' })" ($leftRoot.Count -eq 0 -and -not $leftKeys)
+    $form.Close()
+    Write-Summary (Join-Path $OutDir 'chain-results.json')
 }
-$testCa = Import-Certificate -FilePath "$Certs\ca.crt" -CertStoreLocation Cert:\LocalMachine\Root
-Write-Host "test CA trusted: $($testCa.Thumbprint)"
-
-# The made-up account: the backend reads ~/.vibe-usage/config.json (shared with the CLI).
-$cfgDir = Join-Path $env:USERPROFILE '.vibe-usage'
-New-Item -ItemType Directory -Force -Path $cfgDir | Out-Null
-@{ apiKey = 'vu_chain_test_not_a_real_key'; apiUrl = "http://${FakeHost}:18080"; hostname = 'ci-runner' } |
-    ConvertTo-Json | Set-Content (Join-Path $cfgDir 'config.json') -Encoding utf8
-@{ tokens = @{ access_token = 'fake-chain-test-token'; account_id = 'acct_chain_test' } } |
-    ConvertTo-Json | Set-Content (Join-Path $Codex 'auth.json') -Encoding utf8
-$env:CODEX_HOME = $Codex
-Set-TestHosts @()
-$fake = Start-Process python -ArgumentList @("$PSScriptRoot\fake_vibecafe.py", '--port', '18080', '--log', $fakeLog) -PassThru -WindowStyle Hidden
-$httpsArgs = @("$PSScriptRoot\tls_service.py", '--port', '443', '--log', $httpsLog, '--certs', $Certs) + ($HttpsHosts | ForEach-Object { '--host', $_ })
-$https = Start-Process python -ArgumentList $httpsArgs -PassThru -WindowStyle Hidden
-Pump 1500
-
-# --- 1. sign-in start before the proxy is up, then 2. test two through the proxy, then 3. quit --
-$logA = Join-Path $OutDir 'logs-boot'
-$shellA = Join-Path $logA 'shell.log'
-$rectA = Join-Path $OutDir 'panel-rect.txt'
-$dataA = New-DataDir 'boot' 'auto'
-Set-SystemProxy $true
-$t0 = Get-Date
-$app = Start-App @('--autostart', "--test-data-dir=$dataA", "--test-log-dir=$logA", "--test-rect-file=$rectA")
-Use-Log $shellA
-Watch-Wait 20000
-$l = New-LogLines
-Add-Result 'A0 外壳加载真后端 DLL 并以开机自启方式初始化' ((Any $l 'backend: native .*autostart=True') -and (Any $l 'status: linked=True')) $l
-
-$tProxy = Get-Date
-$proxy = Start-Process python -ArgumentList @("$PSScriptRoot\logging_proxy.py", '--port', "$ProxyPort", '--log', $proxyLog, '--hold', 'registry.npmjs.org', '--tunnel', 'chatgpt.com=443') -PassThru -WindowStyle Hidden
-$deadline = (Get-Date).AddSeconds(30)
-while ((Get-Date) -lt $deadline -and (Read-Jsonl $fakeLog $t0).Count -eq 0) { Watch-Wait 500 }
-Watch-Wait 15000
-# 1. Nothing the backend reports as a read or a sync, and no CLI sync child, before the proxy was up.
-#    (A quota line without a result code is the cached state the backend reports while it waits.)
-$events = @(Get-Content $shellA -Encoding utf8 | Where-Object {
-    $_ -match 'usage: (read failed|\d+ buckets)|sync: (syncing|error|success)|quotas: refreshing=False .*Codex=(ok|\w+/\w+)' })
-$beforeProxy = @($events | Where-Object { (Get-LogStamp $_) -lt $tProxy })
-$syncChildren = @($script:NodeSeen.Values | Where-Object { $_.sync })
-$earlyChildren = @($syncChildren | Where-Object { $_.started -lt $tProxy })
-Show-Rows '后端报告的读取和同步（开机自启这一轮）' $events
-Show-Rows '这一轮出现过的托管 node' @($script:NodeSeen.Values)
-$fakeA = Read-Jsonl $fakeLog $t0
-$first = if ($fakeA.Count) { (Get-Stamp $fakeA[0].t).ToLocalTime() } else { $null }
-Add-Result "A1 开机自启、代理没就绪的整段等待里：后端没有报告任何读取或同步（$($beforeProxy.Count) 条），没有启动同步子进程（$($earlyChildren.Count) 个）" ($beforeProxy.Count -eq 0 -and $earlyChildren.Count -eq 0)
-Add-Result "A2 代理就绪后才开始：代理 $($tProxy.ToString('HH:mm:ss.fff')) 起，第一次读到用量 $(if ($first) { $first.ToString('HH:mm:ss.fff') } else { '无' })，同步子进程 $($syncChildren.Count) 个都在之后启动" ($first -and $first -ge $tProxy -and $syncChildren.Count -gt 0 -and $events.Count -gt 0)
-
-$proxyA = Read-Jsonl $proxyLog $t0
-$httpsA = Read-Jsonl $httpsLog $t0
-Show-Rows '代理日志（开机自启这一轮）' $proxyA
-Show-Rows '本机 HTTPS 服务日志（开机自启这一轮）' $httpsA
-Show-Rows '假服务日志（开机自启这一轮）' $fakeA
-$usageViaProxy = @($proxyA | Where-Object { $_.process -eq 'vibe-usage-app.exe' -and $_.host -eq $FakeHost -and $_.verdict -eq 'forwarded-to-fake' })
-$usageAtFake = @($fakeA | Where-Object { $_.path -eq '/api/usage' })
-Add-Result "T1 主进程读用量走代理：代理转发 $($usageViaProxy.Count) 次，假服务收到的 $($usageAtFake.Count) 次都来自代理进程" ($usageViaProxy.Count -gt 0 -and @($usageAtFake | Where-Object { $_.process -notmatch '^python' }).Count -eq 0)
-$codexTunnel = @($proxyA | Where-Object { $_.process -eq 'vibe-usage-app.exe' -and $_.host -eq 'chatgpt.com' -and $_.verdict -eq 'tunnel-to-local-https' })
-$codexReads = @($httpsA | Where-Object { $_.sni -eq 'chatgpt.com' -and $_.path -like '/backend-api/*' })
-Add-Result "T2 带厂商账号的 Codex 额度请求走代理：主程序 CONNECT chatgpt.com $($codexTunnel.Count) 次，额度端点收到 $($codexReads.Count) 次，都经代理进程、带认证头和账号头" ($codexTunnel.Count -gt 0 -and $codexReads.Count -gt 0 -and @($codexReads | Where-Object { $_.process -notmatch '^python' -or -not $_.authorization -or -not $_.account }).Count -eq 0)
-$cliViaProxy = @($proxyA | Where-Object { $_.process -eq 'node.exe' -and $_.host -eq 'registry.npmjs.org' })
-Add-Result "T3 子进程 CLI（node.exe）走代理：$($cliViaProxy.Count) 次 CONNECT registry.npmjs.org" ($cliViaProxy.Count -gt 0)
-
-# The panel with what the fake service returned (a start of the exe opens it).
-Focus-Form
-Start-App @("--test-data-dir=$dataA", "--test-log-dir=$logA") | Out-Null
-Pump 4000
-$l = New-LogLines
-$n = Read-Numbers $rectA
-if ($n) { Save-Window $n[0] @([int]$n[1], [int]$n[2], [int]$n[3], [int]$n[4]) (Join-Path $OutDir 'chain-panel.png') | Out-Null }
-$texts = Read-PanelTexts $app.Id
-Show-Rows '面板上的文字（UI Automation）' $texts
-$costShown = [bool]($texts | Where-Object { $_ -match [regex]::Escape($ExpectedCost) })
-$tokensShown = [bool]($texts | Where-Object { $_.Trim() -eq $ExpectedTokens })
-Add-Result "P1 面板打开并画出假服务的当日用量：金额 $ExpectedCost $(if ($costShown) { '在' } else { '不在' })，Token $ExpectedTokens $(if ($tokensShown) { '在' } else { '不在' })" ((Any $l 'show source=Relaunch') -and $costShown -and $tokensShown -and [bool]$n) $l
-Key 0x1B
-Pump 800
-
-# Quit while a managed Node waits on the held registry connection.
-if ((Get-ManagedNode).Count -eq 0) { Invoke-TrayMenu 2; Pump 4000 }
-$nodes = Test-QuitThenDelete $app 'U1'
-Add-Result "U1' 退出时确有托管 node 在跑（$nodes 个）" ($nodes -gt 0)
-Show-Rows '外壳日志（退出）' (New-LogLines)
-Stop-Process -Id $proxy.Id -Force -ErrorAction SilentlyContinue
-$proxyA = Read-Jsonl $proxyLog $t0
-$httpsA = Read-Jsonl $httpsLog $t0
-Test-Destinations 'T4 经代理这一轮' $t0 $proxyA $httpsA `
-    { param($r) ($r.host -eq $FakeHost -and $r.verdict -eq 'forwarded-to-fake') -or ($r.host -eq 'chatgpt.com' -and $r.process -eq 'vibe-usage-app.exe') -or
-        ($r.host -eq 'registry.npmjs.org' -and $r.process -eq 'node.exe') -or ($r.host -eq 'github.com' -and $r.process -eq 'vibe-usage-app.exe') } `
-    { param($r) $false }
-
-# --- 2b. no proxy, 「没检测到代理时」= 暂停 -------------------------------------------------------
-Set-SystemProxy $false
-Set-TestHosts (@($FakeHost) + $HttpsHosts)
-Install-App
-$logB = Join-Path $OutDir 'logs-pause'
-$dataB = New-DataDir 'pause' 'pause'
-$t1 = Get-Date
-$app = Start-App @("--test-data-dir=$dataB", "--test-log-dir=$logB")
-Use-Log (Join-Path $logB 'shell.log')
-Pump 25000
-$l = New-LogLines
-Show-Rows '外壳日志（暂停）' $l
-Test-QuitThenDelete $app 'U2' | Out-Null
-$fakeB = Read-Jsonl $fakeLog $t1
-$httpsB = Read-Jsonl $httpsLog $t1
-Show-Rows '假服务日志（暂停）' $fakeB
-Show-Rows '本机 HTTPS 服务日志（暂停）' $httpsB
-$vendorB = @($httpsB | Where-Object { $_.sni -eq 'chatgpt.com' })
-Add-Result "T5 没有代理、设为暂停：chatgpt.com 收到 $($vendorB.Count) 次连接（应为 0：不发带账号的请求，也不发出口检测），额度标「没检测到代理」" ($vendorB.Count -eq 0 -and (Any $l 'Codex=\w+/proxyNotDetected'))
-$usageDirect = @($fakeB | Where-Object { $_.path -eq '/api/usage' -and $_.process -eq 'vibe-usage-app.exe' })
-Add-Result "T6 没有代理时，不带厂商账号的用量读取照常直连自家服务：$($usageDirect.Count) 次" ($usageDirect.Count -gt 0)
-Test-Destinations 'T6′ 暂停这一轮' $t1 @() $httpsB { param($r) $false } `
-    { param($r) ($r.sni -eq 'github.com' -and $r.process -eq 'vibe-usage-app.exe' -and -not $r.authorization) -or ($r.sni -eq 'registry.npmjs.org' -and $r.process -eq 'node.exe') }
-
-# --- 2c. no proxy, 自动: the egress check's answer has no country --------------------------------
-Install-App
-$logC = Join-Path $OutDir 'logs-auto'
-$dataC = New-DataDir 'auto' 'auto'
-$t2 = Get-Date
-$app = Start-App @("--test-data-dir=$dataC", "--test-log-dir=$logC")
-Use-Log (Join-Path $logC 'shell.log')
-Pump 25000
-$l = New-LogLines
-Show-Rows '外壳日志（自动）' $l
-Test-QuitThenDelete $app 'U3' | Out-Null
-$httpsC = Read-Jsonl $httpsLog $t2
-Show-Rows '本机 HTTPS 服务日志（自动）' $httpsC
-$traces = @($httpsC | Where-Object { $_.sni -eq 'chatgpt.com' -and $_.path -eq '/cdn-cgi/trace' })
-$anonymous = @($traces | Where-Object { -not $_.authorization -and -not $_.account -and -not $_.cookie })
-$vendorC = @($httpsC | Where-Object { $_.sni -eq 'chatgpt.com' -and $_.path -ne '/cdn-cgi/trace' })
-Add-Result "T7 没有代理、出口检测拿到没有国家码的答复：出口检测 $($traces.Count) 次（不带认证、账号头和 Cookie 的 $($anonymous.Count) 次），额度端点 $($vendorC.Count) 次（应为 0），额度标「无法确认网络出口」" ($traces.Count -ge 1 -and $anonymous.Count -eq $traces.Count -and $vendorC.Count -eq 0 -and (Any $l 'Codex=\w+/egressUnconfirmed'))
-Test-Destinations 'T7′ 自动这一轮' $t2 @() $httpsC { param($r) $false } `
-    { param($r) ($r.sni -eq 'chatgpt.com' -and $r.path -eq '/cdn-cgi/trace' -and $r.process -eq 'vibe-usage-app.exe') -or
-        ($r.sni -eq 'github.com' -and $r.process -eq 'vibe-usage-app.exe' -and -not $r.authorization) -or ($r.sni -eq 'registry.npmjs.org' -and $r.process -eq 'node.exe') }
-
-# --- clean up -------------------------------------------------------------------------------------
-Stop-Process -Id $fake.Id, $https.Id -Force -ErrorAction SilentlyContinue
-Remove-Item "Cert:\LocalMachine\Root\$($testCa.Thumbprint)" -ErrorAction SilentlyContinue
-Set-TestHosts @()
-$form.Close()
-Write-Summary (Join-Path $OutDir 'chain-results.json')
 if ($script:Results | Where-Object { -not $_.Pass }) { exit 1 }

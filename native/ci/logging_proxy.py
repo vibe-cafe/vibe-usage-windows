@@ -107,4 +107,7 @@ class Server(socketserver.ThreadingTCPServer):
     allow_reuse_address = True
 
 
-Server(('127.0.0.1', args.port), Handler).serve_forever()
+server = Server(('127.0.0.1', args.port), Handler)
+# The moment the port accepts connections: the test's "proxy ready" time.
+log.write(event='listening', port=args.port)
+server.serve_forever()
