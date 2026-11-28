@@ -83,6 +83,12 @@ public sealed partial class PanelWindow : Window
         Win32.SetDwmInt(Hwnd, Win32.DWMWA_BORDER_COLOR, 0x003D3A38);
 
         RootGrid.Background = new SolidColorBrush(Mt.Panel);
+        // Keep the user's input method as it is while the panel has focus (see KeepInputMethod).
+        RootGrid.GotFocus += (_, _) => KeepInputMethod("focus");
+        Activated += (_, e) =>
+        {
+            if (e.WindowActivationState != WindowActivationState.Deactivated) KeepInputMethod("activated");
+        };
         ContentStack.SizeChanged += (_, _) => ContentHeightChanged?.Invoke();
 
         _enabled = string.IsNullOrEmpty(options.Only)
@@ -211,6 +217,69 @@ public sealed partial class PanelWindow : Window
         await Task.Delay(1500);
         _syncing = false;
         RenderFooter();
+    }
+
+    // -- input method ---------------------------------------------------------------------------
+
+    private string _imeLast = "";
+
+    /// <summary>
+    /// WinUI turns the input method off for its window while keyboard focus is
+    /// on something that is not a text box. Opening the panel moves focus to
+    /// it, so the taskbar's 中/英 indicator showed the IME as off (英) and
+    /// flipped back (中) when the panel closed: every tray click "switched"
+    /// it. The panel has no text input, so it gives its windows the thread's
+    /// default input context again after each activation and focus change;
+    /// the indicator then keeps showing the user's own state. The log records
+    /// the IMM context and TSF focus before and after, for the real-machine check.
+    /// </summary>
+    public void KeepInputMethod(string when)
+    {
+        try
+        {
+            var focus = Win32.GetFocus();
+            string before = ImeState(focus);
+            bool ok = Win32.ImmAssociateContextEx(Hwnd, IntPtr.Zero, Win32.IACE_CHILDREN | Win32.IACE_DEFAULT);
+            string after = ImeState(Win32.GetFocus());
+            string line = $"ime {when}: focus={Win32.ClassName(focus)} before[{before}] associateDefault={ok} after[{after}]";
+            if (line == _imeLast) return;
+            _imeLast = line;
+            PocLog.Write(line);
+        }
+        catch (Exception ex)
+        {
+            PocLog.Write("ime: " + ex.Message);
+        }
+    }
+
+    private static string ImeState(IntPtr hwnd)
+    {
+        var himc = Win32.ImmGetContext(hwnd);
+        bool has = himc != IntPtr.Zero;
+        if (has) Win32.ImmReleaseContext(hwnd, himc);
+        return $"imm={(has ? "context" : "none")} tsf={TsfFocus()}";
+    }
+
+    [System.Runtime.InteropServices.DllImport("msctf.dll")]
+    private static extern int TF_GetThreadMgr(out IntPtr threadMgr);
+
+    /// <summary>Whether TSF has a focused document on this thread (ITfThreadMgr::GetFocus, vtable slot 7).</summary>
+    private static unsafe string TsfFocus()
+    {
+        if (TF_GetThreadMgr(out var tim) != 0 || tim == IntPtr.Zero) return "no-thread-mgr";
+        try
+        {
+            var vtbl = *(IntPtr**)tim;
+            var getFocus = (delegate* unmanaged[Stdcall]<IntPtr, IntPtr*, int>)vtbl[7];
+            IntPtr doc = IntPtr.Zero;
+            int hr = getFocus(tim, &doc);
+            if (doc != IntPtr.Zero) System.Runtime.InteropServices.Marshal.Release(doc);
+            return hr != 0 ? $"hr=0x{hr:X8}" : doc != IntPtr.Zero ? "doc" : "no-doc";
+        }
+        finally
+        {
+            System.Runtime.InteropServices.Marshal.Release(tim);
+        }
     }
 
     // -- rendering helpers ----------------------------------------------------------------------

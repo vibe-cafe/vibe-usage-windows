@@ -105,22 +105,63 @@ internal sealed class TrayIcon : IDisposable
         Win32.SetMenuDefaultItem(menu, defaultId, 0);
         DarkMenus.Refresh();
 
-        uint align = edge switch
-        {
-            TaskbarEdge.Top => Win32.TPM_TOPALIGN | Win32.TPM_RIGHTALIGN,
-            TaskbarEdge.Left => Win32.TPM_LEFTALIGN | Win32.TPM_BOTTOMALIGN,
-            TaskbarEdge.Right => Win32.TPM_RIGHTALIGN | Win32.TPM_BOTTOMALIGN,
-            _ => Win32.TPM_BOTTOMALIGN | Win32.TPM_RIGHTALIGN,
-        };
-
+        // Windows 11 opens tray menus against the taskbar's inner edge, at the
+        // click. The anchor from WM_CONTEXTMENU sits inside the taskbar, so the
+        // menu is aligned to the taskbar edge (the work area's edge, or the
+        // icon's edge when the taskbar auto-hides), and the taskbar strip is
+        // passed as the excluded rectangle so the menu never covers it. All in
+        // physical pixels (per-monitor aware), the same space as the anchor,
+        // the monitor info and TrackPopupMenuEx, so it holds at any scale.
+        var (x, y, flags, exclude) = MenuPlacement(anchor, edge);
         bool fg = Win32.SetForegroundWindow(Hwnd);
-        int cmd = Win32.TrackPopupMenuEx(menu,
-            Win32.TPM_RETURNCMD | Win32.TPM_RIGHTBUTTON | Win32.TPM_NONOTIFY | Win32.TPM_WORKAREA | align,
-            anchor.X, anchor.Y, Hwnd, IntPtr.Zero);
+        var tpm = new Win32.TPMPARAMS { cbSize = (uint)Marshal.SizeOf<Win32.TPMPARAMS>(), rcExclude = exclude };
+        int cmd = Win32.TrackPopupMenuExWithParams(menu,
+            Win32.TPM_RETURNCMD | Win32.TPM_RIGHTBUTTON | Win32.TPM_NONOTIFY | flags, x, y, Hwnd, ref tpm);
         Win32.PostMessageW(Hwnd, Win32.WM_NULL, IntPtr.Zero, IntPtr.Zero);
         Win32.DestroyMenu(menu);
-        PocLog.Write($"menu: owner foreground={fg} anchor={anchor} command={cmd}");
+        PocLog.Write($"menu: owner foreground={fg} anchor={anchor} at=({x},{y}) edge={edge} exclude={exclude} command={cmd}");
         return (uint)Math.Max(cmd, 0);
+    }
+
+    private (int X, int Y, uint Flags, Win32.RECT Exclude) MenuPlacement(Win32.POINT anchor, TaskbarEdge edge)
+    {
+        var mon = Win32.MonitorFromPoint(anchor, Win32.MONITOR_DEFAULTTONEAREST);
+        if (!Win32.TryMonitorInfo(mon, out var mi))
+            return (anchor.X, anchor.Y, Win32.TPM_BOTTOMALIGN | Win32.TPM_LEFTALIGN, default);
+        var m = mi.rcMonitor;
+        var w = mi.rcWork;
+        var icon = TryGetIconRect();
+        uint horizontal = Win32.GetSystemMetrics(Win32.SM_MENUDROPALIGNMENT) != 0 ? Win32.TPM_RIGHTALIGN : Win32.TPM_LEFTALIGN;
+        switch (edge)
+        {
+            case TaskbarEdge.Top:
+            {
+                int y = icon is Win32.RECT r && r.Bottom > w.Top ? Math.Max(w.Top, r.Bottom) : w.Top;
+                return (anchor.X, y, Win32.TPM_TOPALIGN | horizontal | Win32.TPM_VERTICAL,
+                    new Win32.RECT { Left = m.Left, Top = m.Top, Right = m.Right, Bottom = y });
+            }
+            case TaskbarEdge.Left:
+            {
+                int x = icon is Win32.RECT r && r.Right > w.Left ? Math.Max(w.Left, r.Right) : w.Left;
+                return (x, anchor.Y, Win32.TPM_LEFTALIGN | Win32.TPM_TOPALIGN | Win32.TPM_HORIZONTAL,
+                    new Win32.RECT { Left = m.Left, Top = m.Top, Right = x, Bottom = m.Bottom });
+            }
+            case TaskbarEdge.Right:
+            {
+                int x = icon is Win32.RECT r && r.Left < w.Right ? Math.Min(w.Right, r.Left) : w.Right;
+                return (x, anchor.Y, Win32.TPM_RIGHTALIGN | Win32.TPM_TOPALIGN | Win32.TPM_HORIZONTAL,
+                    new Win32.RECT { Left = x, Top = m.Top, Right = m.Right, Bottom = m.Bottom });
+            }
+            default:
+            {
+                // Bottom taskbar. An icon in the overflow flyout or on an
+                // auto-hidden taskbar sits above the work area's bottom: then
+                // the menu goes above the icon.
+                int y = icon is Win32.RECT r && r.Top < w.Bottom && r.Contains(anchor) ? r.Top : w.Bottom;
+                return (anchor.X, y, Win32.TPM_BOTTOMALIGN | horizontal | Win32.TPM_VERTICAL,
+                    new Win32.RECT { Left = m.Left, Top = y, Right = m.Right, Bottom = m.Bottom });
+            }
+        }
     }
 
     private IntPtr WndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)

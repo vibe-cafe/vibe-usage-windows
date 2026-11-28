@@ -60,6 +60,13 @@ internal static class Win32
     public const uint TPM_NONOTIFY = 0x80;
     public const uint TPM_RETURNCMD = 0x100;
     public const uint TPM_WORKAREA = 0x10000;
+    public const uint TPM_VERTICAL = 0x40;
+    public const uint TPM_HORIZONTAL = 0x0;
+    public const int SM_MENUDROPALIGNMENT = 40;
+
+    // -- input method ---------------------------------------------------------------------
+    public const uint IACE_CHILDREN = 0x1;
+    public const uint IACE_DEFAULT = 0x10;
 
     // -- win events -------------------------------------------------------------------
     public const uint EVENT_SYSTEM_FOREGROUND = 0x0003;
@@ -142,6 +149,13 @@ internal static class Win32
         public uint dwInfoFlags;
         public Guid guidItem;
         public IntPtr hBalloonIcon;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct TPMPARAMS
+    {
+        public uint cbSize;
+        public RECT rcExclude;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -235,6 +249,24 @@ internal static class Win32
 
     [DllImport("user32.dll")]
     public static extern int TrackPopupMenuEx(IntPtr menu, uint flags, int x, int y, IntPtr hWnd, IntPtr tpm);
+
+    [DllImport("user32.dll", EntryPoint = "TrackPopupMenuEx")]
+    public static extern int TrackPopupMenuExWithParams(IntPtr menu, uint flags, int x, int y, IntPtr hWnd, ref TPMPARAMS tpm);
+
+    [DllImport("user32.dll")]
+    public static extern int GetSystemMetrics(int index);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetFocus();
+
+    [DllImport("imm32.dll")]
+    public static extern bool ImmAssociateContextEx(IntPtr hWnd, IntPtr himc, uint flags);
+
+    [DllImport("imm32.dll")]
+    public static extern IntPtr ImmGetContext(IntPtr hWnd);
+
+    [DllImport("imm32.dll")]
+    public static extern bool ImmReleaseContext(IntPtr hWnd, IntPtr himc);
 
     [DllImport("user32.dll")]
     public static extern bool DestroyMenu(IntPtr menu);

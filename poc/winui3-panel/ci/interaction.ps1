@@ -6,11 +6,13 @@
 # real-machine checklist still decides.
 param(
     [Parameter(Mandatory = $true)][string]$AppDir,
-    [Parameter(Mandatory = $true)][string]$OutDir
+    [Parameter(Mandatory = $true)][string]$OutDir,
+    [string]$Tag = '',
+    [switch]$ReportOnly
 )
 
 $ErrorActionPreference = 'Stop'
-$logDir = Join-Path $OutDir 'interaction-logs'
+$logDir = Join-Path $OutDir "interaction-logs$Tag"
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 $log = Join-Path $logDir 'panel-poc.log'
 $exe = Join-Path $AppDir 'VibeUsagePanelPoc.exe'
@@ -24,6 +26,9 @@ public static class PocInput {
     [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
     [StructLayout(LayoutKind.Sequential)] public struct NOTIFYICONIDENTIFIER { public uint cbSize; public IntPtr hWnd; public uint uID; public Guid guidItem; }
     [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
+    [DllImport("user32.dll")] public static extern bool SetProcessDpiAwarenessContext(IntPtr value);
+    [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
+    public static int[] WindowRect(IntPtr h) { RECT r; return GetWindowRect(h, out r) ? new[] { r.Left, r.Top, r.Right, r.Bottom } : null; }
     [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll")] public static extern void mouse_event(uint flags, int dx, int dy, uint data, UIntPtr extra);
     [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
@@ -39,7 +44,8 @@ public static class PocInput {
     }
 }
 "@
-[PocInput]::SetProcessDPIAware() | Out-Null
+# Per-monitor aware, so coordinates are physical pixels at any scale, like the app's.
+if (-not [PocInput]::SetProcessDpiAwarenessContext([IntPtr](-4))) { [PocInput]::SetProcessDPIAware() | Out-Null }
 
 function Click([int]$x, [int]$y, [switch]$Right, [int]$HoldMs = 60) {
     [PocInput]::SetCursorPos($x, $y) | Out-Null
@@ -63,7 +69,7 @@ function Save-Shot([string]$name) {
     $g = [System.Drawing.Graphics]::FromImage($bmp)
     $g.CopyFromScreen($b.Left, $b.Top, 0, 0, $bmp.Size)
     $g.Dispose()
-    $bmp.Save((Join-Path $OutDir "$name.png"), [System.Drawing.Imaging.ImageFormat]::Png)
+    $bmp.Save((Join-Path $OutDir "$Tag$name.png"), [System.Drawing.Imaging.ImageFormat]::Png)
     $bmp.Dispose()
 }
 
@@ -108,7 +114,8 @@ function Promote-Icon {
     return $done
 }
 
-$appArgs = @('--autostart', "--log-dir=$logDir", "--icon-file=$iconFile")
+$panelRectFile = Join-Path $OutDir "panel-rect$Tag.txt"
+$appArgs = @('--autostart', "--log-dir=$logDir", "--icon-file=$iconFile", "--rect-file=$panelRectFile")
 $proc = Start-Process -FilePath $exe -ArgumentList $appArgs -PassThru
 Start-Sleep -Seconds 5
 if (Promote-Icon) {
@@ -135,9 +142,23 @@ $ix = $rect[0] + [int]($rect[2] / 2)
 $iy = $rect[1] + [int]($rect[3] / 2)
 Write-Host "tray icon at $($rect -join ' ') -> click ($ix,$iy)"
 
+$work = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+Write-Host "work area: $($work.Left),$($work.Top) - $($work.Right),$($work.Bottom)"
+
 # A. click the icon: opens
 Click $ix $iy
 Start-Sleep -Milliseconds 1500
+# A'. the visible panel sits 12 DIP above the taskbar and inside the right edge.
+$dpi = 96
+$showLine = Get-Content $log | Where-Object { $_ -match 'show source=Mouse' } | Select-Object -Last 1
+if ($showLine -match 'dpi=(\d+)') { $dpi = [int]$Matches[1] }
+$m = [Math]::Round(12 * $dpi / 96)
+if (Test-Path $panelRectFile) {
+    $pr = (Get-Content $panelRectFile -Raw).Trim().Split(' ') | ForEach-Object { [int]$_ }
+    $pBottom = $pr[1] + $pr[3]; $pRight = $pr[0] + $pr[2]
+    Write-Host "panel visible rect $($pr -join ' ') (dpi $dpi): bottom gap $($work.Bottom - $pBottom), right gap $($work.Right - $pRight), expected $m"
+    $results.Add([pscustomobject]@{ Step = "A' 面板离任务栏和屏幕右边各 12（按缩放 $m 像素）"; Pass = ([Math]::Abs($work.Bottom - $pBottom - $m) -le 1 -and [Math]::Abs($work.Right - $pRight - $m) -le 1) })
+}
 Save-Shot '5-click-icon-open'
 Check 'A 点托盘图标：面板弹出' (New-LogLines) 'show source=Mouse'
 
@@ -184,18 +205,34 @@ $shows = @($lines | Where-Object { $_ -match 'show source=Mouse' }).Count
 $hides = @($lines | Where-Object { $_ -match 'hide reason=' }).Count
 $results.Add([pscustomobject]@{ Step = "F 隔 1 秒连点 6 次：开 $shows 次 / 关 $hides 次（应各 3 次）"; Pass = ($shows -eq 3 -and $hides -eq 3) })
 
-# G. right-click: native menu
+# G. right-click: native menu, its bottom on the taskbar's top edge, at the click
 Click $ix $iy -Right
 Start-Sleep -Milliseconds 1200
 Save-Shot '7-right-click-menu'
+$menu = [PocInput]::FindWindowW('#32768', $null)
+if ($menu -ne [IntPtr]::Zero) {
+    $mr = [PocInput]::WindowRect($menu)
+    Write-Host "menu rect $($mr -join ' '); taskbar top (work bottom) $($work.Bottom); click x $ix"
+    $results.Add([pscustomobject]@{ Step = "G' 右键菜单底边贴着任务栏上沿、在点击处（菜单底 $($mr[3]) / 任务栏上沿 $($work.Bottom)）"; Pass = ([Math]::Abs($mr[3] - $work.Bottom) -le 2 -and $mr[0] -le $ix + 2 -and $mr[2] -ge $ix - 2) })
+} else {
+    $results.Add([pscustomobject]@{ Step = "G' 右键菜单窗口没找到"; Pass = $false })
+}
 Key 0x1B
 Start-Sleep -Milliseconds 600
 Check 'G 右键：原生菜单' (New-LogLines) 'menu: owner foreground=True'
 
 Stop-Process -Id $proc.Id -Force
+
+# H. while the panel had focus, its window kept an input context (the IME stays as the user had it).
+$imeLines = @(Get-Content $log | Where-Object { $_ -match 'ime (show|show-settled|focus|activated):' })
+$imeLines | Select-Object -First 6 | ForEach-Object { Write-Host "      $_" }
+$imeOk = $imeLines.Count -gt 0 -and -not ($imeLines | Where-Object { $_ -match 'after\[imm=none' })
+$results.Add([pscustomobject]@{ Step = 'H 面板有焦点时输入法上下文保留（日志 after[imm=context]）'; Pass = $imeOk })
+
 Write-Host ''
 Write-Host '----- summary -----'
 $results | ForEach-Object { Write-Host ("{0}  {1}" -f ($(if ($_.Pass) { 'PASS' } else { 'FAIL' })), $_.Step) }
-$results | ConvertTo-Json | Set-Content (Join-Path $OutDir 'interaction-results.json') -Encoding utf8
+$results | ConvertTo-Json | Set-Content (Join-Path $OutDir "interaction-results$Tag.json") -Encoding utf8
 Write-Host '----- interaction log -----'
 Get-Content $log | ForEach-Object { Write-Host $_ }
+if (-not $ReportOnly -and ($results | Where-Object { -not $_.Pass })) { exit 1 }

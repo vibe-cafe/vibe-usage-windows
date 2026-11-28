@@ -188,6 +188,7 @@ internal sealed class FlyoutController : IDisposable
         InstallForegroundHook();
         _panel.PlayEntrance(target.Edge);
         _panel.FocusForOpen(source == ShowSource.Keyboard);
+        _panel.KeepInputMethod("show");
 
         var actual = _panel.VisibleRect();
         PocLog.Write($"show source={source} anchor={(anchor?.ToString() ?? "none")} icon={(_tray.TryGetIconRect()?.ToString() ?? "none")} edge={target.Edge} dpi={target.Dpi} frame={_frame} contentDip={_panel.MeasureDesiredHeightDip()} " +
@@ -200,6 +201,7 @@ internal sealed class FlyoutController : IDisposable
             if (!_visible) return;
             ApplyRect(ComputeRect(_anchor).Rect);
             WriteRectFile(_panel.VisibleRect());
+            _panel.KeepInputMethod("show-settled");
         });
     }
 

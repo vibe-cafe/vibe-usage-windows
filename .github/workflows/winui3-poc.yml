@@ -88,6 +88,17 @@ jobs:
       - name: Click the tray icon (smoke test, runner VM)
         shell: pwsh
         run: ./poc/winui3-panel/ci/interaction.ps1 -AppDir C:\poc\app -OutDir C:\poc\shots
+      - name: Same checks at 150 % scaling (best effort, report only)
+        if: always()
+        shell: pwsh
+        run: |
+          ./poc/winui3-panel/ci/set-dpi.ps1 -Percent 150
+          if ($LASTEXITCODE -eq 0) {
+            ./poc/winui3-panel/ci/interaction.ps1 -AppDir C:\poc\app -OutDir C:\poc\shots -Tag '-150' -ReportOnly
+          } else {
+            Write-Host '::warning::could not switch the runner to 150 %; only 100 % was checked'
+          }
+          exit 0
       - uses: actions/upload-artifact@v7
         if: always()
         with:
