@@ -146,6 +146,24 @@ public class TrayRetryTests
 public class LaunchOptionsTests
 {
     [Fact]
+    public void TheRealBackendUnlessAskedForTheFakeOne()
+    {
+        Assert.False(LaunchOptions.Parse([]).FakeBackend);
+        Assert.True(LaunchOptions.Parse(["--fake-backend"]).FakeBackend);
+        var demo = LaunchOptions.Parse(["--test-demo=single"]);
+        Assert.True(demo.FakeBackend);
+        Assert.Equal(DemoScenario.Single, demo.Demo);
+    }
+
+    [Fact]
+    public void TestDataDirKeepsTheBackendAwayFromTheUsersFolders()
+    {
+        Assert.Equal(("R", "L"), LaunchOptions.Parse([]).DataFolders("R", "L"));
+        var (roaming, local) = LaunchOptions.Parse(["--test-data-dir=/tmp/vu"]).DataFolders("R", "L");
+        Assert.Equal((System.IO.Path.Combine("/tmp/vu", "roaming"), System.IO.Path.Combine("/tmp/vu", "local")), (roaming, local));
+    }
+
+    [Fact]
     public void PlainStartIsAUserStart()
     {
         var o = LaunchOptions.Parse([]);

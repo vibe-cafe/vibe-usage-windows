@@ -152,6 +152,9 @@ function Add-Result([string]$Step, [bool]$Pass, [string[]]$Lines = @()) {
     $Lines | ForEach-Object { Write-Host "      $_" }
 }
 
+function Any([string[]]$Lines, [string]$Pattern) { return [bool]($Lines | Where-Object { $_ -match $Pattern }) }
+function Count([string[]]$Lines, [string]$Pattern) { return @($Lines | Where-Object { $_ -match $Pattern }).Count }
+
 function Check([string]$Step, [string[]]$Lines, [string]$MustMatch, [string]$MustNotMatch = $null) {
     $ok = [bool]($Lines | Where-Object { $_ -match $MustMatch })
     if ($ok -and $MustNotMatch) { $ok = -not [bool]($Lines | Where-Object { $_ -match $MustNotMatch }) }

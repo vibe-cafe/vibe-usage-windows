@@ -24,7 +24,7 @@ function Invoke-Case([string]$Name, [string[]]$Extra) {
     Stop-App
     $rect = Join-Path $OutDir "$Tag-$Name.rect.txt"
     Remove-Item $rect -ErrorAction SilentlyContinue
-    $appArgs = @('--test-pin', "--test-rect-file=$rect", "--test-log-dir=$logDir") + $Extra
+    $appArgs = @('--fake-backend', '--test-pin', "--test-rect-file=$rect", "--test-log-dir=$logDir") + $Extra
     $proc = Start-App $appArgs
     Start-Sleep -Seconds 8
     if ($proc.HasExited) { Write-Host "::warning::${Name}: app exited early, code $($proc.ExitCode)" }

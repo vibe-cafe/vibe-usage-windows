@@ -29,7 +29,8 @@ Stop-App
 $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
 $work = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
 Write-Host "work area: $($work.Left),$($work.Top) - $($work.Right),$($work.Bottom)"
-$base = @("--test-log-dir=$logDir", "--test-icon-file=$iconFile", "--test-rect-file=$rectFile")
+# The fake backend: these steps are about the shell; the real backend has its own job (chain.ps1).
+$base = @('--fake-backend', "--test-log-dir=$logDir", "--test-icon-file=$iconFile", "--test-rect-file=$rectFile")
 
 function Get-PanelRect {
     $n = Read-Numbers $rectFile
@@ -55,8 +56,6 @@ function Get-Dpi([string[]]$Lines) {
     if ($m) { return [int]$m.Matches[0].Groups[1].Value }
     return 96
 }
-function Any([string[]]$Lines, [string]$Pattern) { return [bool]($Lines | Where-Object { $_ -match $Pattern }) }
-function Count([string[]]$Lines, [string]$Pattern) { return @($Lines | Where-Object { $_ -match $Pattern }).Count }
 function Set-Promoted([int]$Value) {
     $done = $false
     Get-ChildItem 'HKCU:\Control Panel\NotifyIconSettings' -ErrorAction SilentlyContinue | ForEach-Object {
