@@ -40,6 +40,11 @@ internal static class Win32
     // -- windows ----------------------------------------------------------------------
     public const uint WS_POPUP = 0x80000000;
     public const uint WS_EX_TOOLWINDOW = 0x00000080;
+    public const long WS_EX_NOACTIVATE = 0x08000000;
+    public const int GWL_EXSTYLE = -20;
+    public const uint WM_HOTKEY = 0x0312;
+    public const uint MOD_NOREPEAT = 0x4000;
+    public const uint VK_ESCAPE = 0x1B;
     public const int SW_HIDE = 0;
     public const int SW_SHOW = 5;
     public const uint MONITOR_DEFAULTTONEAREST = 2;
@@ -258,6 +263,12 @@ internal static class Win32
 
     [DllImport("user32.dll")]
     public static extern IntPtr GetFocus();
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool RegisterHotKey(IntPtr hWnd, int id, uint modifiers, uint vk);
+
+    [DllImport("user32.dll")]
+    public static extern bool UnregisterHotKey(IntPtr hWnd, int id);
 
     [DllImport("imm32.dll")]
     public static extern bool ImmAssociateContextEx(IntPtr hWnd, IntPtr himc, uint flags);

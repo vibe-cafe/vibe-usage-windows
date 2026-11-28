@@ -82,6 +82,7 @@ internal sealed class FlyoutController : IDisposable
         _panel.CloseRequested += reason => Hide(reason, auto: false);
         _panel.ContentHeightChanged += OnContentHeightChanged;
         _tray.Selected += OnTraySelected;
+        _tray.EscapePressed += () => Hide("esc", auto: false);
         _tray.LeftButtonDown += () => _gate.OnButtonDown(Now, _visible);
     }
 
@@ -160,7 +161,7 @@ internal sealed class FlyoutController : IDisposable
         }
         if (_visible)
         {
-            Win32.SetForegroundWindow(_panel.Hwnd);
+            if (source == ShowSource.Keyboard) Win32.SetForegroundWindow(_panel.Hwnd);
             return;
         }
 
@@ -178,8 +179,19 @@ internal sealed class FlyoutController : IDisposable
             ApplyRect(target.Rect);
         }
 
-        _panel.AppWindow.Show(true);
-        bool granted = Win32.SetForegroundWindow(_panel.Hwnd);
+        // Opened by mouse (tray click, menu, launch): shown without taking the
+        // foreground or keyboard focus, so the window the user was in keeps
+        // its focus and input method. WinUI switches the IME off while focus
+        // sits on a non-text element (TSF has no document then), which made
+        // the taskbar's 中/英 indicator flip on every open and close.
+        // Closing then relies on the foreground hook (a click elsewhere
+        // changes the foreground), the tray toggle, and an Esc hotkey held
+        // while open. Opened by keyboard (Win+B, Enter): activated, so Tab
+        // moves through the panel.
+        bool keyboard = source == ShowSource.Keyboard;
+        _panel.AppWindow.Show(keyboard);
+        bool granted = keyboard && Win32.SetForegroundWindow(_panel.Hwnd);
+        if (!keyboard) _tray.RegisterEscape();
         var fg = Win32.GetForegroundWindow();
 
         _visible = true;
@@ -187,12 +199,15 @@ internal sealed class FlyoutController : IDisposable
         _shownAtTick = unchecked((uint)Environment.TickCount);
         InstallForegroundHook();
         _panel.PlayEntrance(target.Edge);
-        _panel.FocusForOpen(source == ShowSource.Keyboard);
-        _panel.KeepInputMethod("show");
+        if (keyboard)
+        {
+            _panel.FocusForOpen(true);
+            _panel.LogInputMethod("show");
+        }
 
         var actual = _panel.VisibleRect();
         PocLog.Write($"show source={source} anchor={(anchor?.ToString() ?? "none")} icon={(_tray.TryGetIconRect()?.ToString() ?? "none")} edge={target.Edge} dpi={target.Dpi} frame={_frame} contentDip={_panel.MeasureDesiredHeightDip()} " +
-                     $"rect={actual} SetForegroundWindow={granted} isForeground={fg == _panel.Hwnd} fg={Win32.ClassName(fg)}");
+                     $"rect={actual} activate={(keyboard ? granted.ToString() : "no")} isForeground={fg == _panel.Hwnd} fg={Win32.ClassName(fg)}");
         WriteRectFile(actual);
 
         // A mixed-DPI move can deliver WM_DPICHANGED after Show; check once more.
@@ -201,7 +216,6 @@ internal sealed class FlyoutController : IDisposable
             if (!_visible) return;
             ApplyRect(ComputeRect(_anchor).Rect);
             WriteRectFile(_panel.VisibleRect());
-            _panel.KeepInputMethod("show-settled");
         });
     }
 
@@ -210,6 +224,7 @@ internal sealed class FlyoutController : IDisposable
         if (!_visible) return;
         _visible = false;
         RemoveForegroundHook();
+        _tray.UnregisterEscape();
         bool cursorOnIcon = auto && CursorOnIcon();
         _panel.AppWindow.Hide();
         if (auto) _gate.OnAutoClose(Now, cursorOnIcon);

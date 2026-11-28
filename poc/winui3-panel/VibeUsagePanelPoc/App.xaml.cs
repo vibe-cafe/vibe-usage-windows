@@ -158,6 +158,9 @@ public partial class App : Application
             (4, "退出"),
         }, defaultId: 1);
 
+        // Dismissed, 打开面板 and 立即同步 hand the foreground back to where it
+        // was; 设置 and 退出 don't need it.
+        if (cmd is 0 or 1 or 2) _tray.RestoreForegroundAfterMenu();
         switch (cmd)
         {
             case 1:

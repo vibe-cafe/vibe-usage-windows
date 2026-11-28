@@ -223,11 +223,11 @@ Check 'G 右键：原生菜单' (New-LogLines) 'menu: owner foreground=True'
 
 Stop-Process -Id $proc.Id -Force
 
-# H. while the panel had focus, its window kept an input context (the IME stays as the user had it).
-$imeLines = @(Get-Content $log | Where-Object { $_ -match 'ime (show|show-settled|focus|activated):' })
-$imeLines | Select-Object -First 6 | ForEach-Object { Write-Host "      $_" }
-$imeOk = $imeLines.Count -gt 0 -and -not ($imeLines | Where-Object { $_ -match 'after\[imm=none' })
-$results.Add([pscustomobject]@{ Step = 'H 面板有焦点时输入法上下文保留（日志 after[imm=context]）'; Pass = $imeOk })
+# H. a mouse open leaves the foreground (keyboard focus, input method) where the user's click put it.
+$mouseShows = @(Get-Content $log | Where-Object { $_ -match 'show source=Mouse' })
+$mouseShows | Select-Object -First 2 | ForEach-Object { Write-Host "      $_" }
+$focusKept = $mouseShows.Count -gt 0 -and -not ($mouseShows | Where-Object { $_ -match 'isForeground=True' })
+$results.Add([pscustomobject]@{ Step = 'H 鼠标打开面板不抢焦点（输入法状态不受影响）'; Pass = $focusKept })
 
 Write-Host ''
 Write-Host '----- summary -----'

@@ -40,6 +40,11 @@ internal sealed class TrayIcon : IDisposable
     public event Action<Win32.POINT>? ContextMenuRequested;
     public event Action? LeftButtonDown;
     public event Action? OpenRequested;
+    public event Action? EscapePressed;
+
+    private const int EscapeHotKeyId = 1;
+    private bool _escapeRegistered;
+    private IntPtr _menuPreviousForeground;
 
     public TrayIcon()
     {
@@ -74,6 +79,39 @@ internal sealed class TrayIcon : IDisposable
         nid.uFlags = Win32.NIF_TIP | Win32.NIF_SHOWTIP;
         nid.szTip = _tip;
         Win32.Shell_NotifyIconW(Win32.NIM_MODIFY, ref nid);
+    }
+
+    /// <summary>
+    /// Esc while the panel is open without keyboard focus (opened by mouse):
+    /// a hotkey held only while the panel is on screen.
+    /// </summary>
+    public void RegisterEscape()
+    {
+        if (_escapeRegistered) return;
+        _escapeRegistered = Win32.RegisterHotKey(Hwnd, EscapeHotKeyId, Win32.MOD_NOREPEAT, Win32.VK_ESCAPE);
+        if (!_escapeRegistered) PocLog.Write($"esc hotkey unavailable err={Marshal.GetLastWin32Error()}");
+    }
+
+    public void UnregisterEscape()
+    {
+        if (!_escapeRegistered) return;
+        Win32.UnregisterHotKey(Hwnd, EscapeHotKeyId);
+        _escapeRegistered = false;
+    }
+
+    /// <summary>
+    /// After the menu, give the foreground back to the window that had it
+    /// (the taskbar the user clicked, or their app), so the menu's required
+    /// SetForegroundWindow on our host doesn't leave keyboard focus (and the
+    /// input-method indicator) on this process.
+    /// </summary>
+    public void RestoreForegroundAfterMenu()
+    {
+        var prev = _menuPreviousForeground;
+        _menuPreviousForeground = IntPtr.Zero;
+        if (prev == IntPtr.Zero || prev == Hwnd) return;
+        bool ok = Win32.SetForegroundWindow(prev);
+        PocLog.Write($"menu: foreground back to {Win32.ClassName(prev)} ok={ok}");
     }
 
     /// <summary>The icon's rectangle (physical px), or null when Windows can't tell (e.g. hidden in a closed overflow).</summary>
@@ -113,6 +151,7 @@ internal sealed class TrayIcon : IDisposable
         // physical pixels (per-monitor aware), the same space as the anchor,
         // the monitor info and TrackPopupMenuEx, so it holds at any scale.
         var (x, y, flags, exclude) = MenuPlacement(anchor, edge);
+        _menuPreviousForeground = Win32.GetForegroundWindow();
         bool fg = Win32.SetForegroundWindow(Hwnd);
         var tpm = new Win32.TPMPARAMS { cbSize = (uint)Marshal.SizeOf<Win32.TPMPARAMS>(), rcExclude = exclude };
         int cmd = Win32.TrackPopupMenuExWithParams(menu,
@@ -187,6 +226,12 @@ internal sealed class TrayIcon : IDisposable
                         ContextMenuRequested?.Invoke(anchor);
                         break;
                 }
+                return IntPtr.Zero;
+            }
+
+            if (msg == Win32.WM_HOTKEY && (int)wParam == EscapeHotKeyId)
+            {
+                EscapePressed?.Invoke();
                 return IntPtr.Zero;
             }
 

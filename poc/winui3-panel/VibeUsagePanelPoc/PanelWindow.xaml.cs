@@ -70,6 +70,10 @@ public sealed partial class PanelWindow : Window
         presenter.SetBorderAndTitleBar(true, false);
         AppWindow.SetPresenter(presenter);
         AppWindow.IsShownInSwitchers = false;
+        // Clicking the panel doesn't take the foreground from the user's window
+        // (programmatic activation for keyboard opens still works).
+        var exStyle = (long)Win32.GetWindowLongPtr(Hwnd, Win32.GWL_EXSTYLE);
+        Win32.SetWindowLongPtr(Hwnd, Win32.GWL_EXSTYLE, (IntPtr)(exStyle | Win32.WS_EX_NOACTIVATE));
         AppWindow.SetIcon(System.IO.Path.Combine(AppContext.BaseDirectory, "Assets", "AppIcon.ico"));
         AppWindow.Closing += (_, e) =>
         {
@@ -83,12 +87,8 @@ public sealed partial class PanelWindow : Window
         Win32.SetDwmInt(Hwnd, Win32.DWMWA_BORDER_COLOR, 0x003D3A38);
 
         RootGrid.Background = new SolidColorBrush(Mt.Panel);
-        // Keep the user's input method as it is while the panel has focus (see KeepInputMethod).
-        RootGrid.GotFocus += (_, _) => KeepInputMethod("focus");
-        Activated += (_, e) =>
-        {
-            if (e.WindowActivationState != WindowActivationState.Deactivated) KeepInputMethod("activated");
-        };
+        // Record the input-method state whenever the panel does get focus (keyboard opens).
+        RootGrid.GotFocus += (_, _) => LogInputMethod("focus");
         ContentStack.SizeChanged += (_, _) => ContentHeightChanged?.Invoke();
 
         _enabled = string.IsNullOrEmpty(options.Only)
@@ -224,24 +224,19 @@ public sealed partial class PanelWindow : Window
     private string _imeLast = "";
 
     /// <summary>
-    /// WinUI turns the input method off for its window while keyboard focus is
-    /// on something that is not a text box. Opening the panel moves focus to
-    /// it, so the taskbar's 中/英 indicator showed the IME as off (英) and
-    /// flipped back (中) when the panel closed: every tray click "switched"
-    /// it. The panel has no text input, so it gives its windows the thread's
-    /// default input context again after each activation and focus change;
-    /// the indicator then keeps showing the user's own state. The log records
-    /// the IMM context and TSF focus before and after, for the real-machine check.
+    /// Logs the input-method state of the focused panel window: whether it
+    /// has an IMM input context and whether TSF has a focused document. On
+    /// the CI runner the panel window kept its IMM context but TSF had no
+    /// focused document, which is how WinUI turns the IME off for non-text
+    /// focus; mouse opens therefore don't give the panel focus at all.
     /// </summary>
-    public void KeepInputMethod(string when)
+    public void LogInputMethod(string when)
     {
         try
         {
             var focus = Win32.GetFocus();
-            string before = ImeState(focus);
-            bool ok = Win32.ImmAssociateContextEx(Hwnd, IntPtr.Zero, Win32.IACE_CHILDREN | Win32.IACE_DEFAULT);
-            string after = ImeState(Win32.GetFocus());
-            string line = $"ime {when}: focus={Win32.ClassName(focus)} before[{before}] associateDefault={ok} after[{after}]";
+            if (focus == IntPtr.Zero) return;
+            string line = $"ime {when}: focus={Win32.ClassName(focus)} [{ImeState(focus)}]";
             if (line == _imeLast) return;
             _imeLast = line;
             PocLog.Write(line);
