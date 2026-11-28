@@ -27,15 +27,17 @@ public static class PocNative {
 [PocNative]::SetProcessDPIAware() | Out-Null
 
 # Tall enough for the expanded panel (1068 DIP) when the runner allows it.
-foreach ($mode in @(@(2560, 1600), @(2560, 1440), @(1920, 1200), @(1920, 1080))) {
+foreach ($mode in @(@(1920, 1200), @(1920, 1080))) {
     try {
         Set-DisplayResolution -Width $mode[0] -Height $mode[1] -Force -ErrorAction Stop
         Start-Sleep -Seconds 3
-        Write-Host "display resolution $($mode[0])x$($mode[1])"
-        break
     } catch {
         Write-Host "display resolution $($mode[0])x$($mode[1]) refused: $($_.Exception.Message)"
+        continue
     }
+    $vc = Get-CimInstance Win32_VideoController | Select-Object -First 1
+    Write-Host "asked $($mode[0])x$($mode[1]), got $($vc.CurrentHorizontalResolution)x$($vc.CurrentVerticalResolution)"
+    if ($vc.CurrentHorizontalResolution -eq $mode[0] -and $vc.CurrentVerticalResolution -eq $mode[1]) { break }
 }
 $screen = [System.Windows.Forms.SystemInformation]::VirtualScreen
 Write-Host "screen: $($screen.Width)x$($screen.Height) at $($screen.Left),$($screen.Top)"
@@ -68,7 +70,7 @@ function Save-Screen([string]$name, [string]$rectFile) {
     if ($rectFile -and (Test-Path $rectFile)) {
         $p = (Get-Content $rectFile -Raw).Trim().Split(' ') | ForEach-Object { [int]$_ }
         Write-Host "${name}: panel rect $($p -join ' ')"
-        $pad = 28
+        $pad = 0
         $x = [Math]::Max($b.Left, $p[0] - $pad)
         $y = [Math]::Max($b.Top, $p[1] - $pad)
         $right = [Math]::Min($b.Right, $p[0] + $p[2] + $pad)

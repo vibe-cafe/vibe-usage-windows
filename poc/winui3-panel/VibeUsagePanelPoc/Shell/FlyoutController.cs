@@ -63,6 +63,7 @@ internal sealed class FlyoutController : IDisposable
     private long _shownAt;
     private uint _shownAtTick;
     private Win32.POINT? _anchor;
+    private WindowFrame? _frame;
 
     public Func<IntPtr>? SettingsWindowHandle { get; set; }
 
@@ -101,6 +102,8 @@ internal sealed class FlyoutController : IDisposable
         _warmUpTimer.Tick += (_, _) =>
         {
             _warmUpTimer?.Stop();
+            _frame = _panel.Frame() ?? _frame;
+            PocLog.Write($"frame {_frame}");
             _panel.AppWindow.Hide();
             Win32.SetDwmInt(_panel.Hwnd, Win32.DWMWA_CLOAK, 0);
             _warmingUp = false;
@@ -186,15 +189,17 @@ internal sealed class FlyoutController : IDisposable
         _panel.PlayEntrance(target.Edge);
         _panel.FocusForOpen(source == ShowSource.Keyboard);
 
-        Win32.GetWindowRect(_panel.Hwnd, out var actual);
-        PocLog.Write($"show source={source} anchor={(anchor?.ToString() ?? "none")} icon={(_tray.TryGetIconRect()?.ToString() ?? "none")} edge={target.Edge} dpi={target.Dpi} frame={_panel.FrameExtra()} contentDip={_panel.MeasureDesiredHeightDip()} " +
+        var actual = _panel.VisibleRect();
+        PocLog.Write($"show source={source} anchor={(anchor?.ToString() ?? "none")} icon={(_tray.TryGetIconRect()?.ToString() ?? "none")} edge={target.Edge} dpi={target.Dpi} frame={_frame} contentDip={_panel.MeasureDesiredHeightDip()} " +
                      $"rect={actual} SetForegroundWindow={granted} isForeground={fg == _panel.Hwnd} fg={Win32.ClassName(fg)}");
         WriteRectFile(actual);
 
         // A mixed-DPI move can deliver WM_DPICHANGED after Show; check once more.
         _panel.DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, () =>
         {
-            if (_visible) ApplyRect(target.Rect);
+            if (!_visible) return;
+            ApplyRect(ComputeRect(_anchor).Rect);
+            WriteRectFile(_panel.VisibleRect());
         });
     }
 
@@ -334,14 +339,18 @@ internal sealed class FlyoutController : IDisposable
         double scale = dpi / 96.0;
         var work = ToBox(mi.rcWork);
         double margin = Math.Round(MarginDip * scale);
-        // The client area gets the panel's DIP size; the thin system border comes on top.
-        var (frameW, frameH) = _panel.FrameExtra();
-        double w = Math.Round(PanelWindow.PanelWidthDip * scale) + frameW;
+        // Placement is about the visible window: its client area gets the
+        // panel's DIP size, and Windows' invisible resize margins (8 px left,
+        // right and bottom on Windows 11) are added outside it.
+        var f = _panel.Frame() ?? _frame ?? new WindowFrame();
+        if (_panel.Frame() is WindowFrame live) _frame = live;
+        double w = Math.Round(PanelWindow.PanelWidthDip * scale) + f.VisibleExtraW;
         double desired = _panel.MeasureDesiredHeightDip();
         if (desired < 100) desired = 600; // not laid out yet (warm-up)
-        double h = Math.Min(Math.Ceiling(desired * scale) + frameH, work.H - 2 * margin);
+        double h = Math.Min(Math.Ceiling(desired * scale) + f.VisibleExtraH, work.H - 2 * margin);
         var p = PanelPlacement.Place(ToBox(mi.rcMonitor), work, icon, w, h, margin);
-        return (new RectInt32((int)Math.Round(p.X), (int)Math.Round(p.Y), (int)w, (int)h), p.Edge, dpi);
+        return (new RectInt32((int)Math.Round(p.X) - f.Left, (int)Math.Round(p.Y) - f.Top,
+            (int)w + f.Left + f.Right, (int)h + f.Top + f.Bottom), p.Edge, dpi);
     }
 
     private static Box ToBox(Win32.RECT r) => new(r.Left, r.Top, r.Width, r.Height);

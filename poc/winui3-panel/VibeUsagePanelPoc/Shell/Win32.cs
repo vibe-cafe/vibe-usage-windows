@@ -70,6 +70,8 @@ internal static class Win32
     public const int DWMWA_USE_IMMERSIVE_DARK_MODE = 20;
     public const int DWMWA_WINDOW_CORNER_PREFERENCE = 33;
     public const int DWMWA_CLOAK = 13;
+    public const int DWMWA_EXTENDED_FRAME_BOUNDS = 9;
+    public const int DWMWA_BORDER_COLOR = 34;
     public const int DWMWCP_ROUND = 2;
 
     [StructLayout(LayoutKind.Sequential)]
@@ -262,6 +264,9 @@ internal static class Win32
 
     [DllImport("dwmapi.dll")]
     public static extern int DwmSetWindowAttribute(IntPtr hWnd, int attribute, ref int value, int size);
+
+    [DllImport("dwmapi.dll")]
+    public static extern int DwmGetWindowAttribute(IntPtr hWnd, int attribute, out RECT value, int size);
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
     public static extern IntPtr GetModuleHandleW(string? name);

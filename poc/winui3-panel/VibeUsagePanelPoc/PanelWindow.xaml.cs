@@ -27,6 +27,8 @@ namespace VibeUsage.PanelPoc;
 /// constants. Window behaviour (tray anchoring, closing, focus) stays in
 /// <see cref="FlyoutController"/> and follows Windows conventions.
 /// </summary>
+public readonly record struct WindowFrame(int Left, int Top, int Right, int Bottom, int VisibleExtraW, int VisibleExtraH);
+
 public sealed partial class PanelWindow : Window
 {
     public const double PanelWidthDip = Mt.PanelWidth;
@@ -77,6 +79,8 @@ public sealed partial class PanelWindow : Window
         };
         Win32.SetDwmInt(Hwnd, Win32.DWMWA_WINDOW_CORNER_PREFERENCE, Win32.DWMWCP_ROUND);
         Win32.SetDwmInt(Hwnd, Win32.DWMWA_USE_IMMERSIVE_DARK_MODE, 1);
+        // The Mac panel's faint light edge (#383A3D) as the window border (Windows 11).
+        Win32.SetDwmInt(Hwnd, Win32.DWMWA_BORDER_COLOR, 0x003D3A38);
 
         RootGrid.Background = new SolidColorBrush(Mt.Panel);
         ContentStack.SizeChanged += (_, _) => ContentHeightChanged?.Invoke();
@@ -90,11 +94,29 @@ public sealed partial class PanelWindow : Window
 
     // -- window behaviour ---------------------------------------------------------------------
 
-    /// <summary>Window size minus client size (the thin system border), in physical pixels.</summary>
-    public (int W, int H) FrameExtra()
+    /// <summary>
+    /// The window's frame, physical pixels: the invisible resize margins
+    /// Windows keeps around the visible window (left, top, right, bottom),
+    /// and what the visible window adds to the client area. Null when DWM
+    /// can't tell (window not shown yet).
+    /// </summary>
+    public WindowFrame? Frame()
     {
-        if (!Win32.GetWindowRect(Hwnd, out var w) || !Win32.GetClientRect(Hwnd, out var c)) return (0, 0);
-        return (Math.Max(0, w.Width - c.Width), Math.Max(0, w.Height - c.Height));
+        if (!Win32.GetWindowRect(Hwnd, out var w) || !Win32.GetClientRect(Hwnd, out var c)) return null;
+        if (Win32.DwmGetWindowAttribute(Hwnd, Win32.DWMWA_EXTENDED_FRAME_BOUNDS, out var e, System.Runtime.InteropServices.Marshal.SizeOf<Win32.RECT>()) != 0
+            || e.Width <= 0 || !Win32.IsWindowVisible(Hwnd))
+            return null;
+        return new WindowFrame(e.Left - w.Left, e.Top - w.Top, w.Right - e.Right, w.Bottom - e.Bottom,
+            Math.Max(0, e.Width - c.Width), Math.Max(0, e.Height - c.Height));
+    }
+
+    /// <summary>The visible window on screen (DWM extended frame bounds).</summary>
+    public Win32.RECT VisibleRect()
+    {
+        if (Win32.DwmGetWindowAttribute(Hwnd, Win32.DWMWA_EXTENDED_FRAME_BOUNDS, out var e, System.Runtime.InteropServices.Marshal.SizeOf<Win32.RECT>()) == 0 && e.Width > 0)
+            return e;
+        Win32.GetWindowRect(Hwnd, out var w);
+        return w;
     }
 
     /// <summary>Natural height of the whole panel at the fixed width, in DIPs.</summary>
@@ -552,7 +574,8 @@ public sealed partial class PanelWindow : Window
 
         // Header: mark, name, plan.
         double x0 = Mt.LeadingColumnWidth;
-        double headerBaseline = Mt.BaselineIn(22, (13, Face.Text), (11, Face.Text)) + 1.5;
+        double columnTop = Math.Max(0, (Mt.CardBodyHeight - (32 + 32 * s.Rows.Count)) / 2);
+        double headerBaseline = columnTop + Mt.BaselineIn(22, (13, Face.Text), (11, Face.Text)) + 1.5;
         g.Children.Add(Placed(Icons.Glyph(s.Glyph, 15, 15 * s.GlyphRatio, Mt.Strong), x0, headerBaseline - 4.5 - 7.5));
         var title = Mt.Block(Mt.R(s.Name, 13, Face.Text, Wt.SemiBold, Mt.Text, -0.13));
         if (s.Plan != null)
@@ -562,9 +585,11 @@ public sealed partial class PanelWindow : Window
         }
         g.Children.Add(Placed(Mt.AtBaseline(title, headerBaseline), x0 + 22, 0));
 
-        // Allowance rows: 32 DIP each under a rule, from 32 down.
+        // Allowance rows: 32 DIP each under a rule, from 32 down. The column
+        // (header and rows) is centred in the 148 body when shorter
+        // (`.frame(minHeight: 148, alignment: .leading)`).
         double labelWidth = Math.Max(28, Math.Ceiling(s.Rows.Max(m => m.Label.Sum(ch => ch < 128 ? 6.6 : 11.0)) + 7));
-        double y = 32;
+        double y = 32 + columnTop;
         foreach (var m in s.Rows)
         {
             g.Children.Add(Placed(AllowanceRow(m, labelWidth), x0, y, Mt.RightColumnWidth, 32));
