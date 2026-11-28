@@ -4670,7 +4670,7 @@ dependencies = [
 
 [[package]]
 name = "vibe-core"
-version = "0.7.10"
+version = "0.7.11"
 dependencies = [
  "dirs 5.0.1",
  "serde",
@@ -4680,7 +4680,7 @@ dependencies = [
 
 [[package]]
 name = "vibe-usage-app"
-version = "0.7.10"
+version = "0.7.11"
 dependencies = [
  "auto-launch",
  "chrono",
