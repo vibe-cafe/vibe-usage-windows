@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 
 namespace VibeUsage.Backend.Tests;
@@ -78,6 +79,19 @@ public class LifecycleTests
     }
 
     [Fact]
+    public void Dispose_records_unconfirmed_shutdown_once()
+    {
+        var failure = new BackendError("shutdown", "未能确认后台子进程已退出");
+        int closes = 0;
+        using var app = new NativeBackend(new(".", ".", ".", "test", false), 0,
+            init: (_, _, _) => 0, close: () => { closes++; return failure; });
+        app.Dispose();
+        app.Dispose();
+        Assert.Equal(failure, app.CloseError);
+        Assert.Equal(1, closes);
+    }
+
+    [Fact]
     [Trait("Category", "Smoke")]
     public async Task Real_library_handshake_results_event_panic_and_close()
     {
@@ -89,14 +103,37 @@ public class LifecycleTests
             var mismatch = Assert.Throws<BackendException>(() => new NativeBackend(options, 0));
             Assert.Equal("versionMismatch", mismatch.Code);
 
-            // A production library rejects the smoke version before startup.
-            using var app = new NativeBackend(options, 0x80000001, new SynchronizationContext());
+            // Observe every native envelope before the client's pending.TryRemove.
+            var envelopes = new ConcurrentQueue<string>();
+            int callbacks = 0, active = 0, closeReturned = 0;
+            var late = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            BackendError? reentrant = null;
+            NativeBackend.Native.Callback? observer = null;
+            nint Init(uint version, string json, NativeBackend.Native.Callback forward)
+            {
+                observer = pointer =>
+                {
+                    Interlocked.Increment(ref active);
+                    try
+                    {
+                        if (Volatile.Read(ref closeReturned) != 0) late.TrySetResult();
+                        envelopes.Enqueue(Marshal.PtrToStringUTF8(pointer)!);
+                        if (Interlocked.Increment(ref callbacks) == 1)
+                            reentrant = NativeBackend.ReadError(NativeBackend.Native.Close());
+                        forward(pointer);
+                    }
+                    finally { Interlocked.Decrement(ref active); }
+                };
+                return NativeBackend.Native.Init(version, json, observer);
+            }
+            using var app = new NativeBackend(options, 0x80000001, new SynchronizationContext(), Init);
             var changed = new TaskCompletionSource<AppSettings>(TaskCreationOptions.RunContinuationsAsynchronously);
             using var events = app.Subscribe(e =>
             {
                 if (e is BackendEvent.SettingsChanged settings) changed.TrySetResult(settings.Value);
             });
             Assert.True((await app.GetSettingsAsync()).ShowCostInTray);
+            Assert.Equal("closeFromRuntime", reentrant?.Code);
             Assert.Equal("idle", (await app.GetSyncStateAsync()).Status);
             var saved = await app.UpdateSettingAsync(SettingChange.ShowCostInTray(false));
             Assert.False(saved.ShowCostInTray);
@@ -106,7 +143,11 @@ public class LifecycleTests
                 () => app.SendAsync("__panic", Wire.Empty))).Code);
 
             var pending = Enumerable.Range(0, 8).Select(_ => app.SendAsync("__pending", Wire.Empty)).ToArray();
+            int admitted = 5 + pending.Length;
             app.Dispose();
+            Volatile.Write(ref closeReturned, 1);
+            Assert.Equal(0, Volatile.Read(ref active));
+            Assert.Null(app.CloseError);
             foreach (var task in pending)
             {
                 Assert.True(task.IsCompleted);
@@ -114,6 +155,21 @@ public class LifecycleTests
             }
             app.Dispose();
             Assert.Equal(0, NativeBackend.Native.Close());
+            var refused = NativeBackend.Native.Call((ulong)admitted + 1, "get_settings", "{}");
+            Assert.Equal(0UL, refused.RequestId);
+            Assert.Equal("closed", NativeBackend.ReadError(refused.Error)?.Code);
+            await Task.WhenAny(late.Task, Task.Delay(150));
+            Assert.False(late.Task.IsCompleted, "关闭返回后仍收到原生回调");
+            var ids = new List<ulong>();
+            foreach (string envelope in envelopes)
+            {
+                using var doc = JsonDocument.Parse(envelope);
+                if (doc.RootElement.GetProperty("kind").GetString() == "result")
+                    ids.Add(doc.RootElement.GetProperty("requestId").GetUInt64());
+            }
+            // Five completed commands and eight cancelled at close, with no duplicates.
+            Assert.Equal(Enumerable.Range(1, admitted).Select(id => (ulong)id), ids.Order());
+            GC.KeepAlive(observer);
         }
         finally { dir.Delete(true); }
     }

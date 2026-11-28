@@ -4682,6 +4682,7 @@ dependencies = [
 name = "vibe-ffi"
 version = "0.7.11"
 dependencies = [
+ "tempfile",
  "vibe-backend",
 ]
 

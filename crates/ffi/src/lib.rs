@@ -9,6 +9,7 @@ use std::{
     panic::{catch_unwind, AssertUnwindSafe},
     ptr,
     sync::{Arc, Mutex},
+    time::Duration,
 };
 use vibe_backend::{
     serde::Deserialize,
@@ -35,6 +36,7 @@ enum Error {
     Closed,
     AlreadyOpen,
     RequestId,
+    CloseFromRuntime,
     Cancelled,
     Panic,
     Internal,
@@ -57,13 +59,12 @@ impl Error {
             Self::Closed => ("closed", "后端未启动或已经关闭"),
             Self::AlreadyOpen => ("alreadyOpen", "后端已经启动"),
             Self::RequestId => ("invalidRequestId", "请求号必须递增且大于零"),
+            Self::CloseFromRuntime => ("closeFromRuntime", "请在运行时线程以外关闭后端"),
             Self::Cancelled => ("cancelled", "请求已取消"),
             Self::Panic => ("panic", "后端任务异常终止"),
             Self::Internal => ("internal", "无法运行后端任务"),
             Self::Shutdown => ("shutdown", "未能确认后台子进程已退出"),
-            Self::Service(reason) => {
-                return json!({"code":"backend","message":format!("操作失败：{reason}")})
-            }
+            Self::Service(reason) => ("backend", reason.as_str()),
         };
         json!({"code":code,"message":message})
     }
@@ -288,6 +289,10 @@ pub unsafe extern "C" fn vibe_call(id: u64, name: *const c_char, args: *const c_
 #[no_mangle]
 pub extern "C" fn vibe_close() -> *mut c_char {
     boundary(|| {
+        // A callback may already be the worker another thread is joining.
+        if tokio::runtime::Handle::try_current().is_ok() {
+            return Err(Error::CloseFromRuntime);
+        }
         let mut state = STATE.lock().unwrap_or_else(|e| e.into_inner());
         match &*state {
             State::Closed(result) => return result.clone(),
@@ -303,7 +308,9 @@ pub extern "C" fn vibe_close() -> *mut c_char {
             .runtime
             .block_on(session.worker)
             .unwrap_or(Err(Error::Panic));
-        drop(session.runtime);
+        // serve has joined the command and host-event tasks. Blocking work
+        // (e.g. DNS, PAC and node -v) never calls the host directly.
+        session.runtime.shutdown_timeout(Duration::from_millis(100));
         *state = State::Closed(result.clone());
         result
     })

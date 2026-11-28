@@ -94,6 +94,12 @@ pub struct UsageSnapshot {
     pub data: Value,
 }
 
+#[derive(Serialize)]
+struct UsageError {
+    query: UsageQuery,
+    error: String,
+}
+
 struct Recent {
     account: (String, String),
     snapshot: UsageSnapshot,
@@ -193,10 +199,7 @@ impl Backend {
         self.spawn(async move {
             if let Err(error) = app.read_usage(&query, force).await {
                 if app.ctx().config.is_configured() {
-                    let _ = app.emit(
-                        "usage-error",
-                        serde_json::json!({ "query": query, "error": error }),
-                    );
+                    let _ = app.emit("usage-error", UsageError { query, error });
                 }
             }
         });

@@ -205,6 +205,19 @@ fn today() -> UsageQuery {
     UsageQuery::Days { days: 1 }
 }
 
+#[test]
+fn usage_error_matches_the_host_fixture() {
+    let sample: Value = serde_json::from_str(include_str!(
+        "../../../../native/contract/events/usage-error.json"
+    ))
+    .unwrap();
+    let failure = UsageError {
+        query: today(),
+        error: "未配置".into(),
+    };
+    assert_eq!(serde_json::to_value(failure).unwrap(), sample["payload"]);
+}
+
 #[tokio::test(start_paused = true)]
 async fn refresh_events_name_only_the_products_due_in_this_read() {
     let f = Fixture::new(false, false, vec![Cursor, Grok]);
@@ -230,13 +243,18 @@ async fn refresh_events_name_only_the_products_due_in_this_read() {
 }
 
 #[tokio::test]
-async fn initialization_returns_while_hook_retirement_is_still_waiting() {
+async fn initialization_and_task_shutdown_do_not_wait_for_hook_retirement() {
+    let (started, ready) = tokio::sync::oneshot::channel();
     let (release, wait) = std::sync::mpsc::channel();
     let (finished, outcome) = tokio::sync::oneshot::channel();
-    let _f = Fixture::with_retirement(false, false, vec![], move |_| {
+    let f = Fixture::with_retirement(false, false, vec![], move |_| {
+        started.send(()).unwrap();
         let after_return = wait.recv_timeout(Duration::from_secs(2)).is_ok();
         finished.send(after_return).unwrap();
     });
+    ready.await.unwrap();
+    let mut tasks = f.app.0.tasks.lock().unwrap().take().unwrap();
+    tasks.shutdown().await;
     let _ = release.send(());
     assert!(outcome.await.unwrap());
 }

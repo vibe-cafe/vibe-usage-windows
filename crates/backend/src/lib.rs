@@ -103,9 +103,10 @@ impl Backend {
         prepare_local(&app);
         // Resolving the old hook's Node command may synchronously run node -v.
         let worker = app.clone();
-        if let Some(tasks) = app.0.tasks.lock().unwrap().as_mut() {
-            tasks.spawn_blocking(move || retire_legacy(&worker));
-        }
+        // Track the async waiter so shutdown can cancel it while node -v finishes.
+        app.spawn(async move {
+            let _ = tokio::task::spawn_blocking(move || retire_legacy(&worker)).await;
+        });
         app.start_network();
         app
     }
