@@ -12,7 +12,7 @@ public class PlacementTests
     public void BottomTaskbarOpensAboveTheIconInTheCorner()
     {
         var work = M with { H = 1032 };
-        var icon = new Box(1700, 1040, 32, 40);
+        var icon = new Box(1820, 1040, 32, 40);
         var p = PanelPlacement.Place(M, work, icon, 380, 620, 12);
         Assert.Equal((TaskbarEdge.Bottom, false), (p.Edge, p.EdgeInferred));
         Assert.Equal(1032 - 12 - 620, p.Y);

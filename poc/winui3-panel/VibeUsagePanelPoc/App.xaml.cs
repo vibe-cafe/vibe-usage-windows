@@ -37,6 +37,7 @@ public partial class App : Application
             throw;
         }
         UnhandledException += (_, e) => PocLog.Write("unhandled: " + e.Exception);
+        XamlDiagnostics.Attach(this);
     }
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
@@ -69,7 +70,16 @@ public partial class App : Application
         PocLog.Write($"startup os={Environment.OSVersion.Version} arch={RuntimeInformation.ProcessArchitecture} " +
                      $"args=[{string.Join(' ', argv)}] acrylic={FlyoutBackdrop.IsSupported}");
 
-        _panel = new PanelWindow(_options);
+        try
+        {
+            _panel = new PanelWindow(_options);
+        }
+        catch (Exception ex)
+        {
+            PocLog.Write($"panel failed to build: {ex.GetType().Name} 0x{ex.HResult:X8} {ex.Message}");
+            XamlDiagnostics.Run();
+            throw;
+        }
         _tray = new TrayIcon();
         _tray.SetTooltip(FakeData.TrayTooltip);
         _flyout = new FlyoutController(_panel, _tray, _options)
