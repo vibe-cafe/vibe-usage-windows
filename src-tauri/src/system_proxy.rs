@@ -454,13 +454,21 @@ pub const CLAUDE_HOSTS: [&str; 3] = ["api.anthropic.com", "platform.claude.com",
 pub fn claude_routes() -> Vec<(String, Route)> {
     let settings = read_settings();
     let deadline = Instant::now() + BATCH_PAC_BUDGET;
+    claude_routes_with(&settings, &|key| std::env::var(key).ok(), &|pac, target| {
+        #[cfg(windows)]
+        { crate::claude_pac::resolve(pac, target, deadline) }
+        #[cfg(not(windows))]
+        { let _ = (pac, target, deadline); None }
+    })
+}
+
+pub(crate) fn claude_routes_with(
+    settings: &ProxySettings,
+    env: &impl Fn(&str) -> Option<String>,
+    evaluate_pac: &impl Fn(&str, &str) -> Option<Route>,
+) -> Vec<(String, Route)> {
     host_urls(&CLAUDE_HOSTS).into_iter().map(|url| {
-        let route = resolve_route(&url, &settings, &|key| std::env::var(key).ok(), &|pac, target| {
-            #[cfg(windows)]
-            { crate::claude_pac::resolve(pac, target, deadline) }
-            #[cfg(not(windows))]
-            { let _ = (pac, target, deadline); None }
-        }, true);
+        let route = resolve_route(&url, settings, env, evaluate_pac, true);
         (url.host_str().unwrap().to_owned(), route)
     }).collect()
 }

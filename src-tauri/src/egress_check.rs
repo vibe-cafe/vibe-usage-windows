@@ -796,17 +796,14 @@ mod tests {
     /// inherited ones, then the proxy keys of Claude Code's own `settings.json`.
     fn launched(
         settings: &crate::system_proxy::ProxySettings,
-        pac: &dyn Fn(&str) -> Option<String>,
+        pac: &dyn Fn(&str) -> Option<Route>,
         inherited: &[(&str, &str)],
         claude_settings: &[(&str, &str)],
     ) -> ClaudeRoute {
         let lookup = |name: &str| inherited.iter().find(|(key, _)| *key == name).map(|(_, value)| value.to_string());
-        let routes: Vec<_> = crate::system_proxy::host_urls(&crate::system_proxy::CLAUDE_HOSTS)
-            .into_iter().map(|url| {
-                let r = crate::system_proxy::route_for(&url, settings, &lookup, &|_, target|
-                    pac(Url::parse(target).unwrap().host_str().unwrap()));
-                (url.host_str().unwrap().to_owned(), r)
-            }).collect();
+        let routes = crate::system_proxy::claude_routes_with(settings, &lookup, &|_, target| {
+            pac(Url::parse(target).unwrap().host_str().unwrap())
+        });
         let relay = routes.iter().any(|(_, r)| matches!(r, Route::Socks(_)))
             .then_some("http://vibe-usage:test@127.0.0.1:30123");
         let vars = match relay {
@@ -834,8 +831,87 @@ mod tests {
         }
     }
 
-    fn no_pac(_: &str) -> Option<String> {
+    fn no_pac(_: &str) -> Option<Route> {
         panic!("no PAC configured")
+    }
+
+    fn mixed_pac(host: &str) -> Option<Route> {
+        Some(if host == "api.anthropic.com" {
+            Route::Socks("127.0.0.1:7891".into())
+        } else {
+            Route::Http("http://127.0.0.1:7890".into())
+        })
+    }
+
+    #[test]
+    fn manual_and_pac_socks_use_the_relay_and_keep_direct_exceptions() {
+        for server in ["socks=127.0.0.1:7891", "socks5://127.0.0.1:7891", "SOCKS=127.0.0.1:7891"] {
+            assert_eq!(launched(&manual(server, None), &no_pac, &[], &[]), ClaudeRoute::Proxied);
+            assert_eq!(launched(&manual(server, Some("claude.ai;<local>")), &no_pac, &[], &[]),
+                ClaudeRoute::Direct("claude.ai".into()));
+        }
+        let socks = |_: &str| Some(Route::Socks("127.0.0.1:7891".into()));
+        assert_eq!(launched(&pac_only(), &socks, &[], &[]), ClaudeRoute::Proxied);
+        let one_socks = |host: &str| if host == "api.anthropic.com" { socks(host) } else { Some(Route::Direct) };
+        assert_eq!(launched(&pac_only(), &one_socks, &[], &[]), ClaudeRoute::Direct("platform.claude.com".into()));
+    }
+
+    #[test]
+    fn http_and_socks_respect_each_hosts_route_even_if_a_pac_lookup_fails() {
+        let both = manual("http=127.0.0.1:7890;socks=127.0.0.1:7891", None);
+        assert_eq!(launched(&both, &no_pac, &[], &[]), ClaudeRoute::Proxied);
+        assert_eq!(launched(&pac_only(), &mixed_pac, &[], &[]), ClaudeRoute::Proxied);
+        for list in ["claude.ai", "api.anthropic.com", ".anthropic.com", "*"] {
+            assert_eq!(launched(&pac_only(), &mixed_pac, &[], &[("NO_PROXY", list)]), ClaudeRoute::SocksUnusable);
+        }
+        // Strict Claude resolution keeps the failed host unresolved, even
+        // with a manual proxy enabled. Only the relay can refuse that tunnel.
+        let settings = crate::system_proxy::ProxySettings { auto_config_url: pac_only().auto_config_url, ..both };
+        let partial = |host: &str| if host == "claude.ai" { None } else { mixed_pac(host) };
+        assert_eq!(launched(&settings, &partial, &[], &[]), ClaudeRoute::Proxied);
+        assert_eq!(launched(&settings, &partial, &[], &[("HTTPS_PROXY", "http://127.0.0.1:7890")]),
+            ClaudeRoute::SocksUnusable);
+    }
+
+    #[test]
+    fn inherited_and_claude_no_proxy_are_checked_against_the_pinned_socks_routes() {
+        let socks = manual("socks=127.0.0.1:7891", None);
+        for name in ["NO_PROXY", "no_proxy"] {
+            for list in ["*", "api.anthropic.com,platform.claude.com,claude.ai", "api.anthropic.com platform.claude.com claude.ai",
+                         ".anthropic.com", "*.anthropic.com", "api.anthropic.com"] {
+                assert_eq!(launched(&socks, &no_pac, &[(name, list)], &[]), ClaudeRoute::Direct("api.anthropic.com".into()), "{list}");
+            }
+        }
+        assert_eq!(launched(&socks, &no_pac, &[("NO_PROXY", "claude.ai")], &[]), ClaudeRoute::Direct("claude.ai".into()));
+        for list in ["anthropic.com", "api.anthropic.com:443"] {
+            assert_eq!(launched(&socks, &no_pac, &[("NO_PROXY", list)], &[]), ClaudeRoute::SocksUnusable);
+        }
+        let own_http = ("HTTPS_PROXY", "http://127.0.0.1:7890");
+        for list in ["*", "claude.ai", "api.anthropic.com:443", ".anthropic.com", "*.anthropic.com", "anthropic.com", ".api.anthropic.com"] {
+            assert_eq!(launched(&socks, &no_pac, &[], &[own_http, ("NO_PROXY", list)]), ClaudeRoute::SocksUnusable, "{list}");
+        }
+        for list in ["localhost", "api.anthropic.com:8443"] {
+            assert_eq!(launched(&socks, &no_pac, &[], &[own_http, ("NO_PROXY", list)]), ClaudeRoute::Proxied);
+        }
+    }
+
+    #[tokio::test]
+    async fn unsafe_socks_combinations_pause_in_every_mode_without_anonymous_traffic() {
+        let socks = manual("socks=127.0.0.1:7891", None);
+        let (script, checker) = scripted(Some("US"));
+        let http = ("HTTPS_PROXY", "http://127.0.0.1:7890");
+        for route in [
+            launched(&socks, &no_pac, &[], &[http, ("NO_PROXY", "*")]),
+            launched(&socks, &no_pac, &[], &[http, ("NO_PROXY", "api.anthropic.com")]),
+            launched(&socks, &no_pac, &[], &[http, ("no_proxy", "*.anthropic.com")]),
+            launched(&pac_only(), &mixed_pac, &[], &[("NO_PROXY", "api.anthropic.com")]),
+            launched(&socks, &no_pac, &[], &[("HTTPS_PROXY", "127.0.0.1:7890")]),
+        ] {
+            for mode in [EgressMode::Auto, EgressMode::Pause, EgressMode::Allow] {
+                assert_eq!(claude_decision(route.clone(), mode.settings(), &checker).await, Err(Pause::SocksUnusable));
+            }
+        }
+        assert!(script.calls.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -849,10 +925,10 @@ mod tests {
         }
         assert!(script.calls.lock().unwrap().is_empty());
         let split = |host: &str| Some(match host {
-            "claude.ai" => "",
-            "platform.claude.com" => "127.0.0.1:7890",
-            _ => "socks=127.0.0.1:7891",
-        }.to_owned());
+            "claude.ai" => Route::Direct,
+            "platform.claude.com" => Route::Http("http://127.0.0.1:7890".into()),
+            _ => Route::Socks("127.0.0.1:7891".into()),
+        });
         // Even when Claude removes the injected bypass, the relay honors the
         // direct rule and only that host is eligible for the anonymous check.
         for settings in [&[][..], &[("no_proxy", "localhost")][..]] {
@@ -875,6 +951,11 @@ mod tests {
             assert_eq!(launched(&socks, &no_pac, &[], &settings), ClaudeRoute::SocksUnusable);
         }
         assert_eq!(launched(&socks, &no_pac, &[], &[("HTTPS_PROXY", "http://127.0.0.1:7890")]), ClaudeRoute::Proxied);
+        // HTTP_PROXY alone cannot replace the relay in HTTPS_PROXY for HTTPS hosts.
+        for value in ["http://127.0.0.1:7890", "127.0.0.1:7890"] {
+            assert_eq!(launched(&socks, &no_pac, &[], &[("HTTP_PROXY", value)]), ClaudeRoute::Proxied);
+        }
+        assert_eq!(launched(&socks, &no_pac, &[], &[("NO_PROXY", "localhost")]), ClaudeRoute::Proxied);
         assert_eq!(launched(&socks, &no_pac, &[("HTTPS_PROXY", "http://127.0.0.1:7890")], &[]), ClaudeRoute::Proxied);
     }
 

@@ -259,11 +259,17 @@ describe("read failure reasons and sources", () => {
     expect(paintClaudePreview(cards, newer)).toEqual([cards[0], newer]);
   });
 
-  it("names the live failure beside a valid Desktop reading", () => {
-    expect(quotaProvenanceText({ provider: "claudeCode", status: { kind: "ok" }, source: "desktopRecord",
-      sourceLabel: "Claude 桌面额度记录 · 非本机独占用量", liveFailure: { code: "claudeBlockedByPolicy" } }))
-      .toBe("Claude 桌面额度记录 · 非本机独占用量 · 组织策略关闭了 Claude Code 非必要流量");
-  });
+  it.each(["Claude 桌面额度记录 · 非本机独占用量", "Claude 桌面历史额度 · 非实时 · 非本机独占用量"])(
+    "keeps the Desktop label %s concise, including when policy blocks the probe", (sourceLabel) => {
+      const card: ProviderRateLimit = { provider: "claudeCode", status: { kind: "ok" }, source: "desktopRecord", sourceLabel };
+      expect(quotaProvenanceText(card)).toBe(sourceLabel);
+      for (const code of ["claudeBinaryNotFound", "claudeNoWindows", "claudeTimedOut", "egressUnconfirmed"] as const) {
+        expect(quotaProvenanceText({ ...card, liveFailure: { code } })).toBe(sourceLabel);
+      }
+      expect(quotaProvenanceText({ ...card, liveFailure: { code: "claudeBlockedByPolicy" } }))
+        .toBe("组织策略禁止实时读取，显示桌面记录");
+    },
+  );
   const claude = (extra: Partial<ProviderRateLimit>): ProviderRateLimit => ({
     provider: "claudeCode",
     status: { kind: "noData" },

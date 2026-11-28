@@ -3,37 +3,40 @@ use super::{
     ProviderRateLimit, RateLimitEmptyReason, RateLimitLiveFailure, RateLimitProvider,
     RateLimitSource, RateLimitStatus,
 };
+use crate::claude_code::LaunchOrigin;
 
-pub fn resolve_read(
-    now: f64,
-    live: Result<ProviderRateLimit, RateLimitLiveFailure>,
+/// Desktop's bundled CLI can have a different login from the Desktop app.
+pub fn candidate_answer(
+    origin: LaunchOrigin,
+    answer: ProviderRateLimit,
+) -> Result<ProviderRateLimit, RateLimitLiveFailure> {
+    if origin == LaunchOrigin::Desktop
+        && answer.empty_reason == Some(RateLimitEmptyReason::SessionWithoutPlanLimits)
+    {
+        return Err(RateLimitLiveFailure::ClaudeNoWindows);
+    }
+    Ok(answer)
+}
+
+/// With no failure yet, return only usable numbers for the initial preview.
+pub fn offline_snapshot(
+    failure: Option<RateLimitLiveFailure>,
     cache: impl FnOnce() -> Option<ProviderRateLimit>,
     desktop: impl FnOnce() -> Option<ProviderRateLimit>,
-) -> ProviderRateLimit {
-    let failure = match live {
-        Ok(answer) => return answer,
-        Err(failure) => failure,
-    };
-    let policy = failure == RateLimitLiveFailure::ClaudeBlockedByPolicy;
-    if !policy {
-        if let Some(cached) = cache() {
-            return after_live_failure(failure, Some(cached));
+) -> Option<ProviderRateLimit> {
+    if failure != Some(RateLimitLiveFailure::ClaudeBlockedByPolicy) {
+        if let Some(mut cached) = cache() {
+            cached.live_failure = failure;
+            return Some(cached);
         }
     }
-    if let Some(mut snapshot) = desktop() {
-        if snapshot.status == RateLimitStatus::Ok {
-            snapshot.live_failure = Some(failure);
-            return snapshot;
-        }
-        if failure == RateLimitLiveFailure::ClaudeBinaryNotFound {
-            return snapshot;
-        }
+    let mut snapshot = desktop()?;
+    if snapshot.status == RateLimitStatus::Ok {
+        snapshot.live_failure = failure;
+    } else if failure != Some(RateLimitLiveFailure::ClaudeBinaryNotFound) {
+        return None;
     }
-    if policy {
-        nonessential_traffic_disabled_snapshot(now)
-    } else {
-        after_live_failure(failure, None)
-    }
+    Some(snapshot)
 }
 
 /// The card while the organization's policy forces nonessential traffic off:
@@ -46,17 +49,9 @@ pub fn nonessential_traffic_disabled_snapshot(now: f64) -> ProviderRateLimit {
     snapshot
 }
 
-/// What the card shows after the live read failed: Claude Code's own cache
-/// when it has a usable entry, annotated with why live failed; otherwise the
-/// failure itself. No program at all is not something a retry fixes, so it
-/// stays an empty state; every other failure is retryable, as on macOS.
-pub fn after_live_failure(
-    failure: RateLimitLiveFailure,
-    cached: Option<ProviderRateLimit>,
-) -> ProviderRateLimit {
-    if let Some(mut snapshot) = cached {
-        snapshot.live_failure = Some(failure);
-        return snapshot;
+pub fn empty_after_failure(now: f64, failure: RateLimitLiveFailure) -> ProviderRateLimit {
+    if failure == RateLimitLiveFailure::ClaudeBlockedByPolicy {
+        return nonessential_traffic_disabled_snapshot(now);
     }
     // Nothing to retry: no program, or a read paused on purpose.
     if failure == RateLimitLiveFailure::ClaudeBinaryNotFound || failure.is_pause() {
@@ -87,40 +82,70 @@ mod tests {
     }
 
     #[test]
-    fn live_answer_including_no_plan_skips_both_offline_sources() {
+    fn desktop_no_plan_allows_fallback_but_standalone_no_plan_is_final() {
         let mut no_plan =
             ProviderRateLimit::empty(RateLimitProvider::ClaudeCode, RateLimitStatus::NoData);
         no_plan.empty_reason = Some(RateLimitEmptyReason::SessionWithoutPlanLimits);
-        for live in [sample(RateLimitSource::Live), no_plan] {
-            assert_eq!(
-                resolve_read(
-                    0.,
-                    Ok(live.clone()),
-                    || panic!("cache"),
-                    || panic!("Desktop")
-                ),
-                live
-            );
-        }
+        assert_eq!(
+            candidate_answer(LaunchOrigin::LocalBin, no_plan.clone()),
+            Ok(no_plan.clone())
+        );
+        let live = sample(RateLimitSource::Live);
+        assert_eq!(
+            candidate_answer(LaunchOrigin::Desktop, live.clone()),
+            Ok(live)
+        );
+        let failure = candidate_answer(LaunchOrigin::Desktop, no_plan).unwrap_err();
+        assert_eq!(failure, ClaudeNoWindows);
+        let desktop = sample(RateLimitSource::DesktopRecord);
+        let shown = offline_snapshot(Some(failure), || None, || Some(desktop)).unwrap();
+        assert_eq!(shown.source, Some(RateLimitSource::DesktopRecord));
+        assert_eq!(shown.live_failure, Some(failure));
+    }
+
+    #[test]
+    fn preview_prefers_cache_then_valid_desktop_numbers() {
+        let cache = sample(RateLimitSource::Cache);
+        let desktop = sample(RateLimitSource::DesktopRecord);
+        assert_eq!(
+            offline_snapshot(None, || Some(cache.clone()), || panic!("Desktop")),
+            Some(cache)
+        );
+        assert_eq!(
+            offline_snapshot(None, || None, || Some(desktop.clone())),
+            Some(desktop)
+        );
+        let stale = ProviderRateLimit::failed(
+            RateLimitProvider::ClaudeCode,
+            RateLimitStatus::NoData,
+            Some(RateLimitSource::DesktopRecord),
+            DesktopRecordStale,
+        );
+        assert!(offline_snapshot(None, || None, || Some(stale)).is_none());
     }
 
     #[test]
     fn failure_tries_account_cache_then_desktop_and_keeps_the_live_reason() {
-        let cached = resolve_read(
-            0.,
-            Err(ClaudeTimedOut),
+        let cached = offline_snapshot(
+            Some(ClaudeTimedOut),
             || Some(sample(RateLimitSource::Cache)),
             || panic!("Desktop"),
-        );
+        )
+        .unwrap();
         assert_eq!(cached.source, Some(RateLimitSource::Cache));
         assert_eq!(cached.live_failure, Some(ClaudeTimedOut));
-        for reason in [ClaudeBinaryNotFound, ClaudeTimedOut, EgressUnconfirmed] {
-            let fallback = resolve_read(
-                0.,
-                Err(reason),
+        for reason in [
+            ClaudeBinaryNotFound,
+            ClaudeNoWindows,
+            ClaudeTimedOut,
+            EgressUnconfirmed,
+        ] {
+            let fallback = offline_snapshot(
+                Some(reason),
                 || None,
                 || Some(sample(RateLimitSource::DesktopRecord)),
-            );
+            )
+            .unwrap();
             assert_eq!(fallback.status, RateLimitStatus::Ok);
             assert_eq!(fallback.source, Some(RateLimitSource::DesktopRecord));
             assert_eq!(fallback.live_failure, Some(reason));
@@ -138,29 +163,28 @@ mod tests {
             ))
         };
         assert_eq!(
-            resolve_read(0., Err(ClaudeBinaryNotFound), || None, stale).live_failure,
+            offline_snapshot(Some(ClaudeBinaryNotFound), || None, stale)
+                .unwrap()
+                .live_failure,
             Some(DesktopRecordStale)
         );
-        assert_eq!(
-            resolve_read(0., Err(ClaudeTimedOut), || None, stale).status,
-            RateLimitStatus::RetryableError
-        );
-        assert_eq!(
-            resolve_read(0., Err(EgressUnconfirmed), || None, stale).live_failure,
-            Some(EgressUnconfirmed)
-        );
+        assert!(offline_snapshot(Some(ClaudeTimedOut), || None, stale).is_none());
+        assert!(offline_snapshot(Some(EgressUnconfirmed), || None, stale).is_none());
     }
 
     #[test]
     fn forced_policy_permits_only_a_valid_desktop_record() {
-        let card = resolve_read(
-            0.,
-            Err(ClaudeBlockedByPolicy),
+        let card = offline_snapshot(
+            Some(ClaudeBlockedByPolicy),
             || panic!("cache"),
             || Some(sample(RateLimitSource::DesktopRecord)),
-        );
+        )
+        .unwrap();
         assert_eq!(card.live_failure, Some(ClaudeBlockedByPolicy));
-        let empty = resolve_read(0., Err(ClaudeBlockedByPolicy), || panic!("cache"), || None);
+        assert!(
+            offline_snapshot(Some(ClaudeBlockedByPolicy), || panic!("cache"), || None).is_none()
+        );
+        let empty = empty_after_failure(0., ClaudeBlockedByPolicy);
         assert_eq!(
             empty.empty_reason,
             Some(RateLimitEmptyReason::NonessentialTrafficDisabled)

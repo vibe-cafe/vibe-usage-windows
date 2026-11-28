@@ -1,6 +1,6 @@
 //! Claude quota reader using Claude Code's inert stdio control protocol.
 //! It sends no prompt, exposes no tools, loads no MCP servers, and persists no
-//! session. Claude's own on-disk cache is the offline/no-binary fallback.
+//! session. The offline sources are Claude Code's cache and Desktop's history.
 
 use chrono::DateTime;
 use serde_json::{json, Value};
@@ -14,9 +14,9 @@ use std::sync::Mutex;
 use std::time::Instant;
 use vibe_core::claude_code::{ClaudeLaunch, LaunchOrigin, LaunchVia};
 use vibe_core::quota_product::DiscoveryEnvironment;
-use vibe_core::rate_limit::claude_read::resolve_read;
+use vibe_core::rate_limit::claude_read::{candidate_answer, empty_after_failure, offline_snapshot};
 #[cfg(test)]
-use vibe_core::rate_limit::claude_read::{after_live_failure, nonessential_traffic_disabled_snapshot};
+use vibe_core::rate_limit::claude_read::nonessential_traffic_disabled_snapshot;
 use vibe_core::{
     ProviderRateLimit, RateLimitEmptyReason, RateLimitLiveFailure, RateLimitProvider,
     RateLimitSource, RateLimitStatus, RateLimitWindow,
@@ -212,26 +212,38 @@ fn discover_candidates(environment: &DiscoveryEnvironment) -> Vec<ClaudeLaunch> 
     )
 }
 
-/// Desktop history is consulted only after the live result and Claude Code's
-/// account-scoped cache. A definitive answer (including no plan) wins.
+/// Refresh independently of the preview. Only failed probes consult disk again.
 pub async fn fetch(egress: crate::egress_check::Settings) -> ProviderRateLimit {
-    let environment = DiscoveryEnvironment::live();
     let mut record = ProbeRecord {
         at: (now_epoch() * 1000.0) as u64,
         desktop: DesktopStep::NotUsed,
         candidates_found: 0,
         attempts: Vec::new(),
     };
-    let result = if nonessential_traffic_forced_by_policy() {
-        Err(RateLimitLiveFailure::ClaudeBlockedByPolicy)
-    } else {
-        let candidates = discover_candidates(&environment);
-        record.candidates_found = candidates.len();
-        fetch_live(egress, candidates, &mut record).await
+    let candidates = tauri::async_runtime::spawn_blocking(|| {
+        if nonessential_traffic_forced_by_policy() {
+            Err(RateLimitLiveFailure::ClaudeBlockedByPolicy)
+        } else {
+            Ok(discover_candidates(&DiscoveryEnvironment::live()))
+        }
+    })
+    .await
+    .unwrap_or(Err(RateLimitLiveFailure::ClaudeLaunchFailed));
+    let result = match candidates {
+        Ok(candidates) => {
+            record.candidates_found = candidates.len();
+            fetch_live(egress, candidates, &mut record).await
+        }
+        Err(failure) => Err(failure),
     };
-    let snapshot = resolve_read(now_epoch(), result, cached_snapshot, || {
-        vibe_core::rate_limit::claude_desktop::read(&environment, now_epoch())
-    });
+    let snapshot = match result {
+        Ok(answer) => answer,
+        Err(failure) => tauri::async_runtime::spawn_blocking(move || read_offline(Some(failure)))
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| empty_after_failure(now_epoch(), failure)),
+    };
     if snapshot.source == Some(RateLimitSource::DesktopRecord) {
         record.desktop = DesktopStep::Used { failure: snapshot.live_failure };
     }
@@ -403,15 +415,19 @@ fn parse_version(output: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-pub fn cached_snapshot() -> Option<ProviderRateLimit> {
-    cached_snapshot_from(&claude_config_file(), now_epoch())
+fn read_offline(failure: Option<RateLimitLiveFailure>) -> Option<ProviderRateLimit> {
+    let now = now_epoch();
+    offline_snapshot(
+        failure,
+        || cached_snapshot_from(&claude_config_file(), now),
+        || vibe_core::rate_limit::claude_desktop::read(&DiscoveryEnvironment::live(), now),
+    )
 }
 
 pub fn preview() -> Option<ProviderRateLimit> {
-    if nonessential_traffic_forced_by_policy() {
-        return None;
-    }
-    cached_snapshot()
+    let failure = nonessential_traffic_forced_by_policy()
+        .then_some(RateLimitLiveFailure::ClaudeBlockedByPolicy);
+    read_offline(failure)
 }
 
 
@@ -500,7 +516,7 @@ async fn run_probe(
         // stdin was closed by `exchange`; give the child a short graceful-exit
         // window, then terminate the whole tree so no helper survives a refresh.
         attempt.exit = finish(&mut child, Duration::from_secs(1)).await;
-        return Ok(snapshot);
+        return candidate_answer(candidate.origin, snapshot);
     }
     attempt.exit = finish(&mut child, EXIT_GRACE).await;
     Err(RateLimitLiveFailure::ClaudeNoWindows)
@@ -603,9 +619,8 @@ async fn send(stdin: &mut tokio::process::ChildStdin, value: &Value) -> Result<(
 /// Claude's answer for one probe payload.
 ///
 /// `rate_limits_available: false` is Claude saying this login method (API key,
-/// Bedrock, Vertex) has no plan windows at all. That is definitive, so it must
-/// not be collapsed into "no data here": the card explains the account instead
-/// of looking like a missing install and offering a retry that cannot help.
+/// Bedrock, Vertex) has no plan windows. The caller decides whether that
+/// answer is authoritative for this candidate.
 fn snapshot_from_payload(root: &Value, now: f64) -> Option<ProviderRateLimit> {
     if root
         .get("rate_limits_available")
@@ -973,7 +988,8 @@ mod tests {
         let cached = cached_snapshot_from(&file, now).unwrap();
         assert_eq!(cached.source, Some(RateLimitSource::Cache));
 
-        let shown = after_live_failure(RateLimitLiveFailure::ClaudeTimedOut, Some(cached));
+        let shown = offline_snapshot(Some(RateLimitLiveFailure::ClaudeTimedOut),
+            || Some(cached), || panic!("Desktop")).unwrap();
         assert_eq!(shown.status, RateLimitStatus::Ok);
         assert_eq!(shown.source, Some(RateLimitSource::Cache));
         assert_eq!(shown.live_failure, Some(RateLimitLiveFailure::ClaudeTimedOut));
@@ -988,12 +1004,12 @@ mod tests {
             RateLimitLiveFailure::ClaudeNoResponse,
             RateLimitLiveFailure::ClaudeNoWindows,
         ] {
-            let shown = after_live_failure(failure, None);
+            let shown = empty_after_failure(0., failure);
             assert_eq!(shown.status, RateLimitStatus::RetryableError);
             assert_eq!(shown.source, Some(RateLimitSource::Live));
             assert_eq!(shown.live_failure, Some(failure));
         }
-        let missing = after_live_failure(RateLimitLiveFailure::ClaudeBinaryNotFound, None);
+        let missing = empty_after_failure(0., RateLimitLiveFailure::ClaudeBinaryNotFound);
         assert_eq!(missing.status, RateLimitStatus::NoData);
         assert_eq!(missing.source, None);
         assert_eq!(
@@ -1006,7 +1022,7 @@ mod tests {
             RateLimitLiveFailure::EgressUnconfirmed,
             RateLimitLiveFailure::ProxyNotDetected,
         ] {
-            let shown = after_live_failure(paused, None);
+            let shown = empty_after_failure(0., paused);
             assert_eq!(shown.status, RateLimitStatus::NoData);
             assert_eq!(shown.live_failure, Some(paused));
         }
@@ -1068,10 +1084,11 @@ mod tests {
             .to_string(),
         )
         .unwrap();
-        let fallback = after_live_failure(
-            RateLimitLiveFailure::ClaudeTimedOut,
-            cached_snapshot_from(&file, now),
-        );
+        let fallback = offline_snapshot(
+            Some(RateLimitLiveFailure::ClaudeTimedOut),
+            || cached_snapshot_from(&file, now),
+            || panic!("Desktop"),
+        ).unwrap();
         cache.store(fallback, generation);
         let second = shown(&cache);
         assert_eq!(second.source, Some(RateLimitSource::Cache));

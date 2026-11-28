@@ -51,7 +51,13 @@ impl ClaudeRelay {
                     _ = &mut stopped => break,
                     Some(_) = connections.join_next(), if !connections.is_empty() => {},
                     incoming = listener.accept() => {
-                        let Ok((stream, _)) = incoming else { break };
+                        let stream = match incoming {
+                            Ok((stream, _)) => stream,
+                            Err(error) => {
+                                log::warn!("Claude relay failed to accept a connection: {:?}", error.kind());
+                                continue;
+                            }
+                        };
                         let state = state.clone();
                         connections.spawn(async move { state.serve(stream).await });
                     }

@@ -385,9 +385,10 @@ export function quotaRetryableText(snapshot: ProviderRateLimit): string {
  */
 export function quotaProvenanceText(snapshot: ProviderRateLimit): string | null {
   if (snapshot.sourceLabel) {
-    return snapshot.source === "desktopRecord" && snapshot.status.kind === "ok" && snapshot.liveFailure
-      ? `${snapshot.sourceLabel} · ${quotaFailureText(snapshot.liveFailure, snapshot.provider)}`
-      : snapshot.sourceLabel;
+    if (snapshot.source === "desktopRecord" && snapshot.status.kind === "ok" && snapshot.liveFailure?.code === "claudeBlockedByPolicy") {
+      return "组织策略禁止实时读取，显示桌面记录";
+    }
+    return snapshot.sourceLabel;
   }
   if (snapshot.status.kind === "retryableError") {
     return `来源：${quotaSourceText(snapshot.source ?? "live")}`;

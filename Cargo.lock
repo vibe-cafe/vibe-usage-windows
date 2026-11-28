@@ -4652,6 +4652,7 @@ dependencies = [
  "http",
  "hyper-tls",
  "hyper-util",
+ "log",
  "percent-encoding",
  "serde",
  "serde_json",

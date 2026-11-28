@@ -12,6 +12,7 @@ dirs = "5"
 base64 = "0.22"
 getrandom = "0.3"
 http = "1"
+log = "0.4"
 hyper-tls = "0.6"
 hyper-util = { version = "0.1", features = ["client-legacy", "tokio"] }
 percent-encoding = "2"
