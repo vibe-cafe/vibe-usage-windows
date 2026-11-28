@@ -111,7 +111,7 @@ public sealed partial class PanelWindow : Window
     }
 
     /// <summary>The visible window on screen (DWM extended frame bounds).</summary>
-    public Win32.RECT VisibleRect()
+    internal Win32.RECT VisibleRect()
     {
         if (Win32.DwmGetWindowAttribute(Hwnd, Win32.DWMWA_EXTENDED_FRAME_BOUNDS, out var e, System.Runtime.InteropServices.Marshal.SizeOf<Win32.RECT>()) == 0 && e.Width > 0)
             return e;
