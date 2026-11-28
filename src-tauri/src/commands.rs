@@ -214,6 +214,9 @@ pub async fn set_quota_product_selected(
             selected,
         );
         settings.set_quota_selection(next);
+        if provider == RateLimitProvider::ClaudeCode && !selected {
+            ctx.rate_limits.lock().unwrap().invalidate_claude();
+        }
         drop(settings);
         ctx.save_settings();
         let settings = ctx.settings.lock().unwrap().clone();
@@ -354,6 +357,9 @@ pub fn set_settings(app: AppHandle, mut settings: AppSettings) {
     {
         let ctx = app.state::<AppCtx>();
         let mut current = ctx.settings.lock().unwrap();
+        if current.claude_rate_limit_enabled && !settings.claude_rate_limit_enabled {
+            ctx.rate_limits.lock().unwrap().invalidate_claude();
+        }
         if current.z_code_quota_region != settings.z_code_quota_region {
             ctx.rate_limits.lock().unwrap().invalidate_zcode();
         }

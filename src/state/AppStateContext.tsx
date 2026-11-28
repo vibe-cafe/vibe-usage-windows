@@ -42,7 +42,7 @@ import {
   UsageSession,
   ZCodeCredentialStatus,
 } from "../lib/types";
-import { localDayKey } from "../lib/formatters";
+import { customUsageQuery } from "../lib/formatters";
 import {
   moveQuotaProduct as computeQuotaProductOrder,
   quotaTabOrder as computeQuotaTabOrder,
@@ -233,11 +233,8 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         return { kind: "days", days: 30 };
       case "90D":
         return { kind: "days", days: 90 };
-      case "custom": {
-        const lo = from <= to ? from : to;
-        const hi = from <= to ? to : from;
-        return { kind: "custom", fromDate: localDayKey(lo), toDate: localDayKey(hi) };
-      }
+      case "custom":
+        return customUsageQuery(from, to);
     }
   }, []);
 

@@ -104,7 +104,6 @@ pub async fn get_rate_limits(app: &AppHandle, force: bool) -> Vec<ProviderRateLi
         Ok(guard) => (guard, force),
         Err(_) => (ctx.rate_limit_refresh.lock().await, false),
     };
-    let selected = selected_providers(app);
     ctx.rate_limits.lock().unwrap().refreshing = true;
     let _ = app.emit("rate-limits-updated", ());
     // Lock order is settings -> cache, also used by credential mutation commands.
@@ -113,6 +112,7 @@ pub async fn get_rate_limits(app: &AppHandle, force: bool) -> Vec<ProviderRateLi
         let cache = ctx.rate_limits.lock().unwrap();
         (settings.z_code_quota_region, cache.generation())
     };
+    let selected = selected_providers(app);
     // The egress-check settings as they are right before each product's read.
     let egress = || app.state::<AppCtx>().settings.lock().unwrap().egress();
     test_diagnostics::record_refresh_started(selected.clone());

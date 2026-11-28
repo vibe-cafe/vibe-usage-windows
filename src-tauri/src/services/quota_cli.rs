@@ -435,6 +435,8 @@ fn map_product(product: Product) -> Result<ProviderRateLimit, FetchError> {
     Ok(ProviderRateLimit {
         provider,
         meters,
+        model_scoped_meters: None,
+        claude_account: None,
         five_hour: None,
         seven_day: None,
         plan_label: product.plan_label,

@@ -10,7 +10,23 @@ use vibe_core::config::ConfigManager;
 pub enum UsageQuery {
     Days { days: u32 },
     From { from_iso: String },
-    Custom { from_date: String, to_date: String },
+    Custom { from_iso: String, to_iso: String, tz: String },
+}
+
+impl UsageQuery {
+    fn params(&self) -> Vec<(&'static str, String)> {
+        let local_zone = || iana_time_zone::get_timezone().unwrap_or_else(|_| "UTC".to_string());
+        match self {
+            Self::Days { days } => vec![("days", days.to_string()), ("tz", local_zone())],
+            Self::From { from_iso } => vec![("from", from_iso.clone()), ("tz", local_zone())],
+            // The WebView calculated both instants in this IANA time zone.
+            Self::Custom { from_iso, to_iso, tz } => vec![
+                ("from", from_iso.clone()),
+                ("to", to_iso.clone()),
+                ("tz", tz.clone()),
+            ],
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -57,25 +73,9 @@ pub async fn fetch_usage(
     api_key: &str,
     query: &UsageQuery,
 ) -> Result<Value, ApiError> {
-    let mut params: Vec<(String, String)> = match query {
-        UsageQuery::Days { days } => vec![("days".into(), days.to_string())],
-        UsageQuery::From { from_iso } => vec![("from".into(), from_iso.clone())],
-        UsageQuery::Custom {
-            from_date,
-            to_date,
-        } => vec![
-            ("from".into(), from_date.clone()),
-            ("to".into(), to_date.clone()),
-        ],
-    };
-    // Windows tz names must be converted to IANA ids ("Asia/Shanghai", not
-    // "China Standard Time") — iana-time-zone handles the mapping.
-    let tz = iana_time_zone::get_timezone().unwrap_or_else(|_| "UTC".to_string());
-    params.push(("tz".into(), tz));
-
     let res = http
         .get(format!("{}/api/usage", base_url.trim_end_matches('/')))
-        .query(&params)
+        .query(&query.params())
         .bearer_auth(api_key)
         .timeout(Duration::from_secs(30))
         .send()
@@ -235,5 +235,20 @@ mod tests {
                 .await
                 .expect("the linked usage request should finish");
         assert_eq!(result.unwrap(), serde_json::json!({}));
+    }
+
+    #[test]
+    fn custom_query_passes_the_webview_bounds_and_timezone_to_usage() {
+        let query: UsageQuery = serde_json::from_value(serde_json::json!({
+            "kind": "custom",
+            "fromIso": "2026-11-02T16:00:00.000Z",
+            "toIso": "2026-11-18T15:59:59.999Z",
+            "tz": "Asia/Shanghai"
+        })).unwrap();
+        assert_eq!(query.params(), [
+            ("from", "2026-11-02T16:00:00.000Z".into()),
+            ("to", "2026-11-18T15:59:59.999Z".into()),
+            ("tz", "Asia/Shanghai".into()),
+        ]);
     }
 }

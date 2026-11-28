@@ -8,6 +8,7 @@ use std::sync::Mutex;
 use std::time::Instant;
 use vibe_core::config::ConfigManager;
 use vibe_core::quota_product::{normalize_selection, ZCodeQuotaRegion};
+use vibe_core::rate_limit::claude_models::LiveModelHistory;
 use vibe_core::{ProviderRateLimit, RateLimitProvider};
 
 pub const IS_DEV: bool = cfg!(debug_assertions);
@@ -107,21 +108,35 @@ pub struct UpdateInfo {
 pub struct RateLimitCache {
     pub refreshing: bool,
     pub snapshots: HashMap<RateLimitProvider, (ProviderRateLimit, Instant)>,
+    last_claude_models: Option<LiveModelHistory>,
+    claude_generation: u64,
     zcode_generation: u64,
     cursor_generation: u64,
 }
 
-/// Which credentials a refresh started with: a ZCode region/key and a Cursor
-/// sign-in changed since then make its answer for that product stale.
+/// Discard a read that started before Claude was disabled, the ZCode
+/// region/key changed or the Cursor sign-in changed.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct CacheGeneration {
+    claude: u64,
     zcode: u64,
     cursor: u64,
 }
 
 impl RateLimitCache {
     pub fn generation(&self) -> CacheGeneration {
-        CacheGeneration { zcode: self.zcode_generation, cursor: self.cursor_generation }
+        CacheGeneration {
+            claude: self.claude_generation,
+            zcode: self.zcode_generation,
+            cursor: self.cursor_generation,
+        }
+    }
+
+    /// Turning Claude off also retires observations that could fill a missing model list.
+    pub fn invalidate_claude(&mut self) {
+        self.claude_generation += 1;
+        self.last_claude_models = None;
+        self.snapshots.remove(&RateLimitProvider::ClaudeCode);
     }
 
     /// Called while holding settings, before exposing a changed region/key.
@@ -137,14 +152,22 @@ impl RateLimitCache {
         self.snapshots.remove(&RateLimitProvider::Cursor);
     }
 
-    pub fn store(&mut self, snapshot: ProviderRateLimit, generation: CacheGeneration) {
+    pub fn store(&mut self, mut snapshot: ProviderRateLimit, generation: CacheGeneration) {
         let stale = match snapshot.provider {
+            RateLimitProvider::ClaudeCode => generation.claude != self.claude_generation,
             RateLimitProvider::ZCode => generation.zcode != self.zcode_generation,
             RateLimitProvider::Cursor => generation.cursor != self.cursor_generation,
             _ => false,
         };
         if stale {
             return;
+        }
+        if snapshot.provider == RateLimitProvider::ClaudeCode {
+            LiveModelHistory::reconcile(
+                &mut self.last_claude_models,
+                &mut snapshot,
+                vibe_core::rate_limit::now_epoch(),
+            );
         }
         self.snapshots
             .insert(snapshot.provider, (snapshot, Instant::now()));
@@ -295,6 +318,24 @@ impl AppCtx {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn turning_claude_off_discards_the_in_flight_read_and_last_live_models() {
+        use vibe_core::rate_limit::claude_models::AccountScope;
+        use vibe_core::{RateLimitSource, RateLimitStatus};
+        let mut cache = RateLimitCache::default();
+        let before = cache.generation();
+        let mut live = ProviderRateLimit::empty(RateLimitProvider::ClaudeCode, RateLimitStatus::Ok);
+        live.source = Some(RateLimitSource::Live);
+        live.claude_account = AccountScope::new(Some("a@example.invalid"), None);
+        live.model_scoped_meters = Some(vec![]);
+        cache.store(live.clone(), before);
+        assert!(cache.last_claude_models.is_some());
+        cache.invalidate_claude();
+        cache.store(live, before);
+        assert!(cache.last_claude_models.is_none());
+        assert!(!cache.snapshots.contains_key(&RateLimitProvider::ClaudeCode));
+    }
 
     #[test]
     fn region_or_key_change_discards_cached_and_in_flight_zcode_results() {
