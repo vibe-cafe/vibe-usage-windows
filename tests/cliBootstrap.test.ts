@@ -5,7 +5,8 @@
  * and the launcher itself carries no test hook. Cached "CLI versions" are tiny
  * fake packages whose `run()` only prints which version ran.
  */
-import { spawnSync } from "node:child_process";
+import { fork, spawnSync } from "node:child_process";
+import { once } from "node:events";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -113,19 +114,24 @@ type Answer =
   | { type: "bytes"; base64: string }
   | { type: "json"; json: unknown };
 
-function launch(plan: { latest: Answer; tarball?: Answer }) {
+type Plan = { latest: Answer; tarball?: Answer };
+
+function launcherEnvironment(plan: Plan) {
+  return {
+    // Isolate os.homedir() on both platforms, including ~/.npmrc.
+    HOME: home,
+    USERPROFILE: home,
+    VIBE_USAGE_CONFIG_DIR: home,
+    BOOTSTRAP_TEST_FETCH: JSON.stringify(plan),
+  };
+}
+
+function launch(plan: Plan) {
   const result = spawnSync(process.execPath, [`--import=${stubUrl}`, LAUNCHER, "sync"], {
     cwd: home,
     encoding: "utf8",
     timeout: 30_000,
-    env: {
-      ...process.env,
-      // `os.homedir()` for `~/.npmrc`: never the developer's or the runner's own.
-      HOME: home,
-      USERPROFILE: home,
-      VIBE_USAGE_CONFIG_DIR: home,
-      BOOTSTRAP_TEST_FETCH: JSON.stringify(plan),
-    },
+    env: launcherEnvironment(plan),
   });
   const lines = result.stderr.split(/\r?\n/).filter(Boolean);
   const stderr = lines.filter(
@@ -290,11 +296,18 @@ describe("cli-bootstrap: latest resolves", () => {
     expect(run.stub).toEqual(["timeout 10000", "timeout 15000", "tarball requested"]);
   });
 
+  it("accepts a matching sha512 among the registry's integrity hashes", () => {
+    const plan = published("0.16.0");
+    const dist = (plan.latest as { json: { dist: { integrity: string } } }).json.dist;
+    dist.integrity = "sha256-AAAA " + dist.integrity;
+    expect(launch(plan).stdout).toBe("ran 0.16.0 sync\n");
+  });
+
   for (const [name, tarball, extra, stage] of [
     ["the download fails", { type: "status", status: 404 }, {}, "download"],
     ["the download drops", { type: "network" }, {}, "download"],
     ["the download does not verify", { type: "body", body: "not the package" }, { integrity: "sha512-AAAA" }, "download"],
-    ["the package will not unpack", { type: "body", body: "not a gzip archive" }, {}, "install"],
+    ["the package will not unpack", { type: "body", body: "not a gzip archive" }, { integrity: "sha512-" + createHash("sha512").update("not a gzip archive").digest("base64") }, "install"],
   ] as const) {
     it(`falls back to the cache when a new latest is out and ${name}`, () => {
       cache({ "0.14.11": {} });
@@ -321,6 +334,103 @@ describe("cli-bootstrap: latest resolves", () => {
     });
     expect(integrity.status).toBe(1);
     expect(integrity.failures).toEqual([`${FAILURE} integrity mismatch for @vibe-cafe/vibe-usage@0.16.0`]);
+  });
+
+  for (const extra of [{}, { integrity: "sha256-AAAA" }] as Record<string, string>[]) {
+    it(`refuses a usable tarball with ${extra.integrity ?? "no integrity"} and falls back if possible`, () => {
+      const plan = { ...published("0.16.0"), latest: latest("0.16.0", extra) };
+      for (const warm of [false, true]) {
+        if (warm) {
+          cache({ "0.14.9": {} });
+          expect(launch(published("0.14.11")).status).toBe(0);
+        }
+        const run = launch(plan);
+        expect(run.status).toBe(warm ? 0 : 1);
+        expect(run.stdout).toBe(warm ? "ran 0.14.11 sync\n" : "");
+        expect(run.stderr).toHaveLength(1);
+        expect(run.stderr[0]).toContain(warm ? "notice: stage=download;" : FAILURE + " download failed");
+        expect(run.stderr[0]).toContain("sha512");
+        expect(run.urls).toEqual(["https://registry.npmjs.org/@vibe-cafe/vibe-usage/latest", "https://registry.npmjs.org/fake/-/fake-0.16.0.tgz"]);
+        expect(existsSync(join(home, "cli-cache", "0.16.0"))).toBe(false);
+      }
+    });
+  }
+});
+
+describe("cli-bootstrap: cache retention", () => {
+  it("keeps the installed rollback and the two newest complete alternatives", () => {
+    cache({ "1.0.9": {}, "1.0.10": {}, "1.0.11": {}, "1.0.12": { entry: false }, ".staging-test": {}, "unrelated": {} });
+    expect(launch(published("0.9.0")).stdout).toBe("ran 0.9.0 sync\n");
+    expect(readdirSync(join(home, "cli-cache")).sort()).toEqual([".staging-test", "0.9.0", "1.0.10", "1.0.11", "1.0.12", "unrelated"]);
+    expect(launch({ latest: { type: "network" } }).stdout).toBe("ran 1.0.11 sync\n");
+  });
+
+  it("lets a running CLI finish loading its files across another install", async () => {
+    cache({ "1.0.0": {}, "1.0.1": {}, "1.0.2": {}, "1.0.3": {} });
+    const entry = join(home, "cli-cache", "1.0.0", "package", "src", "index.js");
+    writeFileSync(entry, `export async function run() {
+      process.send("ready");
+      await new Promise(resolve => process.once("message", resolve));
+      await import("./later.mjs");
+    }`);
+    writeFileSync(join(dirname(entry), "later.mjs"), "");
+    const child = fork(LAUNCHER, ["sync"], {
+      cwd: home, execArgv: [`--import=${stubUrl}`], silent: true,
+      env: launcherEnvironment({ latest: latest("1.0.0") }),
+    });
+    const exited = once(child, "exit");
+    try {
+      expect((await Promise.race([once(child, "message"), exited]))[0]).toBe("ready");
+      expect(launch(published("1.0.4")).stdout).toBe("ran 1.0.4 sync\n");
+      expect(existsSync(join(home, "cli-cache", "1.0.1"))).toBe(false);
+      child.send("continue");
+      expect(await exited).toEqual([0, null]);
+      expect(launch(published("1.0.5")).stdout).toBe("ran 1.0.5 sync\n");
+      expect(readdirSync(join(home, "cli-cache")).sort()).toEqual(["1.0.3", "1.0.4", "1.0.5"]);
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill();
+        await exited;
+      }
+    }
+  });
+
+  it("protects a cache hit arriving after the cleaner checked for running CLIs", async () => {
+    cache({ "1.0.0": {}, "1.0.1": {}, "1.0.2": {} });
+    // Pause the installer immediately before it moves 1.0.0 out of the cache.
+    const pause = join(home, "pause-rename.mjs");
+    writeFileSync(pause, `
+      import fs from "node:fs";
+      import { basename } from "node:path";
+      import { syncBuiltinESMExports } from "node:module";
+      const rename = fs.renameSync;
+      fs.renameSync = (from, to) => {
+        if (basename(from) === "1.0.0") {
+          process.send("pruning");
+          const wait = new Int32Array(new SharedArrayBuffer(4));
+          while (!fs.existsSync("resume")) Atomics.wait(wait, 0, 0, 10);
+        }
+        return rename(from, to);
+      };
+      syncBuiltinESMExports();
+    `);
+    const child = fork(LAUNCHER, ["sync"], {
+      cwd: home, silent: true, env: launcherEnvironment(published("1.0.3")),
+      execArgv: [`--import=${stubUrl}`, `--import=${pathToFileURL(pause).href}`],
+    });
+    const exited = once(child, "exit");
+    try {
+      expect((await Promise.race([once(child, "message"), exited]))[0]).toBe("pruning");
+      expect(launch({ latest: latest("1.0.0") }).stdout).toBe("ran 1.0.0 sync\n");
+      writeFileSync(join(home, "resume"), "");
+      expect(await exited).toEqual([0, null]);
+      expect(existsSync(join(home, "cli-cache", "1.0.0", "complete"))).toBe(true);
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill();
+        await exited;
+      }
+    }
   });
 });
 
