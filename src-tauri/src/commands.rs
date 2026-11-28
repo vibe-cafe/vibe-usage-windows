@@ -139,6 +139,20 @@ pub fn get_sync_state(app: AppHandle) -> SyncState {
     app.state::<AppCtx>().sync_state.lock().unwrap().clone()
 }
 
+/// The app's own last ten sync summaries (`sync-history.json`, newest first)
+/// for the bars on Settings → 数据同步. Reads the local file only; the same
+/// typed records 「复制诊断信息」 uses, nothing new is recorded for it.
+#[tauri::command]
+pub fn get_sync_history(app: AppHandle) -> Vec<crate::services::sync_history::SyncRecord> {
+    let ctx = app.state::<AppCtx>();
+    ctx.settings_path
+        .parent()
+        .map(|dir| {
+            crate::services::sync_history::load(&crate::services::sync_history::path_in(dir))
+        })
+        .unwrap_or_default()
+}
+
 // -- Rate limits ----------------------------------------------------------------
 
 #[tauri::command]
@@ -452,8 +466,8 @@ pub fn open_settings_impl(app: &AppHandle) {
     let result = WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("index.html".into()))
         .title("Vibe Usage 设置")
         // Same size rules as the `settings` entry in tauri.conf.json.
-        .inner_size(460.0, 620.0)
-        .min_inner_size(460.0, 360.0)
+        .inner_size(700.0, 460.0)
+        .min_inner_size(620.0, 360.0)
         .resizable(true)
         .maximizable(false)
         // Dark title bar over the dark content even under the light Windows
@@ -472,13 +486,27 @@ pub fn open_settings_impl(app: &AppHandle) {
     }
 }
 
-/// `focus` names a part of the settings to scroll to (`cursorLogin`: the
-/// Cursor card's sign-in prompt); the window takes it once it shows.
+/// Where an entry point wants the settings window to land (`src/settings/model.ts`
+/// `SettingsFocus`): `quotas` (the gear on the panel's tab strip),
+/// `quota:<provider>` (a grey tab: that row flashes) or `cursorLogin` (the
+/// Cursor card's sign-in prompt). Anything else is dropped, and no focus
+/// means the page the user last looked at.
+fn is_settings_focus(focus: &str) -> bool {
+    match focus {
+        "quotas" | "cursorLogin" => true,
+        _ => focus.strip_prefix("quota:").is_some_and(|id| {
+            serde_json::from_value::<RateLimitProvider>(Value::String(id.to_string())).is_ok()
+        }),
+    }
+}
+
+/// `focus`: see `is_settings_focus`; the window takes it once it shows.
 #[tauri::command]
 pub fn open_settings_window(app: AppHandle, focus: Option<String>) {
-    if let Some(focus) = focus.filter(|focus| focus == "cursorLogin") {
-        *app.state::<AppCtx>().settings_focus.lock().unwrap() = Some(focus);
-    }
+    // Every opening replaces the last request, so a 「设置」 after an
+    // unconsumed gear click still lands on the last page.
+    *app.state::<AppCtx>().settings_focus.lock().unwrap() =
+        focus.filter(|focus| is_settings_focus(focus));
     open_settings_impl(&app);
 }
 
@@ -541,7 +569,7 @@ pub async fn install_update(app: AppHandle) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{initial_quota_selection, validate_extra_root_source};
+    use super::{initial_quota_selection, is_settings_focus, validate_extra_root_source};
     use vibe_core::quota_product::{QuotaProduct, QuotaProductAvailability};
     use vibe_core::RateLimitProvider;
 
@@ -558,6 +586,19 @@ mod tests {
             .selected_quota_product_ids
             .is_empty());
         assert!(!directory.path().join("settings.json").exists());
+    }
+
+    #[test]
+    fn settings_focus_is_allowlisted() {
+        assert!(is_settings_focus("quotas"));
+        assert!(is_settings_focus("cursorLogin"));
+        assert!(is_settings_focus("quota:zcode"));
+        assert!(is_settings_focus("quota:kimi-code"));
+        assert!(is_settings_focus("quota:claudeCode"));
+        assert!(!is_settings_focus("quota:"));
+        assert!(!is_settings_focus("quota:unknown"));
+        assert!(!is_settings_focus("about"));
+        assert!(!is_settings_focus(""));
     }
 
     #[test]

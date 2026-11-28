@@ -2,7 +2,8 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
-import type { DiagnosticsReport } from "./diagnostics";
+import type { DiagnosticsReport, SyncRecord } from "./diagnostics";
+import type { SettingsFocus } from "../settings/model";
 import {
   AppSettings,
   AppStatus,
@@ -34,6 +35,8 @@ export const api = {
   // Sync ---------------------------------------------------------------------
   triggerSync: () => invoke<void>("trigger_sync"),
   getSyncState: () => invoke<SyncState>("get_sync_state"),
+  /** The app's last ten sync summaries, newest first (local file only). */
+  getSyncHistory: () => invoke<SyncRecord[]>("get_sync_history"),
 
   // Rate limits ---------------------------------------------------------------
   getRateLimits: (force: boolean) => invoke<ProviderRateLimit[]>("get_rate_limits", { force }),
@@ -72,7 +75,8 @@ export const api = {
 
   // Windows / shell -------------------------------------------------------------
   openExternal: (url: string) => invoke<void>("open_external", { url }),
-  /** `focus`: scroll the settings to that part once shown. */
+  /** `focus`: where the settings land (`settings/model.ts`); none returns
+   *  to the page the user last looked at. */
   openSettingsWindow: (focus?: SettingsFocus) =>
     invoke<void>("open_settings_window", focus ? { focus } : {}),
   takeSettingsFocus: () => invoke<SettingsFocus | null>("take_settings_focus"),
@@ -91,7 +95,7 @@ export const api = {
   installUpdate: () => invoke<void>("install_update"),
 };
 
-export type SettingsFocus = "cursorLogin";
+export type { SettingsFocus };
 
 // Events --------------------------------------------------------------------
 

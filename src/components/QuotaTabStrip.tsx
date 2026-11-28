@@ -6,7 +6,8 @@
 // card that reached the leading edge — the strip never claims a product is on
 // screen when it is not. Enabled products come first in the full-strength
 // monochrome mark; products whose monitoring is off stay visible after them,
-// dimmed to grey, and their tab opens Settings (there is no card to jump to).
+// dimmed to grey, and their tab opens Settings on 订阅配额 with that product's
+// row flashing (there is no card to jump to); the gear opens 订阅配额 too.
 // Tabs are draggable: the order is persisted (`quotaProductOrder`), and because enabled
 // products render as their own group, a cross-group drop lands inside the
 // dragged product's own group instead of breaking the "enabled first" rule.
@@ -17,6 +18,7 @@ import { RateLimitProvider } from "../lib/types";
 import { isQuotaPause, providerLabel, quotaTabShowsWarning } from "../lib/quotaProducts";
 import { useAppState } from "../state/AppStateContext";
 import { api } from "../lib/api";
+import { quotaFocus } from "../settings/model";
 import { ProviderIcon } from "./ProviderIcon";
 
 /** Same amber as the 70–90% progress bar: "this product has a problem" reads
@@ -85,9 +87,10 @@ export function QuotaTabStrip({
             }}
             onClick={() => {
               // A grey tab has no card to jump to: monitoring is off, so the
-              // useful destination is the place that turns it on.
+              // useful destination is the place that turns it on — its row
+              // on 订阅配额, which flashes (macOS `.quotas(focus: provider)`).
               if (enabled) onSelect(provider);
-              else void api.openSettingsWindow();
+              else void api.openSettingsWindow(quotaFocus(provider));
             }}
             onDragStart={(event) => {
               event.dataTransfer.effectAllowed = "move";
@@ -137,7 +140,7 @@ export function QuotaTabStrip({
         title="打开订阅配额设置"
         className="flex shrink-0 items-center justify-center rounded-[7px] text-neutral-400 hover:text-neutral-200 focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-1 focus-visible:outline-white/50"
         style={{ width: 30, height: 30 }}
-        onClick={() => void api.openSettingsWindow()}
+        onClick={() => void api.openSettingsWindow("quotas")}
       >
         <Settings size={13} />
       </button>

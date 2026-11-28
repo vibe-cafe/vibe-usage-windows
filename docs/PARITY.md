@@ -1,6 +1,6 @@
 # macOS ↔ Windows 对齐说明 (Parity Notes)
 
-本项目以 `vibe-usage-app`（macOS, SwiftUI）为功能与视觉基准。本文档记录 1:1 对齐的映射关系与少数平台差异，最近一次按 macOS 0.8.0（`5d786c6`）核对是 2026-11-25（Cursor 单独登录按同期的 macOS 实现和《Cursor-加密凭据-方案》第 3 节文案，2026-11-26）；文中写明「Windows 尚未跟进」的，是两端还没对齐的部分。
+本项目以 `vibe-usage-app`（macOS, SwiftUI）为功能与视觉基准。本文档记录 1:1 对齐的映射关系与少数平台差异，最近一次按 macOS 0.8.0（`5d786c6`）核对是 2026-11-25（Cursor 单独登录按同期的 macOS 实现和《Cursor-加密凭据-方案》第 3 节文案，2026-11-26）；设置窗口按 macOS 经典主题的设置页（`55c9e41`）核对是 2026-11-28。文中写明「Windows 尚未跟进」的，是两端还没对齐的部分。
 
 ## 视觉常量（源自 Swift 源码，落在 `tailwind.config.cjs`）
 
@@ -40,15 +40,17 @@
 | `BarChartView` | `components/TrendChart.tsx`（自绘 div 堆叠条） |
 | `DistributionChartsView` | `components/DistributionGrid.tsx`（自绘 SVG donut） |
 | 长名字 `.truncationMode(.middle)` + `.help()`（分布图例/筛选选项，同前缀项目名区分信息在尾部） | `components/MiddleTruncateLabel.tsx`（head 截断 + tail 6 字符不收缩 + `title` 悬浮全名；两段都 `whitespace-pre`，否则拆分处的空格会被 flex 子元素吞掉，显示成「Gemini 4Carbon」） |
-| `SettingsView`（NSWindow 700×460，宽度固定、可以拉高，深色，左侧边栏五页：通用 / 订阅配额 / 数据同步 / 数据目录（高级）/ 关于） | `SettingsApp`（独立 WebView 窗口，默认 460×620、可调整；仍是改版前的单页竖排：数据同步 → 订阅配额 → 隐私保护 → 常规 → 数据目录（高级）→ 测试诊断（仅测试构建）→ 关于 → 危险操作。侧边栏改版 Windows 尚未跟进） |
+| `SettingsView`（NSWindow 700×460，宽度固定、可以拉高，深色，左侧边栏五页：通用 / 订阅配额 / 数据同步 / 数据目录（高级）/ 关于）+ `SettingsTheme.classic` | `SettingsApp`（状态和后端调用）+ `settings/`（`SettingsWindow` 侧边栏、`pages/*` 五页、`controls.tsx` 卡片行和控件、`theme.ts` 照搬经典主题的颜色字号尺寸、`model.ts` 纯规则）。同样五页、同样只有一个标记（同步失败时「数据同步」旁的红点）；数据同步页有最近 10 次同步的小条（读 `sync-history.json`，命令 `get_sync_history` 只读本地文件）；关于页是图标卡片 + 更新 / 诊断 / 链接三组 + 版权行（仓库链接换成 vibe-usage-windows）。Windows 特有项的位置：托盘两项和开机自启在「通用」（对应 macOS 菜单栏两项，没有「在 Dock 中显示」和菜单栏预览）；「隐私保护 → 没检测到代理时」在「订阅配额」表格下方（与 macOS 相同）；「重置配置」在「数据同步」最后一行（与 macOS 相同，确认改为窗口内的确认框，样子同 WinUI 的 ContentDialog；macOS 是系统弹窗，Cursor「退出」的确认同样）；外测「导出诊断日志」带「测试版」小标进「关于 → 诊断」；Windows 自己的「检查更新 / 安装更新」进「关于 → 更新」（流程见平台差异 5，按钮不带省略号，因为不会再开窗口）；ZCode Key（凭据管理器）和 Cursor 单独登录都在各自那一行展开的圆角块里。「数据来源与检测」一行已删（macOS 11-20 已删），「重新检测」按钮在订阅配额页标题右侧。macOS「额外 Codex Home」一行 Windows 尚未跟进（差距 G20） |
 | `SettingsQuotaStatus.status` / `AppState.quotaWarningSnapshot` | `SettingsApp` + `lib/quotaProducts.ts:quotaProductStatusText`。启用且刷新结束后显示读取原因短词。有数但暂停时也显示「已暂停」。设置窗口只读面板内存快照，监听 `rate-limits-updated`。ZCode 行保留按区域的 Key 配置状态。 |
-| `AppState`（面板和设置共用一份内存状态） | `state/AppStateContext.tsx` + Rust `AppCtx`。面板和设置是两个 WebView，各存一份设置，靠 `settings-updated` 事件跟上对方；设置窗口改开关时在最新那份上改，不会把面板刚拖好的图标顺序冲掉（#53） |
+| `AppState`（面板和设置共用一份内存状态） | `state/AppStateContext.tsx` + Rust `AppCtx`。面板和设置是两个 WebView，各存一份设置，靠 `settings-updated` 事件跟上对方；设置窗口改开关、在订阅配额表格里拖动排序时，都在最新那份上改（排序按最新的 `quotaProductOrder` 重算再写回），不会把面板刚拖好的图标顺序冲掉（#53） |
+| `SettingsQuotaPage`（订阅配额表格：工具 / 状态 / 面板卡片三列，按面板顺序、已开启在前，其余在「未开启」灰带下；行尾拖动把手，只在本组内排序，和面板共用 `quotaProductOrder`；ZCode / Cursor 行首箭头展开圆角块）+ `SettingsQuotaStatus` + `QuotaReorder` | `settings/pages/QuotaPage.tsx` + `lib/quotaProducts.ts:quotaProductStatus`（带颜色类别的状态，ZCode 没 Key 为琥珀色「需 Key」、有 Key 回到「已检测」，与 macOS 一致；原先 Windows 写「待配置 / 已配置」）+ `settings/model.ts:quotaReorderTarget`。拖动用指针事件而不是 HTML5 拖放：Tauri 在 Windows 上要关掉窗口的文件拖放才收得到 HTML5 拖放事件 |
+| `SettingsNavigation`（记住上次看的页 `settingsLastPage`；`SettingsDestination`：面板「设置」回上次的页，齿轮进订阅配额，灰色图标进订阅配额并让那一行闪一下，缺配置的 ZCode / 需登录的 Cursor 直接展开） | `settings/model.ts`（`restoredPage` / `settingsDestination` / `opensConfiguration`）。上次的页存在设置 WebView 自己的 `localStorage`（键 `settingsLastPage`，只存页名，`settings.json` 不变）；入口经 `open_settings_window` 的 `focus` 传：`quotas`（齿轮）、`quota:<产品>`（灰色图标）、`cursorLogin`（Cursor 卡片），Rust 侧白名单 `is_settings_focus`，每次打开都覆盖上一次没取走的请求。窗口关闭是隐藏，下次显示前收起展开的行、清掉没填完的 Key 和复制结果（macOS 每次新建窗口） |
 | `APIClient` | `services/api_client.rs` |
 | `SyncEngine`（内置 Node 跑 `cli-bootstrap.mjs`，120s） | `services/sync_engine.rs`（内置 Node 跑同一份 `cli-bootstrap.mjs`，120s，CREATE_NO_WINDOW） |
 | 设置中的隔离运行时目录（Codex / Grok / Antigravity） | 原生文件夹选择器 + 同一组 CLI `config roots/add-root/remove-root` 命令 |
 | `SyncScheduler`（30 分钟） | `services/scheduler.rs` |
 | 八产品订阅配额目录与任意数量选择 | Codex / Claude 原生适配；Kimi / ZCode / Grok / OpenCode Go / Antigravity / AGY 使用版本化 typed CLI bridge（OpenCode Go 的凭据读取由内置 CLI 负责：2.x 凭据表 → 1.x `auth.json` 回退；Antigravity 由 CLI 启动用户已登录的 `agy` 读取，Windows 额外查官方默认安装位置，见 `docs/SUBSCRIPTION_QUOTAS.md`「Antigravity / AGY 探测约束」）；Cursor 同样走 CLI（`quota fetch --product cursor`，与 macOS 0.7.4 起一致；有单独登录时凭据经标准输入递给 CLI，见 `docs/SUBSCRIPTION_QUOTAS.md`「Cursor 探测约束」） |
-| `RateLimitCardView`：`QuotaTabStripView`（整目录图标 Tab：已开启的单色图形在前、未开启的变灰在后、可拖动排序、最右齿轮进设置、已启用但非 ok 加琥珀点）+ 一行两张 240px 卡片横滑，Tab 与横滑双向联动（点 Tab 滑过去、滑动时高亮跟随前缘卡片）；卡片只属于已启用产品，全部关闭时只剩图标行 | `components/RateLimitCard.tsx` + `components/QuotaTabStrip.tsx`：同一模型（HTML5 拖放排序、前缘卡片经滚动位置判定、`quotaTabOrder` 顺序与 `quotaProductOrder` 持久化、齿轮调 `open_settings_window`） |
+| `RateLimitCardView`：`QuotaTabStripView`（整目录图标 Tab：已开启的单色图形在前、未开启的变灰在后、可拖动排序、最右齿轮进设置的订阅配额页、点灰色图标进订阅配额并闪那一行、已启用但非 ok 加琥珀点）+ 一行两张 240px 卡片横滑，Tab 与横滑双向联动（点 Tab 滑过去、滑动时高亮跟随前缘卡片）；卡片只属于已启用产品，全部关闭时只剩图标行 | `components/RateLimitCard.tsx` + `components/QuotaTabStrip.tsx`：同一模型（HTML5 拖放排序、前缘卡片经滚动位置判定、`quotaTabOrder` 顺序与 `quotaProductOrder` 持久化、齿轮调 `open_settings_window("quotas")`，灰色图标调 `open_settings_window("quota:<产品>")`） |
 | `RateLimitCardView.allRows` 的 Codex 5h 占位行（`fiveHourNotEnforced` 或 Pro / Prolite →「不限额」，否则「近 5 小时无活动」；维护者 2026-10-24 定）与 `expectsFiveHourWindow` | `lib/quotaProducts.ts:codexFiveHourPlaceholder` / `expectsCodexFiveHour`（同一规则；Windows 原先显示「官方当前未启用」，已对齐） |
 | `RateLimitCardView.emptyStateText` / `authorizationText` | `lib/quotaProducts.ts:quotaEmptyStateText` / `quotaAuthorizationText`。六种 CLI 空态、登录缺失与失效、首次占位和未知原因的卡片文案逐字对齐。 |
 | `ProviderRateLimit.Source` / `ProviderRateLimit.LiveFailure`（卡片的实际来源和固定失败原因，一键诊断 1a） | Rust `RateLimitSource` / `RateLimitLiveFailure`（同一组代码，另加 Windows 独有的桌面端记录四种原因和凭据管理器）+ `lib/quotaProducts.ts:quotaFailureText` / `quotaProvenanceText`（文案与显示规则一致，见 `docs/SUBSCRIPTION_QUOTAS.md`「失败原因和来源」） |
@@ -77,11 +79,11 @@
 6. **面板关闭按钮**：macOS footer「关闭」= 退出应用（`NSApplication.terminate`）；Windows 同义（退出到无进程）。托盘常驻由开机自启保证。
 7. **配额悬停 tooltip**：交互与内容 1:1；Windows 使用 mouse enter/leave（无 NSTrackingArea 差异）。
 8. **配额卡片数量**：与 0.6.1 相同，不设上限、不折叠；选择顺序即卡片顺序，多于两张时横向滚动。首次启动勾选全部「已检测且已就绪」的产品（ZCode 未配置 Key 时除外；Antigravity / AGY 一律不自动勾选，要用户自己打开，2026-11-26 起；已保存的选择不变；与 macOS 一致）。
-9. **设置页「托盘」分组**：macOS 的「菜单栏」对应 Windows 的「托盘」，两项合并进「常规」，不单列分组。
+9. **设置页「托盘」两项**：macOS「通用」页的「菜单栏显示费用 / Token」对应 Windows 的「托盘显示费用 / Token」，放在「通用」页第一张卡片；macOS 这页顶上的菜单栏预览和「在 Dock 中显示」Windows 没有。
 10. **品牌图形**（已对齐，保留编号）：两端原先都用彩色官方资产，现在都换成 Lobe Icons 的单色图形（macOS 2026-11-20，Windows 随后跟进），见上方「视觉常量」和「组件映射」。
 11. **窗口可调整大小**（vibe-cafe/vibe-usage-windows#51）：macOS 面板固定 520×620，设置窗口 700×460、宽度固定只能拉高。Windows 是带标题栏的普通窗口，固定 620 高在小屏或高缩放下放不下（例如 1366×768 + 125%，逻辑高度约 614，再扣掉任务栏和标题栏），所以两个窗口都允许拖动调整：
     - 主窗口默认 520×620，最小 520×360。宽度不低于设计宽度，否则汇总卡片的数字会被截断；高度不够时内容区滚动。放宽时配额卡片（两张各占一半）、筛选下拉的位置、趋势图横轴跟着伸展。不能最大化。
-    - 设置窗口默认 460×620，最小 460×360，整窗滚动；内容列随宽度伸展到 640 后居中，默认宽度下仍是原来的 430 列。
+    - 设置窗口默认 700×460（与 macOS 相同，系统标题栏另算在外），最小 620×360：620 宽时订阅配额表格的名称列还放得下「Antigravity / AGY」，再窄就要截断；360 高与主窗口相同，照顾小屏和高缩放。可以加宽，侧边栏固定 168，右侧每页自己上下滚动、侧边栏不动；卡片最宽 640，再宽就靠左留白，不把表格拉成细长条。不能最大化。
     - 建窗时不超出屏幕可用区（`preventOverflow`）；从托盘再次打开（或打开设置）时，若窗口比所在屏幕的可用区大，先缩小再居中，标题栏不会被推出屏幕。
     - 主窗口大小在隐藏到托盘和退出时写入 `window-size.json`（见下方文件表），下次启动恢复；设置窗口不记。
 

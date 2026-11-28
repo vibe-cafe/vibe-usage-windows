@@ -24,7 +24,8 @@ const route = getWindowRoute();
 const root = ReactDOM.createRoot(document.getElementById("root")!);
 
 if (route === "settings") {
-  document.body.style.background = "#1C1C1E";
+  // The settings page color (`settings/theme.ts`), so a resize never flashes another shade.
+  document.body.style.background = "#1E1E1E";
   root.render(
     <React.StrictMode>
       <SettingsApp />

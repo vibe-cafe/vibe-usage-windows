@@ -54,7 +54,8 @@ describe("quota product presentation", () => {
   it("keeps regional Key configuration unless there is a read warning", () => {
     const product = { ...grok, provider: "zcode" } as const;
     for (const configured of [false, true]) {
-      expect(quotaProductStatusText(product, [], undefined, false, configured)).toBe(configured ? "已配置" : "待配置");
+      // macOS: a missing key reads 「需 Key」; a saved one falls back to detection.
+      expect(quotaProductStatusText(product, [], undefined, false, configured)).toBe(configured ? "已检测" : "需 Key");
       for (const [code, label] of [["credentialsNotFound", "需 Key"], ["credentialsRejected", "Key 无效"]] as const) {
         const snapshot = result({ provider: "zcode", status: { kind: "unauthorized" }, liveFailure: { code } });
         expect(quotaProductStatusText(product, ["zcode"], snapshot, false, configured)).toBe(label);

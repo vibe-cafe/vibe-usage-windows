@@ -99,3 +99,45 @@ body {
   border-color: rgba(0, 0, 0, 0.2);
   border-top-color: rgba(0, 0, 0, 0.75);
 }
+
+/* Settings window (src/settings/): keyboard focus ring, hover feedback on
+   the drawn controls, and a thin dark scrollbar for the page column. */
+.settings-focus:focus {
+  outline: none;
+}
+.settings-focus:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.6);
+  outline-offset: 1px;
+}
+.settings-button:not(:disabled):hover {
+  filter: brightness(1.12);
+}
+.settings-button:not(:disabled):active {
+  opacity: 0.75;
+}
+.settings-sidebar-item:not([aria-current="page"]):hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+.settings-icon-button:not(:disabled):hover {
+  color: #e9e9e9 !important;
+}
+.settings-icon-button:disabled {
+  opacity: 0.45;
+}
+.settings-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+}
+.settings-scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.settings-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.settings-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
+  border-radius: 4px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}

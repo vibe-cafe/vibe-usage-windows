@@ -79,12 +79,19 @@ current CLI model: the app no longer carries a pinned snapshot — it resolves
   and no local install/login. Verify on Windows that a product whose source
   cannot tell "used up" apart from "nothing here" never shows 「已用满」, and that
   four or more enabled products scroll instead of shrinking below 240px.
-- PARITY-UI-01: official provider artwork (six products, transparent container
-  marks) instead of the previous mismatched replacements, and the settings order
-  数据同步 → 订阅配额 → 常规 → 数据目录（高级）→ 测试诊断 → 关于 → 危险操作 with the
-  set-once directory controls collapsed and ZCode's key form inside its own
-  row. Capture cropped screenshots of the panel and the settings window on
-  Windows; browser rendering on macOS is not native evidence.
+- PARITY-UI-01: monochrome provider marks, and the settings window laid out
+  like the macOS classic settings: 700×460 by default (minimum 620×360), a
+  sidebar of 通用 / 订阅配额 / 数据同步 / 数据目录（高级）/ 关于, each page
+  scrolling on its own. Check on Windows (100 % and 125 %, Windows 10 and 11):
+  the dark title bar; label weights (Segoe UI and Microsoft YaHei UI have no
+  medium face on Windows 10); dragging a 订阅配额 row with a mouse and a touch
+  pad, the drop line, and the panel's tab strip following the new order; the
+  panel's gear opening 订阅配额, a grey tab opening it with that row flashing
+  (ZCode without a key opens its row), 「设置」 returning to the last page, also
+  after a restart; the red dot on 数据同步 after a failed sync; the reset and
+  Cursor sign-out confirmations. Capture cropped screenshots of the panel and
+  the settings window on Windows; browser rendering on macOS is not native
+  evidence.
 
 ## Commands and evidence
 
@@ -179,15 +186,15 @@ Do not mark full acceptance passed: report each remaining gap and prerequisite.
 
 前提：npm 上的 CLI 已是 0.15.10 或更新（带 vibe-cafe/vibe-usage#210）；要用真实 Cursor 账号，用谁的账号、什么时候测由维护者当次决定。外测版和正式版用同一条凭据（和 ZCode Key 一样），同一个 Windows 用户下在外测版里「退出」也会删掉正式版的单独登录；要保留正式版的登录，就换一个 Windows 用户测。测完在设置里「退出」，并在 cursor.com 设置的 Sessions 里撤销测试时多出的「Desktop App」条目。截图里不能出现邮箱以外的账号信息，凭据管理器的内容不截图。
 
-1. 设置 →「订阅配额」→ Cursor 开关下面：未登录时左边「未登录」、右边「登录」，没有说明文字。把 npm 的 CLI 换成旧版不可行，所以「CLI 不支持就不显示按钮」只由前端单元测试覆盖。
+1. 设置 →「订阅配额」→ 点开 Cursor 这一行（行首箭头）：未登录时左边「未登录」、右边「登录」，没有说明文字。把 npm 的 CLI 换成旧版不可行，所以「CLI 不支持就不显示按钮」只由前端单元测试覆盖。
 2. 点「登录」：默认浏览器打开 `https://cursor.com/loginDeepControl?…`（页面标题「Sign in to Cursor CLI」）；这一行变成「请在浏览器里确认；如果 Cursor 让你去邮箱确认，点完邮件里的链接再回来」+「取消」。确认（需要时去邮箱点链接）后 5 分钟内变成邮箱 +「退出」，随后自动同步一次。
 3. 再点一次「登录」后点「取消」：这一行回到「登录」，任务管理器里没有残留的、属于 Vibe Usage 的 `node.exe`。
 4. 控制面板 → 凭据管理器 → Windows 凭据 → 普通凭据：只多出 `ai.vibecafe.vibe-usage.windows/cursor/login`（凭据长时还有 `/2`），没有动别的条目。Windows 安全中心（Defender）全程没有提示。
-5. 本机 Cursor 已加密或没登录的情况下，单独登录后 Cursor 额度卡片能读到 `Month`；本机 Cursor 已加密且没有单独登录时，卡片显示「需要登录 Cursor」，点整张卡片打开设置并滚到 Cursor 这一行（短暂高亮）。
+5. 本机 Cursor 已加密或没登录的情况下，单独登录后 Cursor 额度卡片能读到 `Month`；本机 Cursor 已加密且没有单独登录时，卡片显示「需要登录 Cursor」，点整张卡片打开设置的「订阅配额」页，Cursor 这一行闪一下并展开登录。
 6. 日志：登录、同步、刷新额度之后，在 `%LOCALAPPDATA%\ai.vibecafe.vibe-usage.windows\logs\sync.log` 里搜 `accessToken`、`refreshToken`、`eyJ`（令牌开头），都搜不到。「复制诊断信息」的内容里也没有。
 7. 代理：开着 Clash 的系统代理（再测一次 PAC 模式），Clash 的连接列表里能看到 `cursor.com`、`api2.cursor.sh` 走代理；把系统代理指到一个没人监听的端口再点「登录」，显示「连不上 Cursor，请检查网络和代理后重试」或「无法按你的代理设置连接 Cursor，未发送任何请求」，没有直连（关掉代理软件后防火墙或路由器日志里没有这两个主机的直连）。
-8. 撤销：在 cursor.com 撤销这条「Desktop App」后最多 10 分钟，下一次读取时卡片显示「Cursor 登录已失效」，设置这一行显示「登录已失效」+「重新登录」；之后 Clash 里不再出现发往 `cursor.com`、`api2.cursor.sh` 的新连接。
-9. 「退出」：先在同一行展开「退出 Cursor 登录？」「只删除 Vibe Usage 里的这份登录，Cursor 编辑器不受影响。」，点「退出」后凭据管理器里的条目消失，这一行回到「登录」，Cursor 编辑器仍是登录状态。
+8. 撤销：在 cursor.com 撤销这条「Desktop App」后最多 10 分钟，下一次读取时卡片显示「Cursor 登录已失效」，设置这一行显示「登录已失效」+「退出」「重新登录」；之后 Clash 里不再出现发往 `cursor.com`、`api2.cursor.sh` 的新连接。
+9. 「退出」：先弹出窗口内的确认框「退出 Cursor 登录？」「只删除 Vibe Usage 里的这份登录，Cursor 编辑器不受影响。」，点「退出」后凭据管理器里的条目消失，这一行回到「登录」，Cursor 编辑器仍是登录状态。
 10. 重启 App、开机自启（系统设了代理时）后，已登录状态还在，额度和同步照常；开机自启、代理还没就绪时，续期和其他读取一样先等代理。
 11. 续期要到期前 7 天才会触发，真机上只能等，不改系统时间（会影响别的程序）；由 CLI 实测（11-25 维护者账号强制续期两次）和单元测试覆盖。
 12. 卸载后凭据管理器里的条目还在（和 ZCode Key 一样，`PRIVACY.md` 写明了），手动删除即可。

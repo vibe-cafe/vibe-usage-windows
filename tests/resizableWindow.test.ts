@@ -32,15 +32,21 @@ describe("window configuration", () => {
     expect(windows.popover.visible).toBe(false);
   });
 
-  it("gives the settings window the same treatment", () => {
+  it("opens settings at the macOS size and lets it shrink as far as the quota table fits", () => {
+    // macOS: 700 × 460 (sidebar + page). Windows keeps it resizable; below
+    // 620 wide the 订阅配额 table's name column runs out of room.
     expect(windows.settings).toMatchObject({
-      width: 460,
-      height: 620,
-      minWidth: 460,
+      width: 700,
+      height: 460,
+      minWidth: 620,
       minHeight: 360,
       resizable: true,
       preventOverflow: true,
     });
+    // The recovery builder (commands.rs) uses the same sizes.
+    const commands = readFileSync("src-tauri/src/commands.rs", "utf-8");
+    expect(commands).toContain(".inner_size(700.0, 460.0)");
+    expect(commands).toContain(".min_inner_size(620.0, 360.0)");
   });
 
   it("asks for a dark title bar on both windows, like the dark macOS panel and settings", () => {

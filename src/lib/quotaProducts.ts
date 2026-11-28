@@ -155,6 +155,67 @@ export function isZCodeConfigured(
   return region === "bigModel" ? status.bigModelConfigured : status.zAiConfigured;
 }
 
+/** The dot before a 订阅配额 row's status: macOS `SettingsStatusKind`. */
+export type QuotaStatusKind = "ok" | "warning" | "error" | "none";
+
+export interface QuotaProductStatus {
+  kind: QuotaStatusKind;
+  text: string;
+}
+
+/**
+ * The 订阅配额 table's 状态 column, word for word macOS
+ * `SettingsQuotaStatus.status`: a settled read warning of a selected product
+ * first (amber, 「出错」 red), then ZCode without a key (「需 Key」, amber),
+ * then Cursor's ended sign-in (「已失效」, amber, even while its card is off),
+ * else local detection.
+ */
+export function quotaProductStatus(
+  product: QuotaProduct,
+  enabled: RateLimitProvider[],
+  snapshot?: ProviderRateLimit,
+  refreshing = false,
+  zCodeConfigured = false,
+  cursorSignInEnded = false,
+): QuotaProductStatus {
+  const detection: QuotaProductStatus = { kind: product.isDetected ? "ok" : "none", text: "" };
+  if (product.availability === "pendingProtocol") {
+    return { ...detection, text: product.isDetected ? "已检测 · 待接入" : "待接入" };
+  }
+  const provider = product.provider;
+  if (snapshot && quotaTabShowsWarning(provider, enabled, snapshot, refreshing)) {
+    const reason = snapshot.liveFailure && failureCopy(snapshot.liveFailure, provider)[1];
+    const warning = (text: string): QuotaProductStatus => ({ kind: "warning", text });
+    switch (snapshot.status.kind) {
+      case "unauthorized":
+        if (reason) return warning(reason);
+        if (provider === "zcode") return warning(zCodeConfigured ? "Key 无效" : "需 Key");
+        return warning(provider === "opencode-go" ? "需登录" : "已失效");
+      case "noData":
+        if (snapshot.signIn) return warning(snapshot.signIn === "required" ? "需登录" : "已失效");
+        if (snapshot.emptyReason) {
+          return warning({
+            notEntitled: "未订阅",
+            sessionWithoutPlanLimits: provider === "claudeCode" ? "未用订阅登录" : "不适用",
+            nonessentialTrafficDisabled: "已禁止",
+            limitReached: "已用满",
+            noWindow: "无窗口",
+            periodEnded: "待更新",
+            noLocalRecord: "无记录",
+          }[snapshot.emptyReason]);
+        }
+        return warning(reason ?? (snapshot.fetchedAt == null ? "未读取" : "无数据"));
+      case "retryableError": return warning(reason ?? "失败");
+      case "disabled": return warning("未启用");
+      case "error": return { kind: "error", text: "出错" };
+      case "ok": return warning("已暂停");
+    }
+  }
+  if (provider === "zcode" && !zCodeConfigured) return { kind: "warning", text: "需 Key" };
+  if (provider === "cursor" && cursorSignInEnded) return { kind: "warning", text: "已失效" };
+  return { ...detection, text: product.isDetected ? "已检测" : "未检测到" };
+}
+
 /** Only selected products with a settled warning replace the row's usual status. */
 export function quotaProductStatusText(
   product: QuotaProduct,
@@ -163,39 +224,7 @@ export function quotaProductStatusText(
   refreshing = false,
   zCodeConfigured = false,
 ): string {
-  if (product.availability === "pendingProtocol") {
-    return product.isDetected ? "已检测 · 待接入" : "待接入";
-  }
-  const provider = product.provider;
-  if (snapshot && quotaTabShowsWarning(provider, enabled, snapshot, refreshing)) {
-    const reason = snapshot.liveFailure && failureCopy(snapshot.liveFailure, provider)[1];
-    switch (snapshot.status.kind) {
-      case "unauthorized":
-        if (reason) return reason;
-        if (provider === "zcode") return zCodeConfigured ? "Key 无效" : "需 Key";
-        return provider === "opencode-go" ? "需登录" : "已失效";
-      case "noData":
-        if (snapshot.signIn) return snapshot.signIn === "required" ? "需登录" : "已失效";
-        if (snapshot.emptyReason) {
-          return {
-            notEntitled: "未订阅",
-            sessionWithoutPlanLimits: provider === "claudeCode" ? "未用订阅登录" : "不适用",
-            nonessentialTrafficDisabled: "已禁止",
-            limitReached: "已用满",
-            noWindow: "无窗口",
-            periodEnded: "待更新",
-            noLocalRecord: "无记录",
-          }[snapshot.emptyReason];
-        }
-        return reason ?? (snapshot.fetchedAt == null ? "未读取" : "无数据");
-      case "retryableError": return reason ?? "失败";
-      case "disabled": return "未启用";
-      case "error": return "出错";
-      case "ok": return "已暂停";
-    }
-  }
-  if (provider === "zcode") return zCodeConfigured ? "已配置" : "待配置";
-  return product.isDetected ? "已检测" : "未检测到";
+  return quotaProductStatus(product, enabled, snapshot, refreshing, zCodeConfigured).text;
 }
 
 /** Keep the card sentence and its settings short form together. */
