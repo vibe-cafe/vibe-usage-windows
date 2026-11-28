@@ -8,7 +8,8 @@ C 签名见 [vibe_ffi.h](vibe_ffi.h)。Windows x64 加载 `vibe_ffi.dll`，macOS
 2. 宿主为每次调用分配大于零、递增的 64 位请求号，在提交前登记接收者。多个提交线程应共用同一把提交锁。接受时立即返回同一请求号和空错误指针。拒绝时返回零和错误字符串，宿主直接处理。每个已接受请求恰好收到一个结果，任务可以交错完成。JSON 不合法、未知命令和任务 panic 都通过该请求的结果返回。
 3. 输入字符串由宿主分配，调用期间有效。Rust 为每个非空的同步错误和每个回调信封分配独立的 UTF-8 C 字符串。宿主复制或解码后，在 finally 中将原指针交给 `vibe_free` 一次。结果中字符串可以包含 JSON 转义的 NUL；`vibe_free(NULL)` 可直接调用。
 4. 回调在后台线程运行，初始化返回前也可能收到事件。回调只复制消息、归还字符串并投递到宿主队列。宿主保持回调有效直至关闭返回。进入其他 DLL 操作前应退出回调栈，尤其是收到 `request-exit` 时应投递退出动作。
-5. 关闭停止接收命令，取消在途任务，交付结果，然后等待后端和回调退出。每次关闭返回第一次关闭的结果，之后的调用返回 `closed`。后端的子进程监督器按应用进程管理，正式关闭后，下一次启动使用新进程。
+5. 回调内或其他已进入 Tokio 运行时的线程调用 `vibe_close` 会立即收到 `closeFromRuntime`。宿主应将关闭动作投递到界面线程。在该线程关闭时，后端停止接收命令，取消在途任务，交付所有已接受请求的结果，并等待所有宿主回调退出。关闭返回后不会再有回调，重复关闭返回同一结果，新命令返回 `closed`。
+6. 子进程监督器保留原有的 5 秒退出确认期限。worker 结束后，运行时最多再等 100 毫秒。已经开始的 DNS、PAC 求值、`node -v` 等阻塞工作可自行收尾，这些闭包不调用宿主。100 毫秒仅适用于运行时的最后一步。DLL 随进程保持加载，下一次启动使用新进程。
 
 成功、失败和事件的信封示例：
 
@@ -28,14 +29,15 @@ C 签名见 [vibe_ffi.h](vibe_ffi.h)。Windows x64 加载 `vibe_ffi.dll`，macOS
 |---|---|
 | `versionMismatch`、`alreadyOpen` | 接口版本不匹配，或已成功初始化 |
 | `invalidRequestId`、`closed` | 请求号没有递增，或当前无法接收命令 |
+| `closeFromRuntime` | 在 Tokio 运行时线程调用关闭，包括宿主回调内 |
 | `invalidArguments`、`unknownCommand` | 参数格式无效，或命令未注册 |
-| `backend` | 服务返回失败，`message` 携带可显示的原因 |
+| `backend` | 服务返回失败，`message` 只携带原因，例如 `fetch_usage` 的失败样例 `{"code":"backend","message":"未配置"}`。提示前缀由界面决定 |
 | `cancelled`、`panic` | 在途任务被关闭取消，或后端发生 panic |
 | `internal`、`shutdown` | 创建运行时或编码失败，或后端未能确认子进程已退出 |
 
 ## 状态订阅
 
-C# 外壳共用一个 `IBackend`。创建 `NativeBackend` 时传入界面线程的 `SynchronizationContext`，或在已有该上下文的界面线程创建。结果以 Task 返回，事件在同一队列上按顺序转交。窗口关闭时释放它的订阅，应用退出时释放后端。
+C# 外壳共用一个 `IBackend`。创建 `NativeBackend` 时传入界面线程的 `SynchronizationContext`，或在已有该上下文的界面线程创建。结果以 Task 返回，事件在同一队列上按顺序转交。窗口关闭时释放它的订阅，应用退出时释放后端。`NativeBackend.Dispose()` 遇到原生关闭错误时将结果保存在 `CloseError`，成功时该属性为 null。`shutdown` 表示子进程退出未能确认，重复释放可以安全返回。
 
 `WatchUpdatesAsync` 同时处理发现新版和撤回，`WatchQuotasAsync` 同时处理额度快照和刷新状态。两者先挂事件再读当前值；读回之前已交付了新事件，就丢弃旧快照。其他状态共用 `WatchAsync`，传入当前值读取方法和对应的事件选择器。
 

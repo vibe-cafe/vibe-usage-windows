@@ -8,20 +8,23 @@ public sealed class NativeBackend : BackendClient
 {
     public const uint InterfaceVersion = 1;
     private readonly object admission = new();
+    private readonly Func<BackendError?> close;
     private readonly ConcurrentDictionary<ulong, TaskCompletionSource<JsonElement>> pending = new();
     private GCHandle callbackRoot;
     private ulong lastId;
     private bool closed;
-    private BackendException? closeError;
+    public BackendError? CloseError { get; private set; }
 
     public NativeBackend(HostOptions options, SynchronizationContext? context = null)
         : this(options, InterfaceVersion, context) { }
 
-    internal NativeBackend(HostOptions options, uint version, SynchronizationContext? context = null) : base(context)
+    internal NativeBackend(HostOptions options, uint version, SynchronizationContext? context = null,
+        Func<uint, string, Native.Callback, nint>? init = null, Func<BackendError?>? close = null) : base(context)
     {
+        this.close = close ?? (() => ReadError(Native.Close()));
         Native.Callback callback = Receive;
         callbackRoot = GCHandle.Alloc(callback);
-        try { Check(Native.Init(version, Wire.Element(options).GetRawText(), callback)); }
+        try { Check((init ?? Native.Init)(version, Wire.Element(options).GetRawText(), callback)); }
         catch { callbackRoot.Free(); throw; }
     }
 
@@ -75,25 +78,28 @@ public sealed class NativeBackend : BackendClient
         finally { Check(Native.Free(pointer)); }
     }
 
+    internal static BackendError? ReadError(nint error)
+    {
+        if (error == 0) return null;
+        using var doc = JsonDocument.Parse(Take(error));
+        return Wire.Read<BackendError>(doc.RootElement);
+    }
+
     private static void Check(nint error)
     {
-        if (error == 0) return;
-        using var doc = JsonDocument.Parse(Take(error));
-        throw new BackendException(Wire.Read<BackendError>(doc.RootElement));
+        if (ReadError(error) is { } failure) throw new BackendException(failure);
     }
 
     protected override void CloseTransport()
     {
         lock (admission)
         {
-            if (!closed)
-            {
-                closed = true;
-                try { Check(Native.Close()); }
-                catch (BackendException error) { closeError = error; }
-                finally { callbackRoot.Free(); }
-            }
-            if (closeError != null) throw closeError;
+            if (!callbackRoot.IsAllocated) return;
+            closed = true;
+            CloseError = close();
+            // A close rejected on the callback stack leaves the native session live.
+            // Keep the delegate rooted until Dispose on the host thread finishes.
+            if (CloseError?.Code != "closeFromRuntime") callbackRoot.Free();
         }
     }
 

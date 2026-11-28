@@ -15,4 +15,5 @@ external-test-diagnostics = ["vibe-backend/external-test-diagnostics"]
 smoke = ["vibe-backend/ffi-fixtures"]
 
 [dev-dependencies]
+tempfile = "3"
 vibe-backend = { path = "../backend", features = ["ffi-fixtures"] }

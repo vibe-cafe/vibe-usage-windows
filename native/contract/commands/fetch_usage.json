@@ -21,5 +21,6 @@
       }
     ],
     "hasAnyData": true
-  }
+  },
+  "error": { "code": "backend", "message": "未配置" }
 }
