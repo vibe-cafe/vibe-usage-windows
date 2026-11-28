@@ -48,6 +48,9 @@ internal sealed class PocOptions
     /// <summary>Never auto-close (screenshots on a headless runner, where focus is unpredictable).</summary>
     public bool Pin { get; private set; }
 
+    /// <summary>CI only: keep the scrolling middle at its end (the expanded panel is taller than the runner's screen).</summary>
+    public bool ScrollEnd { get; private set; }
+
     /// <summary>Start with 使用分布 expanded.</summary>
     public bool Expand { get; private set; }
 
@@ -74,6 +77,7 @@ internal sealed class PocOptions
             if (a == "--open") o.OpenAtStart = true;
             else if (a == "--pin") o.Pin = true;
             else if (a == "--expand") o.Expand = true;
+            else if (a == "--scroll-end") o.ScrollEnd = true;
             else if (a.StartsWith("--tab=", StringComparison.Ordinal)) o.Tab = a[6..];
             else if (a.StartsWith("--only=", StringComparison.Ordinal)) o.Only = a[7..];
             else if (a.StartsWith("--rect-file=", StringComparison.Ordinal)) o.RectFile = a[12..];

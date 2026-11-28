@@ -90,6 +90,8 @@ public sealed partial class PanelWindow : Window
             : FakeData.Subscriptions.Where(s => s.Id == options.Only).DefaultIfEmpty(FakeData.Subscriptions[0]).ToList();
         ApplyStartState();
         Render();
+        if (options.ScrollEnd)
+            Scroller.SizeChanged += (_, _) => DispatcherQueue.TryEnqueue(() => Scroller.ChangeView(null, Scroller.ScrollableHeight, null, true));
     }
 
     // -- window behaviour ---------------------------------------------------------------------

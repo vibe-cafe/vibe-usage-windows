@@ -106,6 +106,7 @@ function Invoke-Case([string]$name, [bool]$light, [string[]]$extra, [scriptblock
 # The Mac new panel's states, for side-by-side comparison (the panel is dark only).
 Invoke-Case '1-collapsed' $false @()
 Invoke-Case '2-expanded' $false @('--expand')
+Invoke-Case '2b-expanded-end' $false @('--expand', '--scroll-end')
 Invoke-Case '3-single' $false @('--only=claude')
 Invoke-Case '4-detail' $false @('--tab=claude')
 

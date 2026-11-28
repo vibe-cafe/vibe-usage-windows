@@ -167,7 +167,7 @@ public static class FakeData
         }),
         new DetailCardData("终端分布", true, true, false, new[]
         {
-            new RankRow("Studio-MacBook-Pro-14", 42.9, 33.40), new RankRow("mac-mini", 10.1, 7.80),
+            new RankRow("Studio-MacBook-Pro-14", 42.86, 33.40), new RankRow("mac-mini", 10.06, 7.80),
         }),
         new DetailCardData("工具分布", true, true, false, new[]
         {
