@@ -15,7 +15,7 @@ $logDir = Join-Path $OutDir "logs-screenshot-$Tag"
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 
 # Tall enough for more of the expanded panel when the runner allows it.
-Set-Resolution 1920 1200
+Set-Resolution @('1920x1200', '1920x1080')
 Set-DarkTheme
 Write-Host "os: $([Environment]::OSVersion.VersionString)"
 

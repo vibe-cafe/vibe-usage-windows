@@ -44,7 +44,16 @@ function Pump([int]$Ms) {
     }
 }
 
-function Move-Cursor([int]$X, [int]$Y) { [VuNative]::SetCursorPos($X, $Y) | Out-Null }
+# A bare SetCursorPos produces no pointer input for WinUI; nudge with real
+# mouse-move input so hover reaches the window under the cursor.
+function Move-Cursor([int]$X, [int]$Y) {
+    [VuNative]::SetCursorPos($X, $Y) | Out-Null
+    [VuNative]::mouse_event(0x0001, 1, 0, 0, [UIntPtr]::Zero)
+    Start-Sleep -Milliseconds 20
+    [VuNative]::mouse_event(0x0001, -1, 0, 0, [UIntPtr]::Zero)
+    Start-Sleep -Milliseconds 20
+    [VuNative]::SetCursorPos($X, $Y) | Out-Null
+}
 
 function Click([int]$X, [int]$Y, [switch]$Right, [int]$HoldMs = 60) {
     Move-Cursor $X $Y
@@ -80,12 +89,20 @@ function Set-DarkTheme {
     [VuNative]::SendMessageTimeoutString([IntPtr]0xffff, 0x1A, [UIntPtr]::Zero, 'ImmersiveColorSet', 2, 5000, [ref]$r) | Out-Null
 }
 
-function Set-Resolution([int]$Width, [int]$Height) {
-    try {
-        Set-DisplayResolution -Width $Width -Height $Height -Force -ErrorAction Stop
-        Start-Sleep -Seconds 3
-    } catch {
-        Write-Host "display resolution ${Width}x${Height} refused: $($_.Exception.Message)"
+# Tries each "WxH" in turn until the runner reports it (the default is 1024x768).
+function Set-Resolution([string[]]$Modes) {
+    foreach ($mode in $Modes) {
+        $w, $h = $mode.Split('x') | ForEach-Object { [int]$_ }
+        try {
+            Set-DisplayResolution -Width $w -Height $h -Force -ErrorAction Stop
+            Start-Sleep -Seconds 3
+        } catch {
+            Write-Host "display resolution $mode refused: $($_.Exception.Message)"
+            continue
+        }
+        $vc = Get-CimInstance Win32_VideoController | Select-Object -First 1
+        Write-Host "asked $mode, got $($vc.CurrentHorizontalResolution)x$($vc.CurrentVerticalResolution)"
+        if ($vc.CurrentHorizontalResolution -eq $w -and $vc.CurrentVerticalResolution -eq $h) { break }
     }
     $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
     Write-Host "screen $($b.Width)x$($b.Height)"

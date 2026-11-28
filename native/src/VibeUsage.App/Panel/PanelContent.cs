@@ -523,6 +523,9 @@ internal sealed partial class PanelWindow
             Content = content,
             HorizontalAlignment = HorizontalAlignment.Left,
             VerticalAlignment = VerticalAlignment.Center,
+            // A click must not move keyboard focus: that would activate the panel
+            // opened from the tray and flip the input method's 中/英. Tab still reaches it.
+            AllowFocusOnInteraction = false,
         };
         AutomationProperties.SetName(b, name);
         if (tooltip != null)

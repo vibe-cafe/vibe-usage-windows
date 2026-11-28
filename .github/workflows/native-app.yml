@@ -42,9 +42,9 @@ jobs:
         run: |
           dotnet publish native/src/VibeUsage.App/VibeUsage.App.csproj -c Release -r win-x64 -p:Platform=x64 -o out/app 2>&1 | Tee-Object -FilePath publish.log
           if ($LASTEXITCODE -ne 0) { exit 1 }
-          $warnings = Select-String -Path publish.log -Pattern 'warning (IL\d+|RS0030)' | Sort-Object Line -Unique
+          $warnings = Select-String -Path publish.log -Pattern 'warning (IL\d+|RS0030|CsWinRT\d+)' | Sort-Object Line -Unique
           if ($warnings) { $warnings | ForEach-Object { Write-Host "::error::$($_.Line)" }; exit 1 }
-          Write-Host 'no trim or banned-API warnings'
+          Write-Host 'no trim, WinRT trimming or banned-API warnings'
       - name: Size
         shell: pwsh
         run: |

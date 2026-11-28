@@ -21,16 +21,14 @@ $all = $tray.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System
 $hit = $null
 foreach ($e in $all) {
     $c = $e.Current
-    if ($c.AutomationId -eq 'SystemTrayIcon' -or $c.Name -match '^(Show Hidden Icons|Show hidden icons|显示隐藏的图标)') { $hit = $c; break }
-}
-if ($null -eq $hit) {
+    $r = $c.BoundingRectangle
     # Diagnostics for the log: what the notification area offers.
-    foreach ($e in $all) {
-        $c = $e.Current
-        if ($c.Name) { [Console]::Error.WriteLine("uia: '$($c.Name)' id='$($c.AutomationId)' class='$($c.ClassName)'") }
+    if ($c.Name -or $c.AutomationId) {
+        [Console]::Error.WriteLine("uia: '$($c.Name)' id='$($c.AutomationId)' class='$($c.ClassName)' at $([int]$r.X),$([int]$r.Y) $([int]$r.Width)x$([int]$r.Height)")
     }
-    'none'
-    exit 0
+    # Match by name only: every notification icon has AutomationId SystemTrayIcon.
+    if ($null -eq $hit -and $c.Name -match '^(Show Hidden Icons|Show hidden icons|显示隐藏的图标)') { $hit = $c }
 }
+if ($null -eq $hit) { 'none'; exit 0 }
 $r = $hit.BoundingRectangle
 "{0} {1}" -f [int]($r.X + $r.Width / 2), [int]($r.Y + $r.Height / 2)

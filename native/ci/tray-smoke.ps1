@@ -23,7 +23,7 @@ $rectFile = Join-Path $OutDir "panel-rect-$Tag.txt"
 Use-Log $log
 
 # 1080 lines: the expanded panel is taller than the work area, so the middle scrolls.
-Set-Resolution 1920 1080
+Set-Resolution @('1920x1080')
 Set-DarkTheme
 Stop-App
 $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
@@ -68,10 +68,38 @@ function Set-Promoted([int]$Value) {
     }
     return $done
 }
-function Close-Panel { Click 200 150; Pump 1000; New-LogLines | Out-Null }
+# "Another program's window": a topmost test window at the bottom left, away from the panel.
+$form = New-Object System.Windows.Forms.Form
+$form.Text = 'previous window'
+$form.StartPosition = 'Manual'
+$form.Location = New-Object System.Drawing.Point(60, 520)
+$form.Size = New-Object System.Drawing.Size(360, 240)
+$form.TopMost = $true
+$form.Show()
+Pump 800
+$fr = $form.Bounds
+$fx = [int]($fr.Left + $fr.Width / 2); $fy = [int]($fr.Top + $fr.Height / 2)
+Write-Host "test window at $($fr.Left),$($fr.Top) $($fr.Width)x$($fr.Height), click point ($fx,$fy)"
+function Focus-Form {
+    $form.WindowState = 'Normal'
+    Click $fx $fy
+    Pump 300
+    $form.Activate()
+    Pump 400
+}
+function Close-Panel { Click $fx $fy; Pump 1000; New-LogLines | Out-Null }
 
 # --- Tray icon add, with two simulated failures -------------------------------------------
-Set-Promoted 0 | Out-Null
+# New icons go to the 「^」 overflow; Explorer reads the promotion state when it starts.
+Get-ChildItem 'HKCU:\Control Panel\NotifyIconSettings' -ErrorAction SilentlyContinue | ForEach-Object {
+    $p = Get-ItemProperty $_.PSPath
+    if ($p.ExecutablePath -like '*vibe-usage-app.exe') { Write-Host "NotifyIconSettings $($_.PSChildName): IsPromoted=$($p.IsPromoted)" }
+}
+if (Set-Promoted 0) {
+    Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
+    Pump 6000
+    if (-not (Get-Process explorer -ErrorAction SilentlyContinue)) { Start-Process explorer.exe; Pump 6000 }
+}
 $proc = Start-App ($base + @('--autostart', '--test-tray-add-failures=2'))
 $ok = Wait-LogLine 'tray: added after 2 failed attempt' 10000
 Add-Result 'T1 托盘图标添加失败两次后自动重试成功' $ok (New-LogLines)
@@ -160,10 +188,20 @@ $l = New-LogLines
 Add-Result 'V 不激活时悬停有反应并出提示' ((Any $l 'panel hover quit') -and (Any $l 'panel tooltip quit')) $l
 Save-Screen (Join-Path $OutDir "$Tag-6-hover-tooltip.png")
 
-# B: a click on the desktop closes it.
-Click 200 150
+# B: a click on another program's window closes it; so does Win+D.
+Click $fx $fy
 Pump 1200
-Check 'B 点桌面：面板收起' (New-LogLines) 'hide reason=(deactivated|foreground-changed)'
+Check 'B 点别的程序窗口：面板收起' (New-LogLines) 'hide reason=(deactivated|foreground-changed)'
+Click $ix $iy
+Pump 1500
+New-LogLines | Out-Null
+Key 0x44 @(0x5B)
+Pump 1500
+Check 'B2 Win+D 显示桌面：面板收起' (New-LogLines) 'hide reason=(deactivated|foreground-changed)'
+Key 0x44 @(0x5B)
+Pump 1000
+Focus-Form
+New-LogLines | Out-Null
 
 # TB: the taskbar is already the foreground after a tray open; a click on its empty part closes.
 $tbx = [int]($bounds.Left + $bounds.Width * 0.70)
@@ -216,6 +254,7 @@ $after = Get-PanelRect
 $pass = (Any $l 'details expanded') -and -not (Any $l 'hide reason=') -and
     [Math]::Abs(($after[1] + $after[3]) - ($before[1] + $before[3])) -le 1 -and $after[1] -lt $before[1]
 Add-Result "X 点面板里的「展开详情」：不收起，底边不动往上长（$($before -join ',') → $($after -join ',')）" $pass $l
+Add-Result "X' 点面板里的按钮不抢前台（输入法中/英不受影响）" (-not (Any $l 'activation CodeActivated'))
 Save-Screen (Join-Path $OutDir "$Tag-7-expanded-in-place.png")
 
 # W: the wheel scrolls the middle of the non-activated panel.
@@ -268,17 +307,9 @@ Key 0x73 @(0x12)
 Pump 800
 New-LogLines | Out-Null
 
-# R: a second start of the exe (Start menu, shortcut, restart after an update).
-$form = New-Object System.Windows.Forms.Form
-$form.Text = 'previous window'
-$form.StartPosition = 'Manual'
-$form.Location = New-Object System.Drawing.Point(60, 520)
-$form.Size = New-Object System.Drawing.Size(360, 240)
-$form.Show()
-Pump 800
-$fx = 240; $fy = 640
-Click $fx $fy
-Pump 600
+# R: a second start of the exe (Start menu, shortcut, restart after an update),
+# launched from the test window so the launcher is the foreground process, as Explorer is.
+Focus-Form
 Start-App @("--test-log-dir=$logDir") | Out-Null
 Pump 3500
 $l = New-LogLines
@@ -286,8 +317,7 @@ Add-Result 'R1 再次启动：交给已运行的实例，面板打开并拿到�
 Key 0x1B
 Pump 1000
 Check 'R2 再次启动打开后按 Esc：面板收起' (New-LogLines) 'hide reason=esc'
-Click $fx $fy
-Pump 600
+Focus-Form
 Start-App @("--test-log-dir=$logDir") | Out-Null
 Pump 3500
 New-LogLines | Out-Null
@@ -306,8 +336,7 @@ $exited = $proc.WaitForExit(10000)
 Add-Result 'Q 菜单「退出」：关闭后端后进程结束' ($exited -and (Wait-LogLine 'quit: backend closed in' 2000)) (New-LogLines)
 
 # S: a start by the user opens the panel with the keyboard; clicking back to the previous window closes it.
-Click $fx $fy
-Pump 600
+Focus-Form
 $proc = Start-App $base
 Pump 5000
 $l = New-LogLines
@@ -327,13 +356,16 @@ $exited = $proc.WaitForExit(10000)
 Add-Result 'P2 底栏电源键：退出' ($exited -and (Wait-LogLine 'click quit' 1000)) (New-LogLines)
 
 # ES: shutdown or sign-out: the app closes the backend and leaves in time.
+Stop-App
 $proc = Start-App ($base + @('--autostart'))
 Pump 5000
 New-LogLines | Out-Null
 $trayHost = [VuNative]::FindWindowW('VibeUsage.Native.TrayHost', $null)
 $r = [IntPtr]::Zero
-[VuNative]::SendMessageTimeoutW($trayHost, 0x11, [IntPtr]::Zero, [IntPtr]::Zero, 2, 5000, [ref]$r) | Out-Null
-[VuNative]::SendMessageTimeoutW($trayHost, 0x16, [IntPtr]1, [IntPtr]::Zero, 2, 5000, [ref]$r) | Out-Null
+$q = [VuNative]::SendMessageTimeoutW($trayHost, 0x11, [IntPtr]::Zero, [IntPtr]::Zero, 2, 5000, [ref]$r)
+Write-Host "tray host $trayHost; WM_QUERYENDSESSION sent=$q answer=$r"
+$e = [VuNative]::SendMessageTimeoutW($trayHost, 0x16, [IntPtr]1, [IntPtr]::Zero, 2, 5000, [ref]$r)
+Write-Host "WM_ENDSESSION sent=$e"
 $exited = $proc.WaitForExit(8000)
 Add-Result 'ES 关机或注销：关闭后端后及时退出' ($exited -and (Wait-LogLine 'session ending: backend closed=True' 2000)) (New-LogLines)
 

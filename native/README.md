@@ -1,6 +1,6 @@
 # Windows 原生库
 
-`src/VibeUsage.Backend` 提供原生后端的 C# 封装和可独立使用的假后端。命令与事件的共用样例、C 头文件、内存所有权、订阅顺序和真 DLL 测试命令见[接口契约](contract/README.md)。
+`src/VibeUsage.App` 是原生外壳（WinUI 3），见下文「原生外壳」。`src/VibeUsage.Backend` 提供原生后端的 C# 封装和可独立使用的假后端。命令与事件的共用样例、C 头文件、内存所有权、订阅顺序和真 DLL 测试命令见[接口契约](contract/README.md)。
 
 ## 面板展示规则
 
@@ -32,3 +32,24 @@ DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 DOTNET_CLI_HOME="$(pwd)/.display-c
 用量缓存保存该周期返回的完整用量桶。切换模型时用同一批桶和新筛选重建 `UsageDisplaySnapshot`。活跃时长由服务端单独汇总，`LoadedActivity.For` 只接受与当前条件相符的结果。
 
 Windows 按总票 #85 决定 1 只提供新版，筛选和分布的维度为终端、工具、模型。Claude 桌面端记录沿用 Windows 的四种失败原因、来源说明和记录时间，凭据管理器读取失败及 ZCode 两个区域沿用 Windows 文案。外壳负责触发读取、预取、保存设置、展示和交互。
+
+## 原生外壳
+
+`src/VibeUsage.App` 是 WinUI 3 托盘程序（Windows App SDK、.NET 10），自包含、免安装、完整裁剪（#86 的结论，不用预编译成本机代码），只出 x64。主程序名 `vibe-usage-app.exe`。目前接的是内存里的假后端（`State/DemoBackend.cs`，Mac 设计稿的样例数），不联网、不读写凭据和用户数据；#94 换成真后端。
+
+外壳只能在 Windows 上编译，改动靠 GitHub Actions 的 `Native app` 工作流（`.github/workflows/native-app.yml`，Windows 2025 机器）验证：
+
+1. 跑 `tests/VibeUsage.App.Tests`（外壳的纯逻辑：打开和收起的规则、托盘重试、定位、点击竞态、启动参数、同步文字、图形路径、假数据），这一步在 macOS 上也能跑：`dotnet test native/tests/VibeUsage.App.Tests -c Release`（SDK 不在 PATH 时照上文的写法）。
+2. `dotnet publish native/src/VibeUsage.App/VibeUsage.App.csproj -c Release -r win-x64 -p:Platform=x64`，出现裁剪警告或禁用接口警告就失败。
+3. 另一台机器下载产物，`ci/screenshot.ps1` 用 PrintWindow 存原尺寸面板截图，`ci/tray-smoke.ps1` 真实点击托盘图标，从 App 自己的日志判每一项；切到 150% 后（`ci/dpi-icon.ps1` 同时检查托盘图标重载）再各跑一轮。截图、日志和逐项结果在产物 `native-ui-results` 里。
+
+这些脚本会往运行机注入模拟的鼠标键盘、改主题和缩放，只在 Actions 上跑，不要在真机上运行。
+
+外壳的规矩：
+
+- 不写联网代码。`BannedSymbols.txt` 把 HTTP、套接字、网页控件、远程图片、`Process` 和 `Launcher` 列为编译错误；打开网页交给后端的 `open_external`。
+- 不用键盘鼠标输入类接口（全局热键、低级钩子、`GetAsyncKeyState`、模拟按键）。关面板只靠窗口失活和进程外的无障碍事件钩子（前台变化，以及只看任务栏进程的鼠标按下和焦点变化），面板开着时才挂，收起就摘。
+- 不用靠反射的数据绑定和运行时加载的 XAML 字符串；界面在代码里搭，JSON 走源码生成。
+- 日志只记窗口类名，不记任何窗口标题、输入或设置值。默认在 `%LOCALAPPDATA%\ai.vibecafe.vibe-usage.windows\logs\shell.log`，超过 1 MB 时启动换到 `shell.old.log`。
+
+启动参数：`--autostart` 是开机自启登记带的参数，只进托盘；已在运行时再收到它就直接退出，不弹面板。其余以 `--test-` 开头的参数只给 CI 用：`--test-log-dir=`、`--test-pin`（不自动收起）、`--test-expand`、`--test-scroll-end`、`--test-demo=single`、`--test-rect-file=`、`--test-icon-file=`、`--test-tray-add-failures=`。

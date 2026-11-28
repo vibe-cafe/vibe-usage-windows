@@ -104,15 +104,15 @@ public partial class ShellApp : Application
     {
         if (tray is null || flyout is null || model is null) return;
         flyout.PrepareForMenu();
-        uint cmd = tray.ShowMenu(anchor, flyout.EdgeAt(anchor),
-        [
+        uint cmd = tray.ShowMenu(anchor, flyout.EdgeAt(anchor), new (uint, string?)[]
+        {
             (1, "打开面板"),
             (0, null),
             (2, "立即同步"),
             (3, "设置"),
             (0, null),
             (4, "退出"),
-        ], defaultId: 1);
+        }, defaultId: 1);
 
         // Dismissed, 打开面板 and 立即同步 hand the foreground back to where it
         // was; 设置 and 退出 don't need it.
