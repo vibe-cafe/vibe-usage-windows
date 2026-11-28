@@ -177,8 +177,8 @@ internal sealed partial class PanelWindow : Window
             firstOpen = false;
             if (options.Expand) model.Panel.DetailsExpanded = true;
             scrollEnd = options.ScrollEnd;
-            // CI screenshots: the scene's selection, hover and fold, which a pointer would set.
-            if (DemoScenes.Find(options.Demo) is { } scene)
+            // CI screenshots on the fake backend: the scene's selection, hover and fold, which a pointer would set.
+            if (options.FakeBackend && DemoScenes.Find(options.Demo) is { } scene)
             {
                 model.Panel.SelectedSubscription = scene.Selected;
                 quotaShownDetail = scene.Selected;

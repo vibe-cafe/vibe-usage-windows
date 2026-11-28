@@ -53,7 +53,7 @@ function Drag([int[]]$From, [int[]]$To) {
 function Start-Scene([string]$Scene) {
     Stop-App
     Remove-Item $rectFile -ErrorAction SilentlyContinue
-    $p = Start-App @('--test-pin', "--test-demo=$Scene", "--test-rect-file=$rectFile", "--test-log-dir=$logDir")
+    $p = Start-App @('--fake-backend', '--test-pin', "--test-demo=$Scene", "--test-rect-file=$rectFile", "--test-log-dir=$logDir")
     $end = [DateTime]::UtcNow.AddSeconds(15)
     while (-not (Test-Path $rectFile) -and [DateTime]::UtcNow -lt $end) { Pump 200 }
     Pump 1500
@@ -168,7 +168,7 @@ if ($fold) {
 }
 Stop-App
 $all = if (Test-Path $log) { @(Get-Content $log -Encoding utf8) } else { @() }
-$bad = @($all | Where-Object { $_ -match 'unhandled|launch failed' })
-Add-Result 'Q11 整个过程没有未处理的异常' ($bad.Count -eq 0) $bad
+$bad = @($all | Where-Object { $_ -match 'unhandled|launch failed|backend: native' })
+Add-Result 'Q11 整个过程走假后端、没有未处理的异常' ($bad.Count -eq 0 -and [bool]($all | Where-Object { $_ -match 'backend: fake \(131a\)' })) $bad
 Write-Summary (Join-Path $OutDir 'quota-smoke-results.json')
 if ($script:Results | Where-Object { -not $_.Pass }) { exit 1 }

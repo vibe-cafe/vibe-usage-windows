@@ -48,15 +48,18 @@ internal sealed class AppModel : IDisposable
         watches.Add(backend.Subscribe(e =>
         {
             if (e is BackendEvent.ExitRequested) ExitRequested?.Invoke();
+            // The reason can name the server; the log keeps only that a read failed.
+            if (e is BackendEvent.UsageFailed) ShellLog.Write("usage: read failed");
         }));
-        watches.Add(await backend.WatchQuotasAsync(q => Set(() => Quotas = q)));
+        watches.Add(await backend.WatchQuotasAsync(q => Set(() => { Quotas = q; LogQuotas(q); })));
         watches.Add(await backend.WatchAsync(backend.GetSyncStateAsync,
-            e => e is BackendEvent.SyncChanged s ? (true, s.Value) : (false, Sync), s => Set(() => Sync = s)));
+            e => e is BackendEvent.SyncChanged s ? (true, s.Value) : (false, Sync), s => Set(() => { Sync = s; LogSync(s); })));
         watches.Add(await backend.WatchAsync<AppSettings?>(async () => await backend.GetSettingsAsync(),
             e => e is BackendEvent.SettingsChanged s ? (true, s.Value) : (false, null), s => Set(() => Settings = s)));
         watches.Add(await backend.WatchAsync(backend.CachedUsageAsync,
-            e => e is BackendEvent.UsageChanged u ? (true, u.Value) : (false, null), u => Set(() => Usage = u)));
+            e => e is BackendEvent.UsageChanged u ? (true, u.Value) : (false, null), u => Set(() => { Usage = u; LogUsage(u); })));
         Status = await backend.GetAppStatusAsync();
+        ShellLog.Write($"status: linked={Status.Configured}");
         Changed?.Invoke();
         ReadDetected();
     }
@@ -73,6 +76,33 @@ internal sealed class AppModel : IDisposable
         {
             ShellLog.Write($"get_quota_products failed: {(ex is BackendException b ? b.Code : ex.GetType().Name)}");
         }
+    }
+
+    // One line per change of what the backend reports, for testers and CI.
+    // Kinds and codes only: no tokens, keys, server addresses or numbers.
+    private string? lastQuotaLine, lastSyncLine;
+
+    private void LogQuotas(QuotaCache cache)
+    {
+        var parts = cache.Snapshots.Select(q =>
+            $"{q.Provider}={q.Status.Kind}{(q.LiveFailure is { } f ? "/" + f.Code : "")}{(q.EmptyReason is { } r ? "/" + r : "")}");
+        var line = $"quotas: refreshing={cache.Refreshing} {string.Join(" ", parts)}";
+        if (line == lastQuotaLine) return;
+        lastQuotaLine = line;
+        ShellLog.Write(line);
+    }
+
+    private void LogSync(SyncState state)
+    {
+        var line = $"sync: {state.Status}";
+        if (line == lastSyncLine) return;
+        lastSyncLine = line;
+        ShellLog.Write(line);
+    }
+
+    private static void LogUsage(UsageSnapshot? snapshot)
+    {
+        if (snapshot != null) ShellLog.Write($"usage: {snapshot.Data.Buckets.Length} buckets ({snapshot.Query.GetType().Name})");
     }
 
     private void Set(Action change)

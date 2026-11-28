@@ -35,7 +35,7 @@ foreach ($s in $scenes) {
     Stop-App
     $rect = Join-Path $shots "$($s.Id).rect.txt"
     Remove-Item $rect -ErrorAction SilentlyContinue
-    $proc = Start-App @('--test-pin', "--test-demo=$($s.Id)", "--test-rect-file=$rect", "--test-log-dir=$logDir")
+    $proc = Start-App @('--fake-backend', '--test-pin', "--test-demo=$($s.Id)", "--test-rect-file=$rect", "--test-log-dir=$logDir")
     $end = [DateTime]::UtcNow.AddSeconds(15)
     while (-not (Test-Path $rect) -and [DateTime]::UtcNow -lt $end) { Start-Sleep -Milliseconds 200 }
     # The entrance animation, a relayout for the content's height, the tooltip.
@@ -58,9 +58,16 @@ foreach ($s in $scenes) {
 Stop-App
 $manifest | ConvertTo-Json | Set-Content (Join-Path $shots 'scenes.json') -Encoding utf8
 Write-Host "saved $($manifest.Count) of $($scenes.Count)"
-$log = Join-Path $logDir 'shell.log'
-if (Test-Path $log) {
-    $bad = @(Get-Content $log -Encoding utf8 | Where-Object { $_ -match 'unhandled|launch failed|backend start failed' })
+$logs = @('shell.old.log', 'shell.log') | ForEach-Object { Join-Path $logDir $_ } | Where-Object { Test-Path $_ }
+if ($logs) {
+    $lines = @($logs | ForEach-Object { Get-Content $_ -Encoding utf8 })
+    $bad = @($lines | Where-Object { $_ -match 'unhandled|launch failed|backend start failed|backend: native' })
     if ($bad) { $bad | ForEach-Object { Write-Host "::error::$_" }; $failed++ }
+    # Every scene ran on the in-memory fake backend (no DLL, no network).
+    $fake = @($lines | Where-Object { $_ -match 'backend: fake \(' }).Count
+    Write-Host "fake backend starts: $fake"
+    # (The log rolls over at 1 MB on a start; then only the newest lines are left to count.)
+    $rolled = $logs.Count -gt 1
+    if ($fake -eq 0 -or (-not $rolled -and $fake -lt $manifest.Count)) { Write-Host "::error::only $fake of $($manifest.Count) scenes logged the fake backend"; $failed++ }
 }
 if ($failed -gt 0) { exit 1 }

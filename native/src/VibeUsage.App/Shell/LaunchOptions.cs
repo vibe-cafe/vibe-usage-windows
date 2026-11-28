@@ -23,11 +23,16 @@ public sealed record DemoScenario(string Id)
         "subscriptions" => Subscriptions,
         _ => new(value),
     };
+
+    /// <summary>The scene id, as the shell log writes it (「backend: fake (131a)」).</summary>
+    public override string ToString() => Id;
 }
 
 /// <summary>
-/// Command line. <c>--autostart</c> is what the sign-in entry passes; the
-/// <c>--test-*</c> switches exist for the CI screenshot and tray jobs only.
+/// Command line. <c>--autostart</c> is what the sign-in entry passes;
+/// <c>--fake-backend</c> runs the shell on the in-memory fake backend instead
+/// of the Rust DLL (development, screenshots, tray tests); the
+/// <c>--test-*</c> switches exist for the CI jobs only.
 /// </summary>
 public sealed class LaunchOptions
 {
@@ -47,6 +52,16 @@ public sealed class LaunchOptions
     public bool ScrollEnd { get; private set; }
 
     public DemoScenario Demo { get; private set; } = DemoScenario.Subscriptions;
+
+    /// <summary>The in-memory fake backend with made-up data instead of the Rust DLL. Any --test-demo implies it.</summary>
+    public bool FakeBackend { get; private set; }
+
+    /// <summary>Keep the backend's settings and logs under this folder instead of the user's app data (CI).</summary>
+    public string? DataDir { get; private set; }
+
+    /// <summary>The backend's roaming config and local data folders: the user's, or two folders under --test-data-dir.</summary>
+    public (string Roaming, string Local) DataFolders(string userRoaming, string userLocal) =>
+        DataDir is string root ? (System.IO.Path.Combine(root, "roaming"), System.IO.Path.Combine(root, "local")) : (userRoaming, userLocal);
 
     /// <summary>After every open, write the panel's window handle and visible rectangle here.</summary>
     public string? RectFile { get; private set; }
@@ -68,7 +83,13 @@ public sealed class LaunchOptions
             else if (a == "--test-pin") o.Pin = true;
             else if (a == "--test-expand") o.Expand = true;
             else if (a == "--test-scroll-end") o.ScrollEnd = true;
-            else if (Value(a, "--test-demo=") is string demo) o.Demo = DemoScenario.Parse(demo);
+            else if (a == "--fake-backend") o.FakeBackend = true;
+            else if (Value(a, "--test-demo=") is string demo)
+            {
+                o.Demo = DemoScenario.Parse(demo);
+                o.FakeBackend = true;
+            }
+            else if (Value(a, "--test-data-dir=") is string data) o.DataDir = data;
             else if (Value(a, "--test-rect-file=") is string rect) o.RectFile = rect;
             else if (Value(a, "--test-icon-file=") is string icon) o.IconFile = icon;
             else if (Value(a, "--test-tray-add-failures=") is string n

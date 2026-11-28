@@ -55,6 +55,20 @@
     <ProjectReference Include="..\VibeUsage.Display\VibeUsage.Display.csproj" />
   </ItemGroup>
 
+  <!-- The Rust backend (crates/ffi, a release build of the vibe-ffi package) and
+       the CLI launcher with the bundled Node (scripts/fetch-node.mjs), at the install
+       root as in the Tauri layout: the backend looks for cli-bootstrap.mjs and
+       node\node.exe there. A build without the DLL runs only with fake data. -->
+  <PropertyGroup>
+    <VibeFfiDll Condition="'$(VibeFfiDll)' == ''">$(MSBuildThisFileDirectory)..\..\..\target\release\vibe_ffi.dll</VibeFfiDll>
+    <BundledResources>$(MSBuildThisFileDirectory)..\..\..\src-tauri\resources</BundledResources>
+  </PropertyGroup>
+  <ItemGroup>
+    <Content Include="$(VibeFfiDll)" Link="vibe_ffi.dll" CopyToOutputDirectory="PreserveNewest" Condition="Exists('$(VibeFfiDll)')" />
+    <Content Include="$(BundledResources)\cli-bootstrap.mjs" Link="cli-bootstrap.mjs" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="$(BundledResources)\node\node.exe" Link="node\node.exe" CopyToOutputDirectory="PreserveNewest" Condition="Exists('$(BundledResources)\node\node.exe')" />
+  </ItemGroup>
+
   <ItemGroup>
     <Content Include="Assets\**\*" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="THIRD_PARTY_NOTICES.md" CopyToOutputDirectory="PreserveNewest" />

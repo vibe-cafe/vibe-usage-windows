@@ -1,10 +1,19 @@
-# The native Windows shell (WinUI 3, native/src/VibeUsage.App): unit tests of
-# its pure parts, a self-contained fully trimmed x64 publish, then on a second
-# runner the original-size screenshots (PrintWindow) and the tray smoke test,
-# at 100 % and again at 150 %; on two more runners every scene of the 订阅配额
-# card at 100 % and 150 % and, at 100 %, the card driven by pointer and
-# keyboard. The app runs on the in-memory fake backend: no network, no
-# credentials, no user data.
+# The native Windows app (WinUI 3 shell native/src/VibeUsage.App + the Rust
+# backend DLL crates/ffi): unit tests of the shell's pure parts, the backend
+# DLL, a self-contained fully trimmed x64 publish with the DLL, the CLI
+# launcher and the bundled Node at the install root. Then, on separate
+# runners:
+#   ui    — original-size screenshots (PrintWindow) and the tray smoke test at
+#           100 % and 150 %, on the in-memory fake backend;
+#   chain — the real backend against a local fake VibeCafé service: sign-in
+#           start waiting for the proxy, "test two" with a logging proxy and
+#           with no proxy, quitting with Node alive and deleting the install
+#           folder at once (native/ci/chain.ps1). No real server, no real
+#           account: outbound traffic of the app and its Node is blocked;
+#   quota — every scene of the 订阅配额 card at 100 % and 150 % and, at 100 %,
+#           the card driven by pointer and keyboard, on the fake backend
+#           (--test-demo=<scene> implies --fake-backend): no network, no
+#           credentials, no user data.
 name: Native app
 
 on:
@@ -12,10 +21,22 @@ on:
     branches: [main, 'feat/native-**']
     paths:
       - 'native/**'
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'src-tauri/resources/cli-bootstrap.mjs'
+      - 'scripts/fetch-node.mjs'
+      - 'scripts/cargo-windows.ps1'
       - '.github/workflows/native-app.yml'
   pull_request:
     paths:
       - 'native/**'
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'src-tauri/resources/cli-bootstrap.mjs'
+      - 'scripts/fetch-node.mjs'
+      - 'scripts/cargo-windows.ps1'
       - '.github/workflows/native-app.yml'
 
 permissions:
@@ -39,14 +60,34 @@ jobs:
           dotnet-version: '10.0.x'
       - name: Shell unit tests (open and close rules, placement, click race, demo data)
         run: dotnet test native/tests/VibeUsage.App.Tests -c Release
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.88.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: native-ffi
+      - name: Backend DLL (vibe_ffi.dll, release)
+        shell: pwsh
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target
+        run: ./scripts/cargo-windows.ps1 build --locked --release -p vibe-ffi
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Bundled Node runtime
+        run: node scripts/fetch-node.mjs
       - name: Publish (self-contained, full trimming, x64)
         shell: pwsh
         run: |
-          dotnet publish native/src/VibeUsage.App/VibeUsage.App.csproj -c Release -r win-x64 -p:Platform=x64 -o out/app 2>&1 | Tee-Object -FilePath publish.log
+          dotnet publish native/src/VibeUsage.App/VibeUsage.App.csproj -c Release -r win-x64 -p:Platform=x64 "-p:VibeFfiDll=${{ github.workspace }}\target\release\vibe_ffi.dll" -o out/app 2>&1 | Tee-Object -FilePath publish.log
           if ($LASTEXITCODE -ne 0) { exit 1 }
           $warnings = Select-String -Path publish.log -Pattern 'warning (IL\d+|RS0030|CsWinRT\d+)' | Sort-Object Line -Unique
           if ($warnings) { $warnings | ForEach-Object { Write-Host "::error::$($_.Line)" }; exit 1 }
           Write-Host 'no trim, WinRT trimming or banned-API warnings'
+          foreach ($f in 'vibe-usage-app.exe', 'vibe_ffi.dll', 'cli-bootstrap.mjs', 'node\node.exe') {
+            if (-not (Test-Path (Join-Path out/app $f))) { Write-Host "::error::the package is missing $f"; exit 1 }
+          }
+          Write-Host 'package has the backend DLL, the CLI launcher and the bundled Node at its root'
       - name: Size
         shell: pwsh
         run: |
@@ -101,6 +142,26 @@ jobs:
         with:
           name: native-ui-results
           path: C:\vu\out\
+          retention-days: 14
+
+  chain:
+    needs: build
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: vibe-usage-native-x64
+          path: C:\vu\package
+      - name: Start → read the local fake service → panel → quit (real backend, no real server)
+        shell: pwsh
+        run: ./native/ci/chain.ps1 -Package C:\vu\package -OutDir C:\vu\chain
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: native-chain-results
+          path: C:\vu\chain\
           retention-days: 14
 
   quota:
