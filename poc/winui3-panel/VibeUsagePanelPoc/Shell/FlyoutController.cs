@@ -187,7 +187,7 @@ internal sealed class FlyoutController : IDisposable
         _panel.FocusForOpen(source == ShowSource.Keyboard);
 
         Win32.GetWindowRect(_panel.Hwnd, out var actual);
-        PocLog.Write($"show source={source} anchor={(anchor?.ToString() ?? "none")} edge={target.Edge} dpi={target.Dpi} " +
+        PocLog.Write($"show source={source} anchor={(anchor?.ToString() ?? "none")} icon={(_tray.TryGetIconRect()?.ToString() ?? "none")} edge={target.Edge} dpi={target.Dpi} " +
                      $"rect={actual} SetForegroundWindow={granted} isForeground={fg == _panel.Hwnd} fg={Win32.ClassName(fg)}");
         WriteRectFile(actual);
 

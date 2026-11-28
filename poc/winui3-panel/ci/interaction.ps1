@@ -28,6 +28,8 @@ public static class PocInput {
     [DllImport("user32.dll")] public static extern void mouse_event(uint flags, int dx, int dy, uint data, UIntPtr extra);
     [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindowW(string cls, string name);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern IntPtr SendMessageTimeoutW(IntPtr hWnd, uint msg, UIntPtr wParam, string lParam, uint flags, uint timeout, out UIntPtr result);
     [DllImport("shell32.dll")] public static extern int Shell_NotifyIconGetRect(ref NOTIFYICONIDENTIFIER id, out RECT rect);
     public static int[] IconRect(IntPtr host) {
         var id = new NOTIFYICONIDENTIFIER { cbSize = (uint)Marshal.SizeOf(typeof(NOTIFYICONIDENTIFIER)), hWnd = host, uID = 1 };
@@ -87,6 +89,9 @@ function Check([string]$step, [string[]]$lines, [string]$mustMatch, [string]$mus
 $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize'
 Set-ItemProperty -Path $key -Name AppsUseLightTheme -Value 0 -Type DWord
 Set-ItemProperty -Path $key -Name SystemUsesLightTheme -Value 0 -Type DWord
+$r = [UIntPtr]::Zero
+[PocInput]::SendMessageTimeoutW([IntPtr]0xffff, 0x1A, [UIntPtr]::Zero, 'ImmersiveColorSet', 2, 5000, [ref]$r) | Out-Null
+$iconFile = Join-Path $OutDir 'icon-rect.txt'
 
 function Promote-Icon {
     # Windows 11 puts new icons in the overflow; promote ours like the Settings toggle does.
@@ -103,7 +108,7 @@ function Promote-Icon {
     return $done
 }
 
-$appArgs = @('--autostart', "--log-dir=$logDir")
+$appArgs = @('--autostart', "--log-dir=$logDir", "--icon-file=$iconFile")
 $proc = Start-Process -FilePath $exe -ArgumentList $appArgs -PassThru
 Start-Sleep -Seconds 5
 if (Promote-Icon) {
@@ -114,8 +119,12 @@ if (Promote-Icon) {
 }
 New-LogLines | Out-Null
 
-$host_ = [PocInput]::FindWindowW('VibeUsagePanelPoc.TrayHost', $null)
-$rect = [PocInput]::IconRect($host_)
+$rect = $null
+if (Test-Path $iconFile) {
+    $txt = (Get-Content $iconFile -Raw).Trim()
+    Write-Host "icon-rect.txt: $txt"
+    if ($txt -ne 'none') { $rect = $txt.Split(' ') | ForEach-Object { [int]$_ } }
+}
 if (-not $rect) {
     Write-Host '::warning::tray icon rect unavailable; skipping interaction test'
     Save-Shot '9-no-tray-icon'

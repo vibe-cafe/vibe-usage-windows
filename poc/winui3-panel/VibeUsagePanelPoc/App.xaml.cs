@@ -95,6 +95,8 @@ public partial class App : Application
             OpenSettings();
         };
 
+        if (!string.IsNullOrEmpty(_options.IconFile)) ReportIconRect(_options.IconFile);
+
         // Launched by the user: open the panel so they see where the app went.
         // With --autostart (the sign-in entry of a real build) stay in the tray.
         bool openNow = _options.OpenAtStart || !argv.Contains("--autostart");
@@ -102,6 +104,33 @@ public partial class App : Application
         {
             if (openNow) _flyout.Show(null, ShowSource.Startup);
         });
+    }
+
+    private Microsoft.UI.Dispatching.DispatcherQueueTimer? _iconTimer;
+
+    /// <summary>
+    /// Shell_NotifyIconGetRect only answers the icon's own process, so the CI
+    /// click test reads the rectangle from a file written here.
+    /// </summary>
+    private void ReportIconRect(string file)
+    {
+        int ticks = 0;
+        _iconTimer = Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread().CreateTimer();
+        _iconTimer.Interval = TimeSpan.FromSeconds(1);
+        _iconTimer.Tick += (t, _) =>
+        {
+            var r = _tray?.TryGetIconRect();
+            try
+            {
+                System.IO.File.WriteAllText(file, r is Win32.RECT x ? $"{x.Left} {x.Top} {x.Width} {x.Height}" : "none");
+            }
+            catch (Exception ex)
+            {
+                PocLog.Write("icon file: " + ex.Message);
+            }
+            if (++ticks >= 30) t.Stop();
+        };
+        _iconTimer.Start();
     }
 
     private static void HandOffToRunningInstance()

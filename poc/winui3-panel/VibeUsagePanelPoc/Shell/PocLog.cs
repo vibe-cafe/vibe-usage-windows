@@ -59,6 +59,9 @@ internal sealed class PocOptions
 
     public string? LogDir { get; private set; }
 
+    /// <summary>CI click test: keep writing the tray icon's rectangle here for a few seconds.</summary>
+    public string? IconFile { get; private set; }
+
     public static PocOptions Parse(string[] args)
     {
         var o = new PocOptions();
@@ -71,6 +74,7 @@ internal sealed class PocOptions
             else if (a.StartsWith("--tab=", StringComparison.Ordinal)) o.Tab = a[6..];
             else if (a.StartsWith("--rect-file=", StringComparison.Ordinal)) o.RectFile = a[12..];
             else if (a.StartsWith("--log-dir=", StringComparison.Ordinal)) o.LogDir = a[10..];
+            else if (a.StartsWith("--icon-file=", StringComparison.Ordinal)) o.IconFile = a[12..];
         }
         return o;
     }
