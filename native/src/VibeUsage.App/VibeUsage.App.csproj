@@ -55,7 +55,7 @@
     <ProjectReference Include="..\VibeUsage.Display\VibeUsage.Display.csproj" />
   </ItemGroup>
 
-  <!-- The Rust backend (crates/ffi, built with `cargo build --release -p vibe-ffi`) and
+  <!-- The Rust backend (crates/ffi, a release build of the vibe-ffi package) and
        the CLI launcher with the bundled Node (scripts/fetch-node.mjs), at the install
        root as in the Tauri layout: the backend looks for cli-bootstrap.mjs and
        node\node.exe there. A build without the DLL runs only with fake data. -->
