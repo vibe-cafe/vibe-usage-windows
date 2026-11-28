@@ -357,6 +357,7 @@ export type RateLimitLiveFailureCode =
   | "claudeTimedOut"
   | "claudeNoResponse"
   | "claudeNoWindows"
+  | "claudeBlockedByPolicy"
   | "desktopRecordStale"
   | "desktopMultipleInstalls"
   | "desktopMixedOrganizations"

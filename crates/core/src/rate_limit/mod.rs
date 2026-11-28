@@ -3,6 +3,7 @@
 
 pub mod claude;
 pub mod claude_desktop;
+pub mod claude_read;
 pub mod codex;
 
 use serde::{Deserialize, Serialize};
@@ -159,6 +160,7 @@ pub enum RateLimitLiveFailure {
     ClaudeNoResponse,
     /// Answered, but `rate_limits` held no usable 5h/7d window.
     ClaudeNoWindows,
+    ClaudeBlockedByPolicy,
     // Claude Desktop `plan-usage-history.json` (Windows only)
     /// The newest sample is older than the record's 24-hour limit.
     DesktopRecordStale,

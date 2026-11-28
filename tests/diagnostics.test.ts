@@ -323,7 +323,7 @@ describe("copyable diagnostics report", () => {
       }),
       products,
     );
-    expect(text).toContain("用了桌面端记录（Claude 桌面端记录已过期），没有启动 Claude Code");
+    expect(text).toContain("用了桌面端记录（Claude 桌面端记录已过期） · 找到候选 0 个，试了 0 个");
     expect(text).toContain("当前候选及版本（复制时查询）：没有找到 Claude Code 程序");
   });
 });
@@ -498,7 +498,7 @@ describe("Rust ↔ TypeScript diagnostics contract", () => {
       "Codex  无数据 · 接口报错 502 · 来源：实时读取",
       "OpenCode Go  无数据 · 未订阅 OpenCode Go",
       "当前候选及版本（复制时查询）：1）~\\.local\\bin\\claude.exe · 2.1.282；2）PATH 上第 3 个（claude.cmd） → 包内 claude.exe · 2.1.319",
-      "（不含当时的版本）：桌面端记录：没有 · 找到候选 2 个，试了 2 个",
+      "（不含当时的版本）：未使用桌面端记录 · 找到候选 2 个，试了 2 个",
       "1）~\\.local\\bin\\claude.exe · initialize 0.9s · get_usage 超时 · 读取超时 · 被 App 结束",
       "2）PATH 上第 3 个（claude.cmd） → 包内 claude.exe · initialize 1.2s · get_usage 2.3s · 没有返回额度 · 退出码 1 · 回答：rate_limits_available true · 5h 无 · 7d 无 · 套餐 有 · error 有",
       "PATH 上的 claude.*：claude.exe ×1、claude ×1、claude.cmd ×1",

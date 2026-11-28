@@ -46,6 +46,7 @@ export type LaunchOrigin =
   | { kind: "localBin" }
   | { kind: "claudeLocal" }
   | { kind: "localPrograms" }
+  | { kind: "desktop" }
   | { kind: "path"; position: number; extension: "exe" | "cmd" | "bat" };
 export type LaunchVia = "direct" | "shimBinary" | "shimScript";
 
@@ -74,7 +75,7 @@ export interface ProbeAttempt {
 
 export interface ProbeRecord {
   at: number;
-  desktop: { kind: "noRecord" } | { kind: "used"; failure?: RateLimitLiveFailure | null };
+  desktop: { kind: "noRecord" | "notUsed" } | { kind: "used"; failure?: RateLimitLiveFailure | null };
   candidatesFound: number;
   attempts: ProbeAttempt[];
 }
@@ -287,6 +288,9 @@ function originText(origin: LaunchOrigin, via: LaunchVia): string {
     case "localPrograms":
       base = "%LOCALAPPDATA%\\Programs\\Claude Code\\claude.exe";
       break;
+    case "desktop":
+      base = "Claude 桌面端内置";
+      break;
     case "path": {
       const position = number(origin.position) ?? "?";
       const extension = ["exe", "cmd", "bat"].includes(origin.extension) ? origin.extension : "?";
@@ -453,12 +457,9 @@ function claudeLines(report: DiagnosticsReport): string[] {
   } else {
     const desktop =
       probe.desktop.kind === "used"
-        ? `用了桌面端记录${probe.desktop.failure ? `（${quotaFailureText(probe.desktop.failure, "claudeCode")}）` : ""}，没有启动 Claude Code`
-        : "桌面端记录：没有";
-    const tried =
-      probe.desktop.kind === "used"
-        ? ""
-        : ` · 找到候选 ${number(probe.candidatesFound) ?? 0} 个，试了 ${probe.attempts.length} 个`;
+        ? `用了桌面端记录${probe.desktop.failure ? `（${quotaFailureText(probe.desktop.failure, "claudeCode")}）` : ""}`
+        : probe.desktop.kind === "noRecord" ? "桌面端记录：没有" : "未使用桌面端记录";
+    const tried = ` · 找到候选 ${number(probe.candidatesFound) ?? 0} 个，试了 ${probe.attempts.length} 个`;
     lines.push(`    上次读取 ${clock(probe.at)}（不含当时的版本）：${desktop}${tried}`);
     probe.attempts.forEach((attempt, index) => lines.push(attemptLine(attempt, index)));
   }

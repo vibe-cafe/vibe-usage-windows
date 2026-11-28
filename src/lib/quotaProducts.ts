@@ -14,6 +14,13 @@ import {
 import { elapsedPercent } from "./aggregate";
 import { formatPercent, formatTimeUntil } from "./formatters";
 
+export function paintClaudePreview(cards: ProviderRateLimit[], preview: ProviderRateLimit): ProviderRateLimit[] {
+  const old = cards.find((card) => card.provider === "claudeCode");
+  if (!old) return [...cards, preview];
+  if (old.status.kind === "ok" && (old.dataAsOf ?? 0) >= (preview.dataAsOf ?? 0)) return cards;
+  return cards.map((card) => card === old ? preview : card);
+}
+
 type PeriodPresentation = {
   label: string;
   seconds: number;
@@ -209,6 +216,7 @@ function failureCopy(
     case "endpointTimedOut":
     case "cliTimedOut":
     case "claudeTimedOut": return ["读取超时", "超时"];
+    case "claudeBlockedByPolicy": return ["组织策略关闭了 Claude Code 非必要流量", "已禁止"];
     case "claudeNoResponse": return ["没有响应", "无响应"];
     case "programNoAnswer":
     case "claudeNoWindows": return ["没有返回额度", "无响应"];
@@ -376,7 +384,11 @@ export function quotaRetryableText(snapshot: ProviderRateLimit): string {
  * its own fixed label. Re-login cards and empty states add nothing here.
  */
 export function quotaProvenanceText(snapshot: ProviderRateLimit): string | null {
-  if (snapshot.sourceLabel) return snapshot.sourceLabel;
+  if (snapshot.sourceLabel) {
+    return snapshot.source === "desktopRecord" && snapshot.status.kind === "ok" && snapshot.liveFailure
+      ? `${snapshot.sourceLabel} · ${quotaFailureText(snapshot.liveFailure, snapshot.provider)}`
+      : snapshot.sourceLabel;
+  }
   if (snapshot.status.kind === "retryableError") {
     return `来源：${quotaSourceText(snapshot.source ?? "live")}`;
   }

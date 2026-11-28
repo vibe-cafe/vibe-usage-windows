@@ -14,6 +14,9 @@ use std::sync::Mutex;
 use std::time::Instant;
 use vibe_core::claude_code::{ClaudeLaunch, LaunchOrigin, LaunchVia};
 use vibe_core::quota_product::DiscoveryEnvironment;
+use vibe_core::rate_limit::claude_read::resolve_read;
+#[cfg(test)]
+use vibe_core::rate_limit::claude_read::{after_live_failure, nonessential_traffic_disabled_snapshot};
 use vibe_core::{
     ProviderRateLimit, RateLimitEmptyReason, RateLimitLiveFailure, RateLimitProvider,
     RateLimitSource, RateLimitStatus, RateLimitWindow,
@@ -101,9 +104,9 @@ pub struct ProbeRecord {
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum DesktopStep {
-    /// No Claude Desktop record: the live read ran.
-    NoRecord,
-    /// A Desktop record decided the card; no Claude process was started.
+    /// The result did not come from Desktop (the record may not have been read).
+    NotUsed,
+    /// Desktop supplied the offline fallback or its validation error.
     Used {
         #[serde(skip_serializing_if = "Option::is_none")]
         failure: Option<RateLimitLiveFailure>,
@@ -209,91 +212,77 @@ fn discover_candidates(environment: &DiscoveryEnvironment) -> Vec<ClaudeLaunch> 
     )
 }
 
-/// Desktop record first, then a live Claude Code read; the order is unchanged.
-/// The error is the fixed reason of the last candidate tried (as on macOS);
-/// the child's stderr and launch-error text are never kept.
-///
-/// When the organization's policy forces Claude Code's nonessential traffic
-/// off (which also blocks its usage read), Claude Code is not started: a fresh
-/// Claude Desktop record still shows (reading it is offline), otherwise the
-/// card names the policy (no older numbers, no retry).
-/// Checked on every refresh, so a policy change takes effect on the next one.
-/// A user's own switch does not stop the read: the probe keeps it off and
-/// still reads the quota (`vibe_core::claude_nonessential`).
-///
-/// When the system routes an Anthropic host through SOCKS and Claude Code has
-/// no HTTP proxy to use, Claude Code is not started either (it would connect
-/// direct with the user's login): the card is paused, without older numbers,
-/// and the next refresh looks again (`egress_check::ClaudeRoute::SocksUnusable`).
-pub async fn fetch(
-    egress: crate::egress_check::Settings,
-) -> Result<ProviderRateLimit, RateLimitLiveFailure> {
-    let at = (now_epoch() * 1000.0) as u64;
+/// Desktop history is consulted only after the live result and Claude Code's
+/// account-scoped cache. A definitive answer (including no plan) wins.
+pub async fn fetch(egress: crate::egress_check::Settings) -> ProviderRateLimit {
     let environment = DiscoveryEnvironment::live();
-    // Desktop observations are local-only and must not be confused with a
-    // separately configured CLI account. No Claude process is started here.
-    if let Some(snapshot) =
-        vibe_core::rate_limit::claude_desktop::read(&environment, now_epoch())
-    {
-        remember(ProbeRecord {
-            at,
-            desktop: DesktopStep::Used {
-                failure: snapshot.live_failure,
-            },
-            candidates_found: 0,
-            attempts: Vec::new(),
-        });
-        return Ok(snapshot);
-    }
-    // Reading Claude Desktop's record above is offline, so the policy gate
-    // sits here, right before Claude Code would be started.
-    if nonessential_traffic_forced_by_policy() {
-        log::debug!("Claude nonessential traffic forced off by policy; not starting Claude Code");
-        return Ok(nonessential_traffic_disabled_snapshot());
-    }
-    let candidates = discover_candidates(&environment);
     let mut record = ProbeRecord {
-        at,
-        desktop: DesktopStep::NoRecord,
-        candidates_found: candidates.len(),
+        at: (now_epoch() * 1000.0) as u64,
+        desktop: DesktopStep::NotUsed,
+        candidates_found: 0,
         attempts: Vec::new(),
     };
+    let result = if nonessential_traffic_forced_by_policy() {
+        Err(RateLimitLiveFailure::ClaudeBlockedByPolicy)
+    } else {
+        let candidates = discover_candidates(&environment);
+        record.candidates_found = candidates.len();
+        fetch_live(egress, candidates, &mut record).await
+    };
+    let snapshot = resolve_read(now_epoch(), result, cached_snapshot, || {
+        vibe_core::rate_limit::claude_desktop::read(&environment, now_epoch())
+    });
+    if snapshot.source == Some(RateLimitSource::DesktopRecord) {
+        record.desktop = DesktopStep::Used { failure: snapshot.live_failure };
+    }
+    remember(record);
+    snapshot
+}
+
+async fn fetch_live(
+    egress: crate::egress_check::Settings,
+    candidates: Vec<ClaudeLaunch>,
+    record: &mut ProbeRecord,
+) -> Result<ProviderRateLimit, RateLimitLiveFailure> {
+    use crate::system_proxy::{claude_routes, proxy_variables};
+    use vibe_core::{claude_relay::ClaudeRelay, proxy_route::Route};
+
     if candidates.is_empty() {
-        remember(record);
         return Err(RateLimitLiveFailure::ClaudeBinaryNotFound);
     }
-    // Claude Code reads proxy variables, never Windows settings: hand it the
-    // system proxy for Anthropic's hosts (HTTP only; it does not support
-    // SOCKS). Resolved off the async threads (a PAC is evaluated by WinHTTP).
-    let (proxy_env, routes) = tauri::async_runtime::spawn_blocking(|| {
-        let lookup = |name: &str| std::env::var(name).ok();
-        let routes = if crate::system_proxy::has_own_proxy(&lookup) {
-            Vec::new()
-        } else {
-            crate::system_proxy::live_routes(&crate::system_proxy::host_urls(&crate::system_proxy::CLAUDE_HOSTS))
-        };
-        (crate::system_proxy::proxy_variables(&routes, &lookup, false, false), routes)
-    })
-    .await
-    .unwrap_or_default();
-    // Claude Code would reach Anthropic direct with that environment: confirm
-    // the egress before it starts with the user's login (`egress_check`).
-    let child = crate::egress_check::claude_child(&|name| std::env::var(name).ok(), &proxy_env);
-    match crate::egress_check::check_claude(egress, child, &routes).await {
-        Ok(()) => {}
-        // A SOCKS-only system proxy Claude Code cannot follow: it lasts until
-        // the local relay lands, so Claude Code's own cache would only grow
-        // older. The card says why, without numbers (and, as for any pause,
-        // without a retry; the next refresh checks again).
-        Err(pause @ crate::egress_check::Pause::SocksUnusable) => {
-            remember(record);
-            return Ok(after_live_failure(pause.live_failure(), None));
+    let routes = tauri::async_runtime::spawn_blocking(claude_routes)
+        .await
+        .map_err(|_| RateLimitLiveFailure::EgressUnconfirmed)?;
+    let lookup = |name: &str| std::env::var(name).ok();
+    let relay = if routes.iter().any(|(_, route)| matches!(route, Route::Socks(_))) {
+        Some(ClaudeRelay::start(&routes).await.map_err(|_| RateLimitLiveFailure::EgressUnconfirmed)?)
+    } else {
+        if routes.iter().any(|(_, route)| *route == Route::Unresolved) {
+            return Err(RateLimitLiveFailure::EgressUnconfirmed);
         }
-        Err(pause) => {
-            remember(record);
-            return Err(pause.live_failure());
-        }
+        None
+    };
+    let proxy_env = match &relay {
+        Some(relay) => crate::system_proxy::claude_relay_variables(relay.url(), &routes, &lookup),
+        None => proxy_variables(&routes, &lookup, false, false),
+    };
+    let child = crate::egress_check::claude_child(&lookup, &proxy_env);
+    let check = crate::egress_check::check_claude(egress, child, &routes, relay.as_ref().map(ClaudeRelay::url)).await;
+    let result = match check {
+        Ok(()) => try_candidates(candidates, record, &proxy_env).await,
+        Err(pause) => Err(pause.live_failure()),
+    };
+    if let Some(relay) = relay {
+        relay.stop().await;
     }
+    result
+}
+
+async fn try_candidates(
+    candidates: Vec<ClaudeLaunch>,
+    record: &mut ProbeRecord,
+    proxy_env: &[(&'static str, String)],
+) -> Result<ProviderRateLimit, RateLimitLiveFailure> {
     let mut last_error = RateLimitLiveFailure::ClaudeNoResponse;
     for candidate in candidates.into_iter().take(MAX_CANDIDATES) {
         let mut attempt = ProbeAttempt {
@@ -305,24 +294,14 @@ pub async fn fetch(
             exit: ProcessExit::NotStarted,
             answer: None,
         };
-        let result = run_probe(&candidate, &mut attempt, &proxy_env).await;
+        let result = run_probe(&candidate, &mut attempt, proxy_env).await;
         attempt.failure = result.as_ref().err().copied();
         record.attempts.push(attempt);
         match result {
-            Ok(snapshot) => {
-                remember(record);
-                return Ok(snapshot);
-            }
-            Err(error) => {
-                log::debug!(
-                    "Claude quota probe {} failed: {error:?}",
-                    candidate.program.display()
-                );
-                last_error = error;
-            }
+            Ok(snapshot) => return Ok(snapshot),
+            Err(error) => last_error = error,
         }
     }
-    remember(record);
     Err(last_error)
 }
 
@@ -360,15 +339,6 @@ fn claude_policy_documents() -> (Option<String>, Option<String>) {
     (None, None)
 }
 
-/// The card while the organization's policy forces nonessential traffic off:
-/// an empty state that names the policy. No source, no failure, no numbers.
-fn nonessential_traffic_disabled_snapshot() -> ProviderRateLimit {
-    let mut snapshot =
-        ProviderRateLimit::empty(RateLimitProvider::ClaudeCode, RateLimitStatus::NoData);
-    snapshot.empty_reason = Some(RateLimitEmptyReason::NonessentialTrafficDisabled);
-    snapshot.fetched_at = Some(now_epoch());
-    snapshot
-}
 
 /// The candidates a read would try right now, each with its version. Runs
 /// `--version` only when the user copies diagnostics, never during refresh.
@@ -437,34 +407,13 @@ pub fn cached_snapshot() -> Option<ProviderRateLimit> {
     cached_snapshot_from(&claude_config_file(), now_epoch())
 }
 
-/// What the card shows after the live read failed: Claude Code's own cache
-/// when it has a usable entry, annotated with why live failed; otherwise the
-/// failure itself. No program at all is not something a retry fixes, so it
-/// stays an empty state; every other failure is retryable, as on macOS.
-pub fn after_live_failure(
-    failure: RateLimitLiveFailure,
-    cached: Option<ProviderRateLimit>,
-) -> ProviderRateLimit {
-    if let Some(mut snapshot) = cached {
-        snapshot.live_failure = Some(failure);
-        return snapshot;
+pub fn preview() -> Option<ProviderRateLimit> {
+    if nonessential_traffic_forced_by_policy() {
+        return None;
     }
-    // Nothing to retry: no program, or a read paused on purpose.
-    if failure == RateLimitLiveFailure::ClaudeBinaryNotFound || failure.is_pause() {
-        return ProviderRateLimit::failed(
-            RateLimitProvider::ClaudeCode,
-            RateLimitStatus::NoData,
-            None,
-            failure,
-        );
-    }
-    ProviderRateLimit::failed(
-        RateLimitProvider::ClaudeCode,
-        RateLimitStatus::RetryableError,
-        Some(RateLimitSource::Live),
-        failure,
-    )
+    cached_snapshot()
 }
+
 
 /// The probe's command line and environment. An npm shim resolved to a
 /// JavaScript entry runs as `node <entry> ...`, never through cmd.exe (see
@@ -872,7 +821,12 @@ mod tests {
             origin: vibe_core::claude_code::LaunchOrigin::Override,
             via: vibe_core::claude_code::LaunchVia::Direct,
         };
-        let command = probe_command(&candidate, &[]);
+        let proxy = [("HTTPS_PROXY", "http://test:fixture@127.0.0.1:30001".to_owned())];
+        let command = probe_command(&candidate, &proxy);
+        let bundled = ClaudeLaunch { origin: LaunchOrigin::Desktop, ..candidate };
+        let desktop_command = probe_command(&bundled, &proxy);
+        assert!(command.as_std().get_args().eq(desktop_command.as_std().get_args()));
+        assert!(command.as_std().get_envs().eq(desktop_command.as_std().get_envs()));
         let std = command.as_std();
         let args: Vec<&OsStr> = std.get_args().collect();
         let settings = probe_settings();
@@ -881,6 +835,7 @@ mod tests {
         assert_eq!(&args[..PROBE_ARGS.len()], PROBE_ARGS.map(OsStr::new).as_slice());
 
         let envs: std::collections::HashMap<&OsStr, Option<&OsStr>> = std.get_envs().collect();
+        assert_eq!(envs.get(OsStr::new("HTTPS_PROXY")), Some(&Some(OsStr::new(&proxy[0].1))));
         assert_eq!(envs.get(OsStr::new(VARIABLE)), Some(&None));
         for (key, value) in QUIET_ENVIRONMENT.iter().filter(|(_, v)| !v.is_empty()) {
             assert_eq!(envs.get(OsStr::new(key)), Some(&Some(OsStr::new(value))), "{key}");
@@ -900,7 +855,7 @@ mod tests {
     /// it: no numbers, no source, no failure (so no retry and no stale reading).
     #[test]
     fn nonessential_traffic_card_names_the_setting() {
-        let snapshot = nonessential_traffic_disabled_snapshot();
+        let snapshot = nonessential_traffic_disabled_snapshot(100.0);
         assert_eq!(snapshot.provider, RateLimitProvider::ClaudeCode);
         assert_eq!(snapshot.status, RateLimitStatus::NoData);
         assert_eq!(

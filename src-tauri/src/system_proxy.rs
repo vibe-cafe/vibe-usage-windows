@@ -17,6 +17,8 @@
 //!    proxy in the answer is the route; a `DIRECT` answer is the user's rule.
 //!    When the PAC cannot be evaluated, the manual proxy below applies if it
 //!    is on (what WinINet does), otherwise the route is `Unresolved`.
+//!    Claude uses WinHttpGetProxyForUrlEx to distinguish SOCKS and DIRECT,
+//!    and refuses an unresolved PAC route.
 //! 3. The manual proxy (`ProxyEnable` + `ProxyServer`), honouring the bypass
 //!    list (`ProxyOverride`, with `<local>`). A per-protocol list picks the
 //!    entry for the URL's scheme (`https=` for https, falling back to
@@ -32,45 +34,7 @@ use std::time::{Duration, Instant};
 
 use url::Url;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Route {
-    Direct,
-    /// An HTTP proxy URL (`http://host:port`, possibly with credentials).
-    Http(String),
-    /// A SOCKS proxy, `host:port`.
-    Socks(String),
-    Unresolved,
-}
-
-/// Where a request goes when its route cannot be resolved (a PAC that is set
-/// but cannot be fetched or evaluated, typically while the proxy client is
-/// restarting): a closed local port, so the request fails instead of going
-/// direct. Never a real proxy.
-pub const FAIL_CLOSED_PROXY: &str = "http://127.0.0.1:1";
-
-impl Route {
-    /// The proxy's `host:port`, for a reachability check; `None` when there is
-    /// no proxy to check (direct, or a PAC that cannot be resolved yet).
-    pub fn proxy_endpoint(&self) -> Option<(String, u16)> {
-        let url = match self {
-            Route::Http(url) => Url::parse(url).ok()?,
-            Route::Socks(endpoint) => Url::parse(&format!("socks5://{endpoint}")).ok()?,
-            Route::Direct | Route::Unresolved => return None,
-        };
-        let host = url.host_str()?.trim_matches(['[', ']']).to_string();
-        Some((host, url.port_or_known_default().unwrap_or(1080)))
-    }
-
-    /// The proxy URL reqwest should use, or `None` for a direct connection.
-    pub fn reqwest_proxy(&self) -> Option<String> {
-        match self {
-            Route::Http(url) => Some(url.clone()),
-            Route::Socks(endpoint) => Some(format!("socks5h://{endpoint}")),
-            Route::Unresolved => Some(FAIL_CLOSED_PROXY.to_string()),
-            Route::Direct => None,
-        }
-    }
-}
+pub use vibe_core::proxy_route::{Route, FAIL_CLOSED_PROXY};
 
 /// The registry values that decide a route (HKCU Internet Settings).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -135,6 +99,18 @@ pub fn route_for(
     env: &impl Fn(&str) -> Option<String>,
     evaluate_pac: &impl Fn(&str, &str) -> Option<String>,
 ) -> Route {
+    resolve_route(url, settings, env, &|pac, target| {
+        evaluate_pac(pac, target).map(|answer| route_from_pac_answer(&answer))
+    }, false)
+}
+
+fn resolve_route(
+    url: &Url,
+    settings: &ProxySettings,
+    env: &impl Fn(&str) -> Option<String>,
+    evaluate_pac: &impl Fn(&str, &str) -> Option<Route>,
+    strict: bool,
+) -> Route {
     // The user's NO_PROXY applies whatever names the proxy (as with the old
     // reqwest system-proxy support): environment, PAC or manual settings.
     let no_proxy = ["no_proxy", "NO_PROXY"]
@@ -151,9 +127,9 @@ pub fn route_for(
     }
     if let Some(pac) = &settings.auto_config_url {
         if let Some(answer) = evaluate_pac(pac, url.as_str()) {
-            return route_from_pac_answer(&answer);
+            return answer;
         }
-        if !settings.proxy_enable {
+        if strict || !settings.proxy_enable {
             return Route::Unresolved;
         }
     }
@@ -161,14 +137,14 @@ pub fn route_for(
         return Route::Direct;
     }
     let Some(server) = settings.proxy_server.as_deref() else {
-        return Route::Direct;
+        return if strict { Route::Unresolved } else { Route::Direct };
     };
     if let Some(host) = url.host_str() {
         if bypassed(host, settings.proxy_override.as_deref()) {
             return Route::Direct;
         }
     }
-    route_from_proxy_server(server, https)
+    manual_route(server, https, strict)
 }
 
 /// One proxy entry (`host:port`, `http://…`, `socks5://…`, `socks=host:port`).
@@ -208,7 +184,7 @@ fn socks_route(endpoint: &str) -> Route {
 /// the CLI injection always did, and an HTTP proxy every child can use), else
 /// `socks=`; for http `http=`, else `socks=`. The first entry that parses wins,
 /// so an empty or broken `https=` falls back instead of breaking the route.
-fn route_from_proxy_server(server: &str, https: bool) -> Route {
+fn manual_route(server: &str, https: bool, strict: bool) -> Route {
     const PROTOCOLS: [&str; 5] = ["http", "https", "ftp", "socks", "gopher"];
     let parts: Vec<&str> = server.split(';').map(str::trim).filter(|p| !p.is_empty()).collect();
     let items: Vec<(&str, &str)> = parts.iter().filter_map(|p| p.split_once('=')).collect();
@@ -219,15 +195,17 @@ fn route_from_proxy_server(server: &str, https: bool) -> Route {
         return route_from_entry(server);
     }
     let order: &[&str] = if https { &["https", "http", "socks"] } else { &["http", "socks"] };
+    let mut invalid = false;
     for scheme in order {
         for (_, value) in items.iter().filter(|(key, _)| key.trim().eq_ignore_ascii_case(scheme)) {
             let route = if *scheme == "socks" { socks_route(value) } else { route_from_entry(value) };
             if route != Route::Unresolved {
                 return route;
             }
+            invalid = true;
         }
     }
-    Route::Direct
+    if strict && invalid { Route::Unresolved } else { Route::Direct }
 }
 
 /// `NO_PROXY` matching as the CLI does it: `*`, an exact host or IP (a bare
@@ -471,6 +449,22 @@ pub const CLI_HOSTS: [&str; 16] = [
 /// Hosts the Claude Code probe reaches (Claude Code's network docs).
 pub const CLAUDE_HOSTS: [&str; 3] = ["api.anthropic.com", "platform.claude.com", "claude.ai"];
 
+/// The legacy WinHTTP string result cannot reliably distinguish SOCKS from
+/// DIRECT. Only Claude needs the typed result for its per-host CONNECT relay.
+pub fn claude_routes() -> Vec<(String, Route)> {
+    let settings = read_settings();
+    let deadline = Instant::now() + BATCH_PAC_BUDGET;
+    host_urls(&CLAUDE_HOSTS).into_iter().map(|url| {
+        let route = resolve_route(&url, &settings, &|key| std::env::var(key).ok(), &|pac, target| {
+            #[cfg(windows)]
+            { crate::claude_pac::resolve(pac, target, deadline) }
+            #[cfg(not(windows))]
+            { let _ = (pac, target, deadline); None }
+        }, true);
+        (url.host_str().unwrap().to_owned(), route)
+    }).collect()
+}
+
 pub const LOOPBACK: [&str; 3] = ["localhost", "127.0.0.1", "::1"];
 
 /// Routes for `urls`, read now; each keeps its own answer. A failed PAC is
@@ -710,6 +704,21 @@ fn push_no_proxy(out: &mut Vec<(&'static str, String)>, lookup: &impl Fn(&str) -
     out.push(("NO_PROXY", merged));
 }
 
+/// Only the Claude child sees the relay URL. Preserve direct rules for the
+/// egress check and clients that implement NO_PROXY themselves.
+pub fn claude_relay_variables(
+    url: &str, routes: &[(String, Route)], lookup: &impl Fn(&str) -> Option<String>,
+) -> Vec<(&'static str, String)> {
+    let mut out = vec![("HTTPS_PROXY", url.to_owned()), ("HTTP_PROXY", url.to_owned())];
+    for name in ["https_proxy", "http_proxy"] {
+        if lookup(name).is_some() { out.push((name, url.to_owned())); }
+    }
+    let direct: Vec<_> = routes.iter().filter(|(_, r)| *r == Route::Direct)
+        .map(|(host, _)| host.as_str()).collect();
+    push_no_proxy(&mut out, lookup, &direct);
+    out
+}
+
 /// The most frequent value, the earliest on a tie.
 fn most_common(values: impl Iterator<Item = String>) -> Option<String> {
     let values: Vec<String> = values.collect();
@@ -846,6 +855,20 @@ fn normalize_env_url(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn claude_never_turns_failed_pac_or_broken_socks_into_direct() {
+        let url = Url::parse("https://api.anthropic.com").unwrap();
+        let mut settings = ProxySettings {
+            proxy_enable: true, proxy_server: Some("socks=missing-port".into()),
+            ..Default::default()
+        };
+        assert_eq!(resolve_route(&url, &settings, &|_| None, &|_, _| None, true), Route::Unresolved);
+        settings.auto_config_url = Some("http://proxy.test/pac".into());
+        settings.proxy_server = Some("127.0.0.1:7890".into());
+        assert_eq!(resolve_route(&url, &settings, &|_| None, &|_, _| None, true), Route::Unresolved);
+        assert_eq!(resolve_route(&url, &settings, &|_| None, &|_, _| Some(Route::Direct), true), Route::Direct);
+    }
+
     #[test]
     fn a_proxy_route_names_the_endpoint_to_check() {
         assert_eq!(

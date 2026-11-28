@@ -136,20 +136,10 @@ pub async fn get_rate_limits(app: &AppHandle, force: bool) -> Vec<ProviderRateLi
         store_snapshot(app, snapshot, generation);
     }
 
-    if selected.contains(&RateLimitProvider::ClaudeCode)
+    if selected_providers(app).contains(&RateLimitProvider::ClaudeCode)
         && needs_refresh(app, RateLimitProvider::ClaudeCode, effective_force)
     {
-        let snapshot = match claude_usage::fetch(egress()).await {
-            Ok(snapshot) => snapshot,
-            Err(failure) => {
-                log::debug!("Claude live quota unavailable: {failure:?}");
-                let cached = tauri::async_runtime::spawn_blocking(claude_usage::cached_snapshot)
-                    .await
-                    .ok()
-                    .flatten();
-                claude_usage::after_live_failure(failure, cached)
-            }
-        };
+        let snapshot = claude_usage::fetch(egress()).await;
         store_snapshot(app, snapshot, generation);
     }
 
@@ -192,6 +182,16 @@ pub async fn get_rate_limits(app: &AppHandle, force: bool) -> Vec<ProviderRateLi
 pub struct CachedRateLimits {
     snapshots: Vec<ProviderRateLimit>,
     refreshing: bool,
+}
+
+/// Paint only this request's panel, before network readiness or another
+/// product can block. A preview never advances the live refresh timestamp.
+pub async fn claude_preview(app: &AppHandle, force: bool) -> Option<ProviderRateLimit> {
+    let claude = RateLimitProvider::ClaudeCode;
+    if !selected_providers(app).contains(&claude) || !needs_refresh(app, claude, force) {
+        return None;
+    }
+    tauri::async_runtime::spawn_blocking(claude_usage::preview).await.ok().flatten()
 }
 
 /// What the cards show without reading anything: the last results, or an

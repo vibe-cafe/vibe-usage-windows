@@ -141,8 +141,8 @@ fn record_files(env: &DiscoveryEnvironment) -> Vec<PathBuf> {
 /// `Some` whenever a Desktop record exists. A record that cannot be used is
 /// `Some(noData)` carrying the specific reason (stale, several installations,
 /// several accounts, unreadable); several installations means different
-/// packages or installers, never one package's old and current directory. It is never silently replaced by a
-/// separately configured Claude Code account.
+/// packages or installers, never one package's old and current directory.
+/// The coordinator reads this source only for an offline fallback.
 pub fn read(env: &DiscoveryEnvironment, now: f64) -> Option<ProviderRateLimit> {
     let paths = record_files(env);
     if paths.is_empty() {

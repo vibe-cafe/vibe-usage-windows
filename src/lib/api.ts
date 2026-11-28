@@ -1,6 +1,6 @@
 // Typed bridge to the Rust backend (invoke + events).
 
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import type { DiagnosticsReport } from "./diagnostics";
 import {
@@ -36,7 +36,8 @@ export const api = {
   getSyncState: () => invoke<SyncState>("get_sync_state"),
 
   // Rate limits ---------------------------------------------------------------
-  getRateLimits: (force: boolean) => invoke<ProviderRateLimit[]>("get_rate_limits", { force }),
+  getRateLimits: (force: boolean, onPreview: (snapshot: ProviderRateLimit) => void) =>
+    invoke<ProviderRateLimit[]>("get_rate_limits", { force, preview: new Channel(onPreview) }),
   getCachedRateLimits: () =>
     invoke<{ snapshots: ProviderRateLimit[]; refreshing: boolean }>("get_cached_rate_limits"),
   enableClaudeRateLimit: () => invoke<ProviderRateLimit[]>("enable_claude_rate_limit"),

@@ -5,8 +5,10 @@
 
 pub mod claude_code;
 pub mod claude_nonessential;
+pub mod claude_relay;
 pub mod config;
 pub mod quota_product;
+pub mod proxy_route;
 pub mod rate_limit;
 pub mod runtime;
 pub mod statusline_hook;

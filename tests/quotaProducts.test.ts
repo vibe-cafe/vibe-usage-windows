@@ -7,6 +7,7 @@ import {
   expectsCodexFiveHour,
   isZCodeConfigured,
   moveQuotaProduct,
+  paintClaudePreview,
   quotaEmptyStateText,
   quotaFailureText,
   quotaProductStatusText,
@@ -248,6 +249,21 @@ describe("empty state reasons", () => {
 });
 
 describe("read failure reasons and sources", () => {
+  it("paints Claude's cache immediately and preserves a newer live card", () => {
+    const preview: ProviderRateLimit = { provider: "claudeCode", source: "cache", dataAsOf: 10, status: { kind: "ok" } };
+    expect(paintClaudePreview([], preview)).toEqual([preview]);
+    const live: ProviderRateLimit = { ...preview, source: "live", dataAsOf: 11 };
+    const cards: ProviderRateLimit[] = [{ provider: "codex", status: { kind: "noData" } }, live];
+    expect(paintClaudePreview(cards, preview)).toBe(cards);
+    const newer = { ...preview, dataAsOf: 12 };
+    expect(paintClaudePreview(cards, newer)).toEqual([cards[0], newer]);
+  });
+
+  it("names the live failure beside a valid Desktop reading", () => {
+    expect(quotaProvenanceText({ provider: "claudeCode", status: { kind: "ok" }, source: "desktopRecord",
+      sourceLabel: "Claude 桌面额度记录 · 非本机独占用量", liveFailure: { code: "claudeBlockedByPolicy" } }))
+      .toBe("Claude 桌面额度记录 · 非本机独占用量 · 组织策略关闭了 Claude Code 非必要流量");
+  });
   const claude = (extra: Partial<ProviderRateLimit>): ProviderRateLimit => ({
     provider: "claudeCode",
     status: { kind: "noData" },

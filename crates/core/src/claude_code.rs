@@ -52,6 +52,7 @@ pub enum LaunchOrigin {
     ClaudeLocal,
     /// `%LOCALAPPDATA%\Programs\Claude Code\claude.exe`.
     LocalPrograms,
+    Desktop,
     /// The `position`-th `claude.*` match on PATH (1-based, shell order).
     Path {
         position: usize,
@@ -96,7 +97,7 @@ struct Target {
 }
 
 /// Candidate launches in preference order: the explicit override, the native
-/// installer locations, then every `claude.*` on PATH in shell order.
+/// installer locations, PATH in shell order, then Desktop's newest runtime.
 /// Duplicates (the native installer's directory is usually on PATH too) are
 /// dropped; entries that cannot be launched without a shell are skipped.
 pub fn discover(env: &DiscoveryEnvironment, override_bin: Option<PathBuf>) -> Vec<ClaudeLaunch> {
@@ -141,6 +142,9 @@ pub fn discover_with_fallback_node(
         }
     }
 
+    if let Some(binary) = desktop_binary(env) {
+        sources.push((binary, LaunchOrigin::Desktop));
+    }
     let mut seen = HashSet::new();
     sources
         .into_iter()
@@ -161,6 +165,47 @@ pub fn discover_with_fallback_node(
         })
         .filter(|launch| seen.insert(identity(launch)))
         .collect()
+}
+
+/// Desktop retains older versions for rollback. Only consider complete
+/// executables in its version directories (including the newer hash layer).
+fn desktop_binary(env: &DiscoveryEnvironment) -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    for root in crate::rate_limit::claude_desktop::data_dirs(env) {
+        let Ok(entries) = std::fs::read_dir(root.join("claude-code")) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let Some(version) = name.to_str().and_then(|s| {
+                s.split('.')
+                    .map(|n| n.parse::<u32>().ok())
+                    .collect::<Option<Vec<_>>>()
+            }) else {
+                continue;
+            };
+            let dir = entry.path();
+            let plain = dir.join("claude.exe");
+            if plain.is_file() {
+                candidates.push((version, plain));
+            } else if let Ok(children) = std::fs::read_dir(dir) {
+                for child in children.flatten() {
+                    if child
+                        .file_name()
+                        .to_string_lossy()
+                        .bytes()
+                        .all(|b| b.is_ascii_hexdigit())
+                    {
+                        let binary = child.path().join("claude.exe");
+                        if binary.is_file() {
+                            candidates.push((version.clone(), binary));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    candidates.into_iter().max().map(|(_, binary)| binary)
 }
 
 /// File names of every `claude.*` match on PATH (lower-cased, shell order),
@@ -542,6 +587,41 @@ mod tests {
                 native_dir.join("claude.exe"),
                 claude_package(&prefix).join("bin").join("claude.exe"),
             ]
+        );
+    }
+
+    #[test]
+    fn desktop_follows_cli_and_path_and_only_the_newest_complete_version_is_tried() {
+        let tmp = tempfile::tempdir().unwrap();
+        let prefix = tmp.path().join("bin");
+        let env = environment(tmp.path(), vec![prefix.clone()]);
+        let roaming = tmp.path().join("Roaming/Claude/claude-code");
+        let old = tmp
+            .path()
+            .join("Local/Packages/Claude_abc/LocalCache/Roaming/Claude/claude-code");
+        let new = tmp.path().join("Local/Claude-Data/claude_abc/claude-code");
+        for binary in [
+            roaming.join("2.1.9/claude.exe"),
+            old.join("2.1.19/claude.exe"),
+            new.join("2.1.220/abcd0123/claude.exe"),
+        ] {
+            write(&binary, "");
+            assert_eq!(discover(&env, None)[0].program, binary);
+        }
+        write(&new.join("2.1.230/download.tmp"), "");
+        write(&new.join("2.1.240/unrelated/claude.exe"), "");
+        write(&new.join("current/claude.exe"), "");
+        write(&env.home.join(".local/bin/claude.exe"), "");
+        write(&prefix.join("claude.exe"), "");
+        let candidates = discover(&env, None);
+        assert_eq!(candidates.len(), 3);
+        assert_eq!(candidates[0].origin, LaunchOrigin::LocalBin);
+        assert!(matches!(candidates[1].origin, LaunchOrigin::Path { .. }));
+        assert_eq!(candidates[2].origin, LaunchOrigin::Desktop);
+        assert_eq!(candidates[2].via, LaunchVia::Direct);
+        assert_eq!(
+            candidates[2].program,
+            new.join("2.1.220/abcd0123/claude.exe")
         );
     }
 

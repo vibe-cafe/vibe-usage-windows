@@ -1032,7 +1032,7 @@ mod tests {
                 selected: true,
                 last_probe: Some(ProbeRecord {
                     at: AT - minute,
-                    desktop: DesktopStep::NoRecord,
+                    desktop: DesktopStep::NotUsed,
                     candidates_found: 2,
                     attempts: vec![
                         ProbeAttempt {

@@ -45,6 +45,7 @@ import {
 import { localDayKey } from "../lib/formatters";
 import {
   moveQuotaProduct as computeQuotaProductOrder,
+  paintClaudePreview,
   quotaTabOrder as computeQuotaTabOrder,
 } from "../lib/quotaProducts";
 import { invoke } from "@tauri-apps/api/core";
@@ -276,13 +277,18 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
 
   const refreshRateLimits = useCallback(async (force: boolean) => {
     const request = ++quotaRequest.current;
+    let pending = true;
     setIsRefreshingRateLimits(true);
     try {
-      const snapshots = await api.getRateLimits(force);
+      const snapshots = await api.getRateLimits(force, (preview) => {
+        if (!pending || request !== quotaRequest.current) return;
+        setRateLimits((cards) => paintClaudePreview(cards, preview));
+      });
       if (request === quotaRequest.current) setRateLimits(snapshots);
     } catch (err) {
       console.warn("rate limits:", err);
     } finally {
+      pending = false;
       if (request === quotaRequest.current) setIsRefreshingRateLimits(false);
     }
   }, []);

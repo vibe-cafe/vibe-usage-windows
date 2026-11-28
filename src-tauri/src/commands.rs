@@ -142,7 +142,17 @@ pub fn get_sync_state(app: AppHandle) -> SyncState {
 // -- Rate limits ----------------------------------------------------------------
 
 #[tauri::command]
-pub async fn get_rate_limits(app: AppHandle, force: bool) -> Vec<ProviderRateLimit> {
+pub async fn get_rate_limits(
+    app: AppHandle,
+    webview: tauri::Webview,
+    force: bool,
+    preview: Option<tauri::ipc::JavaScriptChannelId>,
+) -> Vec<ProviderRateLimit> {
+    if let Some(preview) = preview {
+        if let Some(snapshot) = rate_limits::claude_preview(&app, force).await {
+            let _ = preview.channel_on(webview).send(snapshot);
+        }
+    }
     // During a login launch's wait for the proxy this answers once it is up
     // (`rate_limits::get_rate_limits`); the window shows its loading state.
     rate_limits::get_rate_limits(&app, force).await

@@ -3,6 +3,8 @@
 
 mod commands;
 mod egress_check;
+#[cfg(windows)]
+mod claude_pac;
 mod panel;
 mod process_utils;
 mod process_lifecycle;
