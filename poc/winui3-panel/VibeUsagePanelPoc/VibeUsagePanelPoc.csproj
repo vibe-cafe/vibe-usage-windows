@@ -19,6 +19,9 @@
     <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
     <UseWinUI>true</UseWinUI>
     <WindowsPackageType>None</WindowsPackageType>
+    <!-- Needed even unpackaged: builds VibeUsagePanelPoc.pri, which carries the compiled
+         XAML (.xbf). Without it every ms-appx:///*.xaml load fails at run time. -->
+    <EnableMsixTooling>true</EnableMsixTooling>
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
     <SelfContained>true</SelfContained>
     <Nullable>enable</Nullable>

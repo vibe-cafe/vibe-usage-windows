@@ -70,6 +70,7 @@ jobs:
           "{0} files, {1:N1} MB" -f $files.Count, (($files | Measure-Object Length -Sum).Sum / 1MB)
           $files | Sort-Object Length -Descending | Select-Object -First 25 |
             ForEach-Object { "{0,8:N1} MB  {1}" -f ($_.Length / 1MB), $_.FullName.Substring((Resolve-Path $dir).Path.Length + 1) }
+          Get-ChildItem $dir -Filter *.pri | ForEach-Object { "pri: {0} ({1:N0} KB)" -f $_.Name, ($_.Length / 1KB) }
           "{0} language folders" -f (Get-ChildItem $dir -Directory | Where-Object Name -match '^[a-z]{2}(-[A-Za-z]+)*$').Count
           Compress-Archive -Path "$dir/*" -DestinationPath "out/size-check.zip"
           "zip {0:N1} MB" -f ((Get-Item out/size-check.zip).Length / 1MB)

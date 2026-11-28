@@ -75,7 +75,7 @@ public sealed partial class PanelWindow : Window
         }
         else
         {
-            RootGrid.Background = (Brush)Application.Current.Resources["SolidBackgroundFillColorBaseBrush"];
+            RootGrid.Background = (Brush)R("SolidBackgroundFillColorBaseBrush");
         }
 
         RootGrid.ActualThemeChanged += (_, _) => ApplyTheme();
@@ -259,7 +259,35 @@ public sealed partial class PanelWindow : Window
 
     // -- rendering ------------------------------------------------------------------------
 
-    private static Style S(string key) => (Style)Application.Current.Resources[key];
+    private static readonly System.Collections.Generic.Dictionary<string, object> ResourceCache = new();
+
+    /// <summary>
+    /// An app resource by key. The projected dictionary lookup can miss keys
+    /// that XAML itself resolves (seen in CI: TryGetValue said "missing" for
+    /// keys that {StaticResource} found), so fall back to letting XAML resolve it.
+    /// </summary>
+    internal static object R(string key)
+    {
+        if (ResourceCache.TryGetValue(key, out var cached)) return cached;
+        object? value = null;
+        try
+        {
+            value = Application.Current.Resources[key];
+        }
+        catch (Exception)
+        {
+        }
+        if (value is null)
+        {
+            var probe = (ContentControl)XamlReader.Load(
+                "<ContentControl xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" Tag=\"{StaticResource " + key + "}\" />");
+            value = probe.Tag;
+        }
+        ResourceCache[key] = value;
+        return value;
+    }
+
+    private static Style S(string key) => (Style)R(key);
 
     private static TextBlock Text(string text, string style, TextAlignment align = TextAlignment.Left) => new()
     {
