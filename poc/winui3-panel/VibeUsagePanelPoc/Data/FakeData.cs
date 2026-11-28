@@ -103,7 +103,7 @@ public static class FakeData
         get
         {
             var urgent = Subscriptions.Where(s => s.Pace == Pace.Critical).Select(s => $"{s.Name} {s.Binding.Label}剩余 {s.Binding.Remaining}%");
-            return $"Vibe Usage\n今天 {Money(Ranges[0].Cost)}" + (urgent.Any() ? " · " + string.Join("，", urgent) : string.Empty);
+            return $"Vibe Usage 原生面板样品\n今天 {Money(Ranges[0].Cost)}" + (urgent.Any() ? " · " + string.Join("，", urgent) : string.Empty);
         }
     }
 

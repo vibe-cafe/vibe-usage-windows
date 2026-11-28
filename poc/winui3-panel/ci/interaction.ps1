@@ -88,24 +88,34 @@ $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize'
 Set-ItemProperty -Path $key -Name AppsUseLightTheme -Value 0 -Type DWord
 Set-ItemProperty -Path $key -Name SystemUsesLightTheme -Value 0 -Type DWord
 
-$proc = Start-Process -FilePath $exe -ArgumentList @('--autostart', "--log-dir=$logDir") -PassThru
-Start-Sleep -Seconds 6
-New-LogLines | Out-Null
-
-$host_ = [PocInput]::FindWindowW('VibeUsagePanelPoc.TrayHost', $null)
-$rect = [PocInput]::IconRect($host_)
-if (-not $rect) {
+function Promote-Icon {
     # Windows 11 puts new icons in the overflow; promote ours like the Settings toggle does.
+    # Explorer reads this when the icon is added, so the app is (re)started afterwards.
+    $done = $false
     Get-ChildItem 'HKCU:\Control Panel\NotifyIconSettings' -ErrorAction SilentlyContinue | ForEach-Object {
         $p = Get-ItemProperty $_.PSPath
         if ($p.ExecutablePath -and $p.ExecutablePath -like '*VibeUsagePanelPoc.exe') {
             Set-ItemProperty -Path $_.PSPath -Name IsPromoted -Value 1 -Type DWord
             Write-Host "promoted tray icon ($($_.PSChildName))"
+            $done = $true
         }
     }
-    Start-Sleep -Seconds 3
-    $rect = [PocInput]::IconRect($host_)
+    return $done
 }
+
+$appArgs = @('--autostart', "--log-dir=$logDir")
+$proc = Start-Process -FilePath $exe -ArgumentList $appArgs -PassThru
+Start-Sleep -Seconds 5
+if (Promote-Icon) {
+    Stop-Process -Id $proc.Id -Force
+    Start-Sleep -Seconds 3
+    $proc = Start-Process -FilePath $exe -ArgumentList $appArgs -PassThru
+    Start-Sleep -Seconds 6
+}
+New-LogLines | Out-Null
+
+$host_ = [PocInput]::FindWindowW('VibeUsagePanelPoc.TrayHost', $null)
+$rect = [PocInput]::IconRect($host_)
 if (-not $rect) {
     Write-Host '::warning::tray icon rect unavailable; skipping interaction test'
     Save-Shot '9-no-tray-icon'

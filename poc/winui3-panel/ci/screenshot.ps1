@@ -26,6 +26,12 @@ public static class PocNative {
 "@
 [PocNative]::SetProcessDPIAware() | Out-Null
 
+try {
+    Set-DisplayResolution -Width 1920 -Height 1080 -Force -ErrorAction Stop
+    Start-Sleep -Seconds 3
+} catch {
+    Write-Host "display resolution unchanged: $($_.Exception.Message)"
+}
 $screen = [System.Windows.Forms.SystemInformation]::VirtualScreen
 Write-Host "screen: $($screen.Width)x$($screen.Height) at $($screen.Left),$($screen.Top)"
 Write-Host "os: $([Environment]::OSVersion.VersionString)"

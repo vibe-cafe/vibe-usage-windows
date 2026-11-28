@@ -385,7 +385,7 @@ public sealed partial class PanelWindow : Window
     private Button OverviewRow(Subscription s)
     {
         var b = s.Binding;
-        var grid = new Grid { RowSpacing = 5 };
+        var grid = new Grid { RowSpacing = 4 };
         grid.RowDefinitions.Add(new RowDefinition { Height = Auto });
         grid.RowDefinitions.Add(new RowDefinition { Height = Auto });
 
@@ -543,7 +543,7 @@ public sealed partial class PanelWindow : Window
         peak.Children.Add(peakLabel);
         ChartArea.Children.Add(peak);
 
-        const double plotHeight = 62;
+        const double plotHeight = 56;
         var plot = new Grid { Height = plotHeight, VerticalAlignment = VerticalAlignment.Bottom };
         Place(plot, row: 1);
         for (int i = 0; i < n; i++) plot.ColumnDefinitions.Add(new ColumnDefinition { Width = Star });
