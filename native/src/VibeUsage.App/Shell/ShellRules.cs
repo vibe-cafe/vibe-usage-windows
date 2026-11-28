@@ -47,6 +47,12 @@ public enum DismissSignal
     /// open leaves it there), so no foreground change follows.
     /// </summary>
     TaskbarPressed,
+    /// <summary>
+    /// Windows refused the panel the foreground on a start, so the window the
+    /// user was in stayed in front; a click back into it changes nothing there
+    /// either, but starts a mouse capture in that program.
+    /// </summary>
+    ForegroundAppPressed,
 }
 
 /// <summary>Whether a signal closes the panel. Pure, so the timing rules are unit-tested.</summary>
@@ -99,7 +105,8 @@ public static class DismissPolicy
         {
             DismissSignal.Deactivated => "deactivated",
             DismissSignal.ForegroundChanged => "foreground-changed",
-            _ => "taskbar-pressed",
+            DismissSignal.TaskbarPressed => "taskbar-pressed",
+            _ => "foreground-app-pressed",
         };
         return $"{what} fg={windowClass}";
     }

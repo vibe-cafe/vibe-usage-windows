@@ -63,6 +63,15 @@ public class DismissPolicyTests
     }
 
     [Fact]
+    public void APressBackInTheWindowThatKeptTheForegroundCloses()
+    {
+        // The panel was opened by a start, not by a click in that program: any press there is the user going back.
+        Assert.Equal("foreground-app-pressed fg=Notepad", DismissPolicy.HideReason(DismissSignal.ForegroundAppPressed, "Notepad", 50, false));
+        Assert.Equal("foreground-app-pressed fg=Notepad", DismissPolicy.HideReason(DismissSignal.ForegroundAppPressed, "Notepad", 600, false));
+        Assert.Null(DismissPolicy.HideReason(DismissSignal.ForegroundAppPressed, "Shell_TrayWnd", 100, false));
+    }
+
+    [Fact]
     public void OverflowOpensGetALongerGrace()
     {
         Assert.Null(DismissPolicy.HideReason(DismissSignal.ForegroundChanged, "Shell_TrayWnd", 700, false, openedFromOverflow: true));

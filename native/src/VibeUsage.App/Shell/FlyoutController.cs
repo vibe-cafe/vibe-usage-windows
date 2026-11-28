@@ -27,9 +27,12 @@ namespace VibeUsage.App.Shell;
 ///    an empty part of it changes nothing there. While open, two more
 ///    out-of-context hooks limited to the taskbar's process (Explorer) watch
 ///    mouse capture starting and focus moving inside the taskbar.
-/// 4. The click that opened the panel can still land on the taskbar or the
+/// 4. When Windows refuses the foreground on a start, a fourth hook watches
+///    mouse captures in the program that stayed in front, so clicking back
+///    into it still closes the panel.
+/// 5. The click that opened the panel can still land on the taskbar or the
 ///    「^」 overflow; <see cref="DismissPolicy"/> gives it a short grace.
-/// 5. Click race on the icon: <see cref="TrayToggleGate"/>.
+/// 6. Click race on the icon: <see cref="TrayToggleGate"/>.
 /// </summary>
 internal sealed partial class FlyoutController : IDisposable
 {
@@ -41,9 +44,10 @@ internal sealed partial class FlyoutController : IDisposable
     private readonly TrayToggleGate gate = new();
     private readonly Win32.WinEventProc foregroundProc; // must stay referenced: native code calls them
     private readonly Win32.WinEventProc shellProc;
+    private readonly Win32.WinEventProc appProc;
     private readonly uint pid = (uint)Environment.ProcessId;
     private DispatcherQueueTimer? warmUpTimer;
-    private IntPtr foregroundHook, captureHook, focusHook;
+    private IntPtr foregroundHook, captureHook, focusHook, appCaptureHook;
     private bool visible;
     private bool warmingUp;
     private bool relayoutQueued;
@@ -72,6 +76,7 @@ internal sealed partial class FlyoutController : IDisposable
         this.options = options;
         foregroundProc = OnForegroundEvent;
         shellProc = OnShellEvent;
+        appProc = OnForegroundAppEvent;
 
         panel.Activated += OnPanelActivated;
         panel.CloseRequested += reason => Hide(reason, auto: false);
@@ -201,6 +206,7 @@ internal sealed partial class FlyoutController : IDisposable
         if (activate) panel.FocusFirst(OpenPolicy.ShowsFocusRing(source));
 
         var fg = Win32.GetForegroundWindow();
+        if (activate && !granted) WatchForegroundApp(fg);
         var actual = Win32.VisibleRect(panel.Hwnd);
         ShellLog.Write($"show source={source} anchor={(at?.ToString() ?? "none")} overflow={openedFromOverflow} " +
                        $"edge={target.Edge} dpi={target.Dpi} contentDip={panel.MeasureDesiredHeightDip()} rect={actual} " +
@@ -294,6 +300,38 @@ internal sealed partial class FlyoutController : IDisposable
         }
     }
 
+    /// <summary>
+    /// Windows refused the foreground on a start (logged as activate=False):
+    /// the user's window stays in front, so going back to it changes no
+    /// foreground. Watch mouse captures in that program while the panel is up
+    /// (out of context, removed on hide); most clicks in a window start one.
+    /// </summary>
+    private void WatchForegroundApp(IntPtr foreground)
+    {
+        uint owner = foreground == IntPtr.Zero ? 0 : Win32.ProcessOf(foreground);
+        var taskbar = Win32.FindWindowW("Shell_TrayWnd", null);
+        if (owner == 0 || owner == pid || (taskbar != IntPtr.Zero && owner == Win32.ProcessOf(taskbar)) || appCaptureHook != IntPtr.Zero) return;
+        appCaptureHook = Win32.SetWinEventHook(Win32.EVENT_SYSTEM_CAPTURESTART, Win32.EVENT_SYSTEM_CAPTURESTART, IntPtr.Zero,
+            appProc, owner, 0, Win32.WINEVENT_OUTOFCONTEXT);
+        ShellLog.Write($"no foreground on open: watching presses in {Win32.ClassName(foreground)} hook={appCaptureHook != IntPtr.Zero}");
+    }
+
+    private void OnForegroundAppEvent(IntPtr hook, uint eventType, IntPtr hwnd, int idObject, int idChild, uint thread, uint eventTime)
+    {
+        try
+        {
+            if (!visible || options.Pin || hwnd == IntPtr.Zero) return;
+            if (unchecked((int)(eventTime - shownAtTick)) < 0) return;
+            string rootClass = Win32.ClassName(Win32.GetAncestor(hwnd, Win32.GA_ROOT));
+            var reason = DismissPolicy.HideReason(DismissSignal.ForegroundAppPressed, rootClass, Now - shownAt, false, openedFromOverflow);
+            if (reason != null) Hide(reason, auto: true);
+        }
+        catch (Exception ex)
+        {
+            ShellLog.Write("app hook error " + ex.Message);
+        }
+    }
+
     /// <summary>Our own popups (list, menu, tooltip) may take activation; that isn't "clicking away".</summary>
     private bool IsOwnTransient(IntPtr hwnd)
     {
@@ -328,9 +366,9 @@ internal sealed partial class FlyoutController : IDisposable
 
     private void RemoveHooks()
     {
-        foreach (var hook in new[] { foregroundHook, captureHook, focusHook })
+        foreach (var hook in new[] { foregroundHook, captureHook, focusHook, appCaptureHook })
             if (hook != IntPtr.Zero) Win32.UnhookWinEvent(hook);
-        foregroundHook = captureHook = focusHook = IntPtr.Zero;
+        foregroundHook = captureHook = focusHook = appCaptureHook = IntPtr.Zero;
     }
 
     private bool CursorOnIcon()

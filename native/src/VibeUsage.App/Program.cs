@@ -24,6 +24,16 @@ public static class Program
             return;
         }
 
+        // A start by the user opens the panel with the keyboard, but Windows only
+        // lets a just-started process take the foreground early on, and WinUI's
+        // start-up uses that up before the panel exists. Pass the right to this
+        // process now, as a second start passes it to the running one.
+        if (!options.Autostart)
+        {
+            bool kept = Win32.AllowSetForegroundWindow((uint)Environment.ProcessId);
+            ShellLog.Write($"start by the user: foreground right kept={kept}");
+        }
+
         WinRT.ComWrappersSupport.InitializeComWrappers();
         Application.Start(callback =>
         {

@@ -268,11 +268,11 @@ Pump 300
 Wheel -5
 Pump 1200
 Check 'W 不激活时滚轮能滚动中间区' (New-LogLines) 'panel scroll offset='
-# A click on one of its buttons makes the panel the active window (WinUI moves focus there),
-# so from then on Esc closes it, as after a keyboard open.
+# Clicking its buttons leaves the keyboard where it was (the taskbar): Esc still does nothing,
+# which is also what keeps the input method's 中/英 as it was.
 Key 0x1B
 Pump 1000
-Check "X' 点过面板里的按钮后按 Esc：面板收起" (New-LogLines) 'hide reason=esc'
+Add-Result "X' 点过面板里的按钮后键盘仍留在原处（按 Esc 不收起）" (-not (Any (New-LogLines) 'hide reason='))
 Close-Panel
 
 # P: 「设置」 in the panel: the panel closes, settings comes to the front.
@@ -374,6 +374,27 @@ Add-Result 'S1 手动启动：面板打开并拿到键盘' (Any $l 'show source=
 Click $fx $fy
 Pump 1500
 Check 'S2 手动启动后点回原窗口：面板收起' (New-LogLines) 'hide reason=(deactivated|foreground-changed)'
+
+# S3: Windows refuses the foreground when the starter is not in front (here the runner's
+# terminal is); clicking back into the window that stayed in front still closes the panel.
+$termX = 200; $termY = 150
+Click $termX $termY
+Pump 800
+Stop-App
+New-LogLines | Out-Null
+$proc = Start-App $base
+Pump 5000
+$l = New-LogLines
+$denied = Any $l 'show source=Startup.*activate=False'
+Click $termX $termY
+Pump 1500
+$l2 = New-LogLines
+if ($denied) {
+    Add-Result 'S3 启动时没拿到前台：点回留在前面的窗口也收起' (Any $l2 'hide reason=foreground-app-pressed') ($l + $l2)
+} else {
+    Write-Host 'S3 skipped: the start got the foreground this time'
+}
+Close-Panel
 
 # P2: the footer's power button quits.
 $ic = Wait-IconCenter 5000
