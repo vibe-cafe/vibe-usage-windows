@@ -4643,6 +4643,32 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
+name = "vibe-backend"
+version = "0.7.10"
+dependencies = [
+ "async-trait",
+ "auto-launch",
+ "chrono",
+ "dirs 5.0.1",
+ "gethostname",
+ "hex",
+ "iana-time-zone",
+ "log",
+ "open",
+ "regex",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "url",
+ "vibe-core",
+ "windows-sys 0.59.0",
+ "winreg 0.52.0",
+]
+
+[[package]]
 name = "vibe-core"
 version = "0.7.10"
 dependencies = [

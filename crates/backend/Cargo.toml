@@ -1,0 +1,62 @@
+[package]
+name = "vibe-backend"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Backend services for the native Windows host"
+
+[features]
+external-test-diagnostics = []
+
+[dependencies]
+vibe-core = { path = "../core" }
+async-trait = "0.1"
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+# native-tls → SChannel on Windows (pure Rust bindings, no C toolchain needed
+# for cross-checks; rustls would pull in `ring`'s C build).
+# The custom resolver reads the live Windows route (including PAC) for each request.
+reqwest = { version = "0.12", default-features = false, features = ["json", "native-tls", "gzip", "socks"] }
+auto-launch = "0.5"
+open = "5"
+dirs = "5"
+gethostname = "0.5"
+iana-time-zone = "0.1"
+sha2 = "0.10"
+hex = "0.4"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+log = "0.4"
+url = "2.5"
+
+[target.'cfg(windows)'.dependencies]
+# NOTE: keep this feature list free of input-hook APIs
+# (Win32_UI_Input_KeyboardAndMouse etc.) — GetAsyncKeyState imports trip
+# Windows Defender's keylogger heuristics on unsigned binaries.
+windows-sys = { version = "0.59", features = [
+    "Win32_System_Threading",
+    "Win32_System_JobObjects",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_Security",
+    "Win32_Foundation",
+    # Credential Manager, only for this app's own entries (ZCode keys, the
+    # Cursor sign-in); never another program's (workspace rule, 2026-11-25).
+    "Win32_Security_Credentials",
+    # PAC evaluation by the system (WinHttpGetProxyForUrl); a network API,
+    # not an input hook. Approved 2026-11-24 (privacy fix plan, item 9).
+    "Win32_Networking_WinHttp",
+    # The egress check's network fingerprint (GetAdaptersAddresses): network
+    # APIs, not input hooks (network-privacy principle, rule 3, 2026-11-24).
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_NetworkManagement_Ndis",
+    "Win32_Networking_WinSock",
+] }
+winreg = "0.52"
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["test-util"] }
+
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { version = "0.59", features = ["Win32_System_IO", "Win32_System_SystemServices"] }
