@@ -1,0 +1,38 @@
+T:System.Net.Http.HttpClient;The shell does no networking: every request goes through the Rust backend, which follows the user's proxy
+T:System.Net.Http.HttpMessageHandler;The shell does no networking (Rust backend only)
+T:System.Net.Http.HttpClientHandler;The shell does no networking (Rust backend only)
+T:System.Net.Http.SocketsHttpHandler;The shell does no networking (Rust backend only)
+T:System.Net.WebClient;The shell does no networking (Rust backend only)
+T:System.Net.WebRequest;The shell does no networking (Rust backend only)
+T:System.Net.HttpWebRequest;The shell does no networking (Rust backend only)
+T:System.Net.Dns;The shell does no networking (Rust backend only)
+T:System.Net.Sockets.Socket;The shell does no networking (Rust backend only)
+T:System.Net.Sockets.TcpClient;The shell does no networking (Rust backend only)
+T:System.Net.Sockets.UdpClient;The shell does no networking (Rust backend only)
+T:System.Net.Sockets.TcpListener;The shell does no networking (Rust backend only)
+T:System.Net.Sockets.NetworkStream;The shell does no networking (Rust backend only)
+T:System.Net.HttpListener;The shell does no networking (Rust backend only)
+T:System.Net.FtpWebRequest;The shell does no networking (Rust backend only)
+T:System.Net.Http.HttpRequestMessage;The shell does no networking (Rust backend only)
+T:System.Net.Security.SslStream;The shell does no networking (Rust backend only)
+T:System.Net.Mail.SmtpClient;The shell does no networking (Rust backend only)
+T:System.Net.Quic.QuicConnection;The shell does no networking (Rust backend only)
+T:System.Net.Quic.QuicListener;The shell does no networking (Rust backend only)
+T:System.Net.WebSockets.ClientWebSocket;The shell does no networking (Rust backend only)
+T:System.Net.NetworkInformation.Ping;The shell does no networking (Rust backend only)
+T:Windows.Web.Http.HttpClient;The shell does no networking (Rust backend only)
+T:Windows.Networking.Sockets.StreamSocket;The shell does no networking (Rust backend only)
+T:Windows.Networking.Sockets.DatagramSocket;The shell does no networking (Rust backend only)
+T:Windows.Networking.Sockets.MessageWebSocket;The shell does no networking (Rust backend only)
+T:Windows.Networking.Sockets.StreamWebSocket;The shell does no networking (Rust backend only)
+T:Windows.Networking.Sockets.StreamSocketListener;The shell does no networking (Rust backend only)
+T:Windows.Networking.BackgroundTransfer.BackgroundDownloader;The shell does no networking (Rust backend only)
+T:Windows.Networking.BackgroundTransfer.BackgroundUploader;The shell does no networking (Rust backend only)
+T:Windows.Web.Syndication.SyndicationClient;The shell does no networking (Rust backend only)
+T:Windows.Web.AtomPub.AtomPubClient;The shell does no networking (Rust backend only)
+T:Microsoft.UI.Xaml.Controls.WebView2;No embedded web pages in the shell
+T:Microsoft.UI.Xaml.Media.Imaging.BitmapImage;No remote images in the shell; marks are drawn in code
+T:Microsoft.UI.Xaml.Media.Imaging.SvgImageSource;No remote images in the shell; marks are drawn in code
+T:Windows.System.Launcher;Links open through the backend's open_external check
+T:Windows.System.RemoteLauncher;Links open through the backend's open_external check
+T:System.Diagnostics.Process;The shell starts no programs; the backend owns every child process

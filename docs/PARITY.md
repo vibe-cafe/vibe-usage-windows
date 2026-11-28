@@ -118,6 +118,29 @@ Windows 和 macOS 共用 `cli-bootstrap.mjs`。每次先查 npm `latest`，命�
 
 原生设置支持按项修改，记录 `quotaProductOrder`、`quotaSelectedTabId` 和上次成功同步的毫秒时间戳 `lastSuccessfulSyncAt`。旧设置缺少这些字段时使用默认值，重置账号会清除同步时间。冻结版继续使用上表所列的服务。
 
+## 原生外壳（开发中，#92）
+
+`native/src/VibeUsage.App` 是 WinUI 3 外壳，长相照 Mac 新版面板，操作习惯照 Windows。外框按 `vibe-usage-app@7645d44` 核对；卡片内容在 #95、#96 照 Mac 补齐，之前先用假后端和展示库的数据画占位。
+
+| Mac 新版 | 原生外壳 |
+|---|---|
+| `ModernTheme`（配色、字号、卡片表面） | `Panel/Theme.cs`：数值照抄，点数换成 DIP；Schibsted Grotesk 和 JetBrains Mono 随包，中文回退到微软雅黑；面板文字不随系统「文本大小」放大 |
+| `ModernPanelView`（顶栏和概览行固定、中间滚动、底栏固定，高度跟内容） | `Panel/PanelWindow.cs`：同样的结构，滚动条浮在卡片上不占宽度；高度上限是工作区减两边 12 DIP |
+| `ModernHeaderBar`、`ModernSubscriptionRow`、`ModernFooterBar`、`ModernSyncLabel` | `Panel/PanelContent.cs` 的 `Header`、`SubscriptionRow`、`Footer`，同步文字由 `Panel/SyncLabel.cs` 按 Mac 规则生成 |
+| `ModernCard` | `CardFrame`：20 DIP 标题行、正文在下方 8 DIP，卡片表面照 `ModernCardBackground` |
+| `AppState.panelWillOpen` | 每次真正打开时 `UsagePanelState.PanelDidOpen()`：回到概览、费用、收起；预热不算打开，也不触发读取 |
+| `MenuBarController`（菜单栏面板的开合） | `Shell/FlyoutController.cs`、`Shell/TrayIcon.cs`，行为照 Windows，见下 |
+
+和 Mac 有意不同的地方：
+
+1. 面板贴着托盘图标弹出；展开详情时贴着任务栏的那条边不动，往远离任务栏的方向长（Mac 是顶边不动、往下长）。
+2. 点托盘图标打开时面板不拿键盘，任务栏输入法的中/英不跟着变，这时 Esc 不起作用，靠点别处、点任务栏空白处或再点图标收起（#85 维护者决定 4，不注册全局热键）。键盘打开（Win+B 后回车）、从开始菜单或快捷方式再次启动、手动启动时面板拿到键盘，Esc 可收起，点回原来的窗口也会收起。点面板里的按钮不会把键盘从原来的窗口拿走。
+3. 圆角用 Windows 11 的系统圆角（约 8 像素），Windows 10 是方角加细边；窗口外边照 Mac 面板那道浅边（`#383A3D`）。
+4. 右键托盘图标是系统原生菜单：打开面板、立即同步、设置、退出。菜单贴着任务栏内侧，关掉后前台还给原来的窗口；用键盘（Win+B 后按菜单键或 Shift+F10）打开菜单再选「打开面板」时，面板拿到键盘，Esc 可收起。
+5. 设置窗口是普通 Windows 窗口（在任务栏和 Alt+Tab 里），关掉只是隐藏。
+
+外壳自己不联网：工程用禁用接口清单（`BannedSymbols.txt`）挡住 HTTP、套接字、网页控件、远程图片和启动外部程序，打开网页交给后端的 `open_external`。
+
 ## 验收清单
 
 真机验收清单见 `docs/WINDOWS_ACCEPTANCE.md`。
